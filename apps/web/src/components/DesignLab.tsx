@@ -714,6 +714,23 @@ function CodexDesktopMock(props: {
     props.activeState === "running" ||
     props.activeState === "approval";
   const running = props.activeState === "running";
+  const revealMainOnMobile = () => {
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 900px)").matches) {
+      setSidebarCollapsed(true);
+    }
+  };
+  const openDevice = () => {
+    revealMainOnMobile();
+    props.onOpenDevice();
+  };
+  const openNewChat = () => {
+    revealMainOnMobile();
+    props.onNewChat();
+  };
+  const selectThread = () => {
+    revealMainOnMobile();
+    props.onSend();
+  };
 
   return (
     <div
@@ -726,22 +743,25 @@ function CodexDesktopMock(props: {
       <NavigationRail
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
-        onOpenDevice={props.onOpenDevice}
-        onNewChat={props.onNewChat}
+        onOpenDevice={openDevice}
+        onNewChat={openNewChat}
       />
       <SessionSidebar
         activeProject={props.projectName}
         onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
-        onNewChat={props.onNewChat}
-        onOpenDevice={props.onOpenDevice}
-        onSelectThread={props.onSend}
+        onNewChat={openNewChat}
+        onOpenDevice={openDevice}
+        onSelectThread={selectThread}
       />
 
       <section className={inThread ? "cn-main thread" : "cn-main"}>
         <DesktopHeader
           activeState={props.activeState}
           model={props.model}
+          onOpenApproval={props.onOpenApproval}
+          onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
           projectName={props.projectName}
+          sidebarCollapsed={sidebarCollapsed}
         />
 
         {inThread ? (
@@ -957,14 +977,17 @@ function SessionSidebar(props: {
 function DesktopHeader(props: {
   activeState: DesignState;
   model: string;
+  onOpenApproval: () => void;
+  onToggleSidebar: () => void;
   projectName: string;
+  sidebarCollapsed: boolean;
 }) {
-  const title =
+  const inThread =
     props.activeState === "chat" ||
     props.activeState === "running" ||
-    props.activeState === "approval"
-      ? props.projectName
-      : "新会话";
+    props.activeState === "approval";
+  const title =
+    inThread ? props.projectName : "新会话";
   const status =
     props.activeState === "running"
       ? "正在处理 · 可以继续追加指令"
@@ -972,35 +995,47 @@ function DesktopHeader(props: {
 
   return (
     <header className="cn-main-header">
+      <button
+        className="cn-mobile-menu-button"
+        type="button"
+        onClick={props.onToggleSidebar}
+        aria-label={props.sidebarCollapsed ? "展开目录" : "收起目录"}
+      >
+        <CodexIcon name={props.sidebarCollapsed ? "collapse" : "chevronLeft"} />
+      </button>
       <div>
         <h1>{title}</h1>
         <p>{status}</p>
+      </div>
+      <div className="cn-live-header-actions">
+        {inThread ? (
+          <button className="cn-soft-button" type="button">
+            Goal
+          </button>
+        ) : null}
+        <button className="cn-soft-button" type="button" onClick={props.onOpenApproval}>
+          Events #128
+        </button>
+        {props.activeState === "running" ? (
+          <button className="cn-soft-button danger" type="button">
+            Interrupt
+          </button>
+        ) : null}
       </div>
     </header>
   );
 }
 
-function NewChatCanvas(props: { activeState: DesignState }) {
+function NewChatCanvas(_props: { activeState: DesignState }) {
   return (
-    <section className="cn-empty-canvas">
+    <section className="cn-empty-canvas cn-live-empty">
       <div className="cn-empty-copy">
         <h2>要在 CodexNext 中构建什么？</h2>
         <p>
-          普通聊天入口保持干净：先选设备和项目，再用底部输入框
-          发起第一轮。Goal 与 Token Budget 不在这里出现。
+          像 Codex 一样从底部输入开始。新会话设置只在弹窗里完成：
+          选择设备、项目文件夹、权限、模型和推理深度。
         </p>
       </div>
-      <div className="cn-flow-card">
-        <strong>推荐流程</strong>
-        <span>1. 选择设备</span>
-        <span>2. 选择项目文件夹</span>
-        <span>3. 选择权限、模型与推理，然后发送</span>
-      </div>
-      {props.activeState === "typing" ? (
-        <div className="cn-no-goal-card">
-          普通新会话不显示 Goal / Token Budget。Goal 以后作为会话内能力单独设计。
-        </div>
-      ) : null}
     </section>
   );
 }
@@ -1060,7 +1095,7 @@ function DesktopComposer(props: {
   onStartRunning: () => void;
 }) {
   const inputValue =
-    props.activeState === "typing"
+    props.activeState === "typing" && !props.draft
       ? "检查这个项目，先告诉我\n有哪些明显问题"
       : props.running
         ? "先不要改代码，只输出问题列表"
@@ -1075,7 +1110,7 @@ function DesktopComposer(props: {
         onChange={(event) => props.onDraftChange(event.target.value)}
       />
       <div className="cn-composer-toolbar">
-        <button className="cn-icon-button" type="button">
+        <button className="cn-icon-button" type="button" title="上传文件">
           <CodexIcon name="plus" />
         </button>
         <button className="cn-composer-pill" type="button" onClick={props.onOpenModel}>
@@ -1089,6 +1124,7 @@ function DesktopComposer(props: {
         <button
           className="cn-send-button"
           type="button"
+          disabled={!inputValue.trim()}
           onClick={props.running ? props.onStartRunning : props.onSend}
         >
           <CodexIcon name="arrowUp" />
@@ -1101,32 +1137,43 @@ function DesktopComposer(props: {
 function DeviceSheet(props: { onClose: () => void }) {
   return (
     <div className="cn-overlay-panel device">
-      <div className="cn-sheet-card">
+      <div className="cn-sheet-card cn-live-sheet">
         <button className="cn-close-button" type="button" onClick={props.onClose}>
           <CodexIcon name="x" />
         </button>
-        <h2>选择设备</h2>
-        <p>选择要控制的本地或远程 Codex Agent，设备名可以修改。</p>
-        <button className="cn-device-row selected" type="button">
+        <h2>连接设备</h2>
+        <p>设备名代表你要控制的 Codex Agent，可以是这台 Mac，也可以是远程服务器。</p>
+
+        <div className="cn-real-device-row online">
+          <CodexIcon name="terminal" />
           <span className="cn-live-dot" />
-          <strong>MacBookAir</strong>
-          <small>在线 · codex-cli 0.137</small>
-          <em>
-            <CodexIcon name="edit" />
-          </em>
-        </button>
-        <button className="cn-device-row" type="button">
-          <span />
-          <strong>Office Mac mini</strong>
-          <small>未连接 · 可编辑名称</small>
-          <em>
-            <CodexIcon name="edit" />
-          </em>
-        </button>
-        <button className="cn-add-device-row" type="button">
-          <CodexIcon name="plus" />
-          添加远程服务器
-        </button>
+          <div>
+            <strong>MacBookAir</strong>
+            <small>connected · codex-cli 0.137</small>
+          </div>
+        </div>
+
+        <label>
+          设备名称
+          <input value="MacBookAir" readOnly />
+        </label>
+        <label>
+          Agent URL
+          <input value="http://127.0.0.1:17361" readOnly />
+        </label>
+        <label>
+          Access Token
+          <input value="cn-demo-token" readOnly />
+        </label>
+
+        <div className="cn-sheet-actions">
+          <button className="cn-soft-button" type="button" onClick={props.onClose}>
+            取消
+          </button>
+          <button className="cn-primary-button" type="button">
+            重新连接
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1138,42 +1185,118 @@ function ProjectSheet(props: {
 }) {
   return (
     <div className="cn-overlay-panel project">
-      <div className="cn-project-card">
-        <h2>选择项目文件夹</h2>
+      <div className="cn-project-card cn-live-session-sheet">
+        <button className="cn-close-button cn-sticky-close" type="button">
+          <CodexIcon name="x" />
+        </button>
+        <h2>新会话设置</h2>
+
+        <button className="cn-settings-row" type="button">
+          <span>设备</span>
+          <strong>MacBookAir</strong>
+          <small>connected</small>
+        </button>
+
         <div className="cn-project-search">
           <CodexIcon name="search" />
-          搜索或选择文件夹
+          /Users/ganxing/Dev/CodexNext
         </div>
-        <div className="cn-path-label">/Users/ganxing</div>
-        <div className="cn-folder-list">
-          {folders.map((folder) => (
+
+        <div className="cn-folder-picker-actions">
+          <button className="cn-soft-button" type="button">
+            Home
+          </button>
+          <button className="cn-soft-button" type="button">
+            上级
+          </button>
+          <button className="cn-soft-button" type="button">
+            浏览
+          </button>
+        </div>
+
+        <div className="cn-path-label">/Users/ganxing/Dev</div>
+        <div className="cn-folder-list cn-real-folder-list">
+          {["CodexNext", "CodexBridge", "dailywork", "CLIProxyAPI", "agent-social-publisher"].map((folder) => (
             <button
               key={folder}
               className={
-                props.selectedProject === folder || folder === "Dev"
+                props.selectedProject === folder || folder === "CodexNext"
                   ? "cn-folder-row selected"
                   : "cn-folder-row"
               }
               type="button"
-              onClick={() => props.onSelect(folder === "Dev" ? "CodexNext" : folder)}
+              onClick={() => props.onSelect(folder)}
             >
               <CodexIcon name="folder" />
-              {folder}
+              <span>{folder}</span>
             </button>
           ))}
         </div>
-        <div className="cn-sheet-actions">
-          <button className="cn-soft-button" type="button">
-            上级
-          </button>
-          <button
-            className="cn-primary-button"
-            type="button"
-            onClick={() => props.onSelect("CodexNext")}
-          >
-            使用
-          </button>
+
+        <button
+          className="cn-primary-button cn-use-folder-button"
+          type="button"
+          onClick={() => props.onSelect("CodexNext")}
+        >
+          使用此文件夹
+        </button>
+
+        <div className="cn-session-settings-grid">
+          <label>
+            模型
+            <select value="gpt-5.5" onChange={() => undefined}>
+              <option>GPT-5.5</option>
+            </select>
+          </label>
+          <label>
+            推理
+            <select value="xhigh" onChange={() => undefined}>
+              <option value="xhigh">超高</option>
+            </select>
+          </label>
         </div>
+
+        <div className="cn-permission-list-real">
+          <p>权限模式：请求批准</p>
+          {[
+            ["hand", "请求批准", "编辑外部文件和使用互联网时始终询问"],
+            ["shield", "替我审批", "仅对检测到的风险操作请求批准"],
+            ["shieldAlert", "完全访问权限", "可不受限制地访问互联网和电脑上的任何文件"],
+            ["settings", "自定义 config.toml", "使用 config.toml 中定义的权限"]
+          ].map(([icon, label, description]) => (
+            <button
+              key={label}
+              className={label === "请求批准" ? "cn-menu-row with-icon selected" : "cn-menu-row with-icon"}
+              type="button"
+            >
+              <CodexIcon name={icon as CodexIconName} />
+              <span>
+                <strong>{label}</strong>
+                <small>{description}</small>
+              </span>
+              {label === "请求批准" ? (
+                <em>
+                  <CodexIcon name="check" />
+                </em>
+              ) : null}
+            </button>
+          ))}
+        </div>
+
+        <details className="cn-goal-advanced">
+          <summary>Goal（可选，高级）</summary>
+          <label>
+            Objective
+            <textarea
+              readOnly
+              placeholder="如果这次新会话需要 Goal，再在这里设置。普通聊天不用填。"
+            />
+          </label>
+          <label>
+            Token Budget
+            <input inputMode="numeric" placeholder="optional" readOnly />
+          </label>
+        </details>
       </div>
     </div>
   );
@@ -1263,18 +1386,21 @@ function ModelMenu(props: {
         </button>
       ))}
       <div className="cn-menu-divider" />
-      <button className="cn-menu-row compact" type="button">
-        <strong>GPT-5.5</strong>
-        <em>
-          <CodexIcon name="chevronRight" />
-        </em>
-      </button>
-      <button className="cn-menu-row compact" type="button">
-        <strong>速度</strong>
-        <em>
-          <CodexIcon name="chevronRight" />
-        </em>
-      </button>
+      {["GPT-5.5", "GPT-5.4", "GPT-5.4 Mini", "GPT-5.3 Codex Spark"].map((modelName) => (
+        <button
+          key={modelName}
+          className={props.selected.includes(modelName.replace("GPT-", "")) ? "cn-menu-row selected compact" : "cn-menu-row compact"}
+          type="button"
+          onClick={() => props.onSelect(`${modelName.replace("GPT-", "")} 超高`)}
+        >
+          <strong>{modelName}</strong>
+          {modelName === "GPT-5.5" ? (
+            <em>
+              <CodexIcon name="check" />
+            </em>
+          ) : null}
+        </button>
+      ))}
     </div>
   );
 }

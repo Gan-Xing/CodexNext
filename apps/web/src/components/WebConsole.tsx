@@ -95,7 +95,6 @@ export function WebConsole() {
   const [healthStatus, setHealthStatus] = useState<LocalHealthResponse | null>(null);
   const [streamStatus, setStreamStatus] = useState("disconnected");
   const [events, setEvents] = useState<LocalEvent[]>([]);
-  const [lastSeq, setLastSeq] = useState(0);
   const [sessions, setSessions] = useState<LocalSessionSummary[]>([]);
   const [codexHistory, setCodexHistory] = useState<LocalCodexHistoryEntry[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -438,7 +437,6 @@ export function WebConsole() {
         bySeq.set(event.seq, event);
       }
       const next = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
-      setLastSeq(next.at(-1)?.seq ?? 0);
       return next.slice(-500);
     });
 
@@ -587,6 +585,41 @@ export function WebConsole() {
   const historyGroups = groupCodexHistory(codexHistory);
   const firstApproval = pendingApprovals[0] ?? null;
 
+  function revealMainOnMobile() {
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 900px)").matches) {
+      setSidebarCollapsed(true);
+    }
+  }
+
+  function openDeviceSheet() {
+    revealMainOnMobile();
+    setActiveSheet("device");
+  }
+
+  function openEventsSheet() {
+    revealMainOnMobile();
+    setActiveSheet("events");
+  }
+
+  function openNewSessionSetup() {
+    setCurrentSessionId(null);
+    setDraft("");
+    revealMainOnMobile();
+    setActiveSheet("session");
+    void loadDirectories(undefined);
+  }
+
+  function selectDirectory(pathValue: string) {
+    setCwd(pathValue);
+    setCurrentSessionId(null);
+    revealMainOnMobile();
+  }
+
+  function selectSession(sessionId: string) {
+    setCurrentSessionId(sessionId);
+    revealMainOnMobile();
+  }
+
   return (
     <main className="cn-live-console">
       <div
@@ -611,7 +644,7 @@ export function WebConsole() {
           <button
             className={connected ? "cn-rail-button active" : "cn-rail-button"}
             type="button"
-            onClick={() => setActiveSheet("device")}
+            onClick={openDeviceSheet}
             aria-label="选择设备"
           >
             <CodexIcon name="terminal" />
@@ -620,12 +653,7 @@ export function WebConsole() {
           <button
             className="cn-rail-button"
             type="button"
-            onClick={() => {
-              setCurrentSessionId(null);
-              setDraft("");
-              setActiveSheet("session");
-              void loadDirectories(undefined);
-            }}
+            onClick={openNewSessionSetup}
             aria-label="新建对话"
           >
             <CodexIcon name="compose" />
@@ -633,7 +661,7 @@ export function WebConsole() {
           <button
             className="cn-rail-button muted"
             type="button"
-            onClick={() => setActiveSheet("events")}
+            onClick={openEventsSheet}
             aria-label="事件"
           >
             <CodexIcon name="more" />
@@ -669,7 +697,7 @@ export function WebConsole() {
             <button
               className="cn-device-summary"
               type="button"
-              onClick={() => setActiveSheet("device")}
+              onClick={openDeviceSheet}
             >
               <CodexIcon name="terminal" className="cn-device-icon" />
               <span className={connected ? "cn-live-dot" : "cn-live-dot offline"} />
@@ -685,12 +713,7 @@ export function WebConsole() {
             <button
               className="cn-new-chat-button"
               type="button"
-              onClick={() => {
-                setCurrentSessionId(null);
-                setDraft("");
-                setActiveSheet("session");
-                void loadDirectories(undefined);
-              }}
+              onClick={openNewSessionSetup}
             >
               <CodexIcon name="compose" />
               新建对话
@@ -705,10 +728,7 @@ export function WebConsole() {
                   key={entry.path}
                   entry={entry}
                   selected={cwd === entry.path && !currentSession}
-                  onSelect={(pathValue) => {
-                    setCwd(pathValue);
-                    setCurrentSessionId(null);
-                  }}
+                  onSelect={selectDirectory}
                 />
               ))}
 
@@ -718,7 +738,7 @@ export function WebConsole() {
                   activeSessionId={currentSessionId}
                   chatItems={chatItems}
                   group={group}
-                  onSelectSession={setCurrentSessionId}
+                  onSelectSession={selectSession}
                 />
               ))}
 
@@ -727,10 +747,7 @@ export function WebConsole() {
                   key={group.cwd}
                   cwd={cwd}
                   group={group}
-                  onSelect={(pathValue) => {
-                    setCwd(pathValue);
-                    setCurrentSessionId(null);
-                  }}
+                  onSelect={selectDirectory}
                 />
               ))}
 
@@ -748,7 +765,7 @@ export function WebConsole() {
             <button
               className="cn-settings-button"
               type="button"
-              onClick={() => setActiveSheet("device")}
+              onClick={openDeviceSheet}
               aria-label="设置"
             >
               <span>
@@ -762,6 +779,14 @@ export function WebConsole() {
 
         <section className={currentSession ? "cn-main thread cn-live-main" : "cn-main cn-live-main"}>
           <header className="cn-main-header cn-live-header">
+            <button
+              className="cn-mobile-menu-button"
+              type="button"
+              onClick={() => setSidebarCollapsed(false)}
+              aria-label="显示目录"
+            >
+              <CodexIcon name="collapse" />
+            </button>
             <div>
               <h1>{currentSession ? shortPath(currentSession.cwd) : "新会话"}</h1>
               <p>{currentSession ? sessionSubtitle(currentSession) : "选择项目后发送第一条消息"}</p>
@@ -772,8 +797,8 @@ export function WebConsole() {
                   Goal
                 </button>
               ) : null}
-              <button className="cn-soft-button" type="button" onClick={() => setActiveSheet("events")}>
-                Events {lastSeq ? `#${lastSeq}` : ""}
+              <button className="cn-soft-button" type="button" onClick={openEventsSheet}>
+                活动
               </button>
               {activeTurn ? (
                 <button
@@ -823,6 +848,7 @@ export function WebConsole() {
               void attachFiles(files).catch((err) => setError(formatError(err)))
             }
             onDraftChange={setDraft}
+            onCloseMenu={() => setActiveMenu(null)}
             onOpenMenu={(menu) => setActiveMenu(activeMenu === menu ? null : menu)}
             onRemoveAttachment={(attachment) =>
               setAttachments((previous) => previous.filter((item) => item !== attachment))
@@ -883,6 +909,7 @@ export function WebConsole() {
               onSelectCwd={(nextCwd) => {
                 setCwd(nextCwd);
                 setActiveSheet(null);
+                revealMainOnMobile();
               }}
               onSelectModel={setModel}
               onSelectPermission={setPermissionMode}
@@ -1133,6 +1160,7 @@ function LiveComposer(props: {
   selectedPermission: (typeof permissionOptions)[number];
   selectedReasoning: (typeof reasoningOptions)[number];
   onAttachFiles: (files: FileList | null) => void;
+  onCloseMenu: () => void;
   onDraftChange: (value: string) => void;
   onOpenMenu: (menu: ActiveMenu) => void;
   onRemoveAttachment: (attachment: AttachmentDraft) => void;
@@ -1141,6 +1169,27 @@ function LiveComposer(props: {
   onSelectReasoning: (value: LocalReasoningEffort) => void;
   onSubmit: () => void;
 }) {
+  function closeMenuOnMobile() {
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 900px)").matches) {
+      props.onCloseMenu();
+    }
+  }
+
+  function selectReasoning(value: LocalReasoningEffort) {
+    props.onSelectReasoning(value);
+    closeMenuOnMobile();
+  }
+
+  function selectModel(value: string) {
+    props.onSelectModel(value);
+    closeMenuOnMobile();
+  }
+
+  function selectPermission(value: LocalPermissionMode) {
+    props.onSelectPermission(value);
+    closeMenuOnMobile();
+  }
+
   return (
     <footer className={props.activeTurn ? "cn-desktop-composer cn-live-composer steer" : "cn-desktop-composer cn-live-composer"}>
       <textarea
@@ -1215,46 +1264,51 @@ function LiveComposer(props: {
 
       {props.activeMenu === "model" ? (
         <div className="cn-popover model cn-live-popover">
-          <p>推理</p>
-          {reasoningOptions.map((option) => (
-            <button
-              key={option.value}
-              className={
-                props.reasoningEffort === option.value
-                  ? "cn-menu-row selected compact"
-                  : "cn-menu-row compact"
-              }
-              type="button"
-              onClick={() => props.onSelectReasoning(option.value)}
-            >
-              <strong>{option.label}</strong>
-              {props.reasoningEffort === option.value ? (
-                <em>
-                  <CodexIcon name="check" />
-                </em>
-              ) : null}
-            </button>
-          ))}
+          <div className="cn-menu-column">
+            <p>推理</p>
+            {reasoningOptions.map((option) => (
+              <button
+                key={option.value}
+                className={
+                  props.reasoningEffort === option.value
+                    ? "cn-menu-row selected compact"
+                    : "cn-menu-row compact"
+                }
+                type="button"
+                onClick={() => selectReasoning(option.value)}
+              >
+                <strong>{option.label}</strong>
+                {props.reasoningEffort === option.value ? (
+                  <em>
+                    <CodexIcon name="check" />
+                  </em>
+                ) : null}
+              </button>
+            ))}
+          </div>
           <div className="cn-menu-divider" />
-          {modelOptions.map((option) => (
-            <button
-              key={option.value}
-              className={
-                props.selectedModel.value === option.value
-                  ? "cn-menu-row selected compact"
-                  : "cn-menu-row compact"
-              }
-              type="button"
-              onClick={() => props.onSelectModel(option.value)}
-            >
-              <strong>{option.label}</strong>
-              {props.selectedModel.value === option.value ? (
-                <em>
-                  <CodexIcon name="check" />
-                </em>
-              ) : null}
-            </button>
-          ))}
+          <div className="cn-menu-column">
+            <p>模型</p>
+            {modelOptions.map((option) => (
+              <button
+                key={option.value}
+                className={
+                  props.selectedModel.value === option.value
+                    ? "cn-menu-row selected compact"
+                    : "cn-menu-row compact"
+                }
+                type="button"
+                onClick={() => selectModel(option.value)}
+              >
+                <strong>{option.label}</strong>
+                {props.selectedModel.value === option.value ? (
+                  <em>
+                    <CodexIcon name="check" />
+                  </em>
+                ) : null}
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -1270,7 +1324,7 @@ function LiveComposer(props: {
                   : "cn-menu-row with-icon"
               }
               type="button"
-              onClick={() => props.onSelectPermission(option.mode)}
+              onClick={() => selectPermission(option.mode)}
             >
               <CodexIcon name={option.icon} />
               <span>
@@ -1620,13 +1674,22 @@ function EventsSheet(props: {
   onClose: () => void;
   onDecision: (approvalId: string, decision: string) => void;
 }) {
+  const visibleEvents = props.events.filter(
+    (event) => event.type !== "codex.notification"
+  );
+  const lastSeq = props.events.at(-1)?.seq;
+
   return (
     <div className="cn-overlay-panel cn-live-overlay right">
       <section className="cn-events-sheet">
         <button className="cn-close-button" type="button" onClick={props.onClose}>
           <CodexIcon name="x" />
         </button>
-        <h2>Events</h2>
+        <h2>活动</h2>
+        <p className="cn-events-meta">
+          显示最近 {Math.min(visibleEvents.length, 120)} 条活动 · 原始事件{" "}
+          {props.events.length} 条{lastSeq ? ` · 最新 #${lastSeq}` : ""}
+        </p>
         {props.pendingApprovals.length > 0 ? (
           <div className="cn-events-approval-list">
             {props.pendingApprovals.map((approval) => (
@@ -1661,7 +1724,7 @@ function EventsSheet(props: {
           </div>
         ) : null}
         <div className="cn-event-list">
-          {props.events
+          {visibleEvents
             .slice()
             .reverse()
             .slice(0, 120)

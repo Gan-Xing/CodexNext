@@ -2329,6 +2329,12 @@ summary {
   margin: 0;
 }
 
+.cn-events-meta {
+  color: var(--cn-muted);
+  font-size: 0.84rem;
+  margin: -0.45rem 0 0;
+}
+
 .cn-event-list,
 .cn-events-approval-list {
   display: grid;
@@ -2390,6 +2396,394 @@ summary {
     min-height: 760px;
     min-width: 1040px;
     width: 1040px;
+  }
+}
+
+@media (max-width: 900px) {
+  .cn-live-console {
+    align-items: stretch;
+    min-height: 100dvh;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .cn-live-console .cn-app-frame {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    grid-template-columns: minmax(0, 1fr);
+    height: 100dvh;
+    max-height: none;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .cn-live-console .cn-app-frame.sidebar-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cn-live-console .cn-nav-rail {
+    display: none;
+  }
+
+  .cn-live-console .cn-app-frame:not(.sidebar-collapsed) .cn-session-sidebar {
+    display: grid;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .cn-live-console .cn-app-frame:not(.sidebar-collapsed) .cn-main {
+    display: none;
+  }
+
+  .cn-live-console .cn-app-frame.sidebar-collapsed .cn-session-sidebar {
+    display: none;
+  }
+
+  .cn-live-console .cn-app-frame.sidebar-collapsed .cn-main {
+    display: grid;
+  }
+
+  .cn-live-console .cn-session-sidebar {
+    border-right: 0;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    min-height: 0;
+    padding: max(0.72rem, env(safe-area-inset-top)) 0.85rem
+      max(0.9rem, env(safe-area-inset-bottom));
+  }
+
+  .cn-live-console .cn-sidebar-windowbar {
+    grid-template-columns: 42px minmax(0, 1fr);
+    min-height: 42px;
+  }
+
+  .cn-live-console .cn-sidebar-windowbar::after {
+    color: var(--cn-muted);
+    content: "目录";
+    font-size: 0.82rem;
+    font-weight: 780;
+    justify-self: end;
+  }
+
+  .cn-live-console .cn-sidebar-windowbar .cn-window-dot,
+  .cn-live-console .cn-sidebar-windowbar button[aria-label="后退"],
+  .cn-live-console .cn-sidebar-windowbar button[aria-label="前进"] {
+    display: none;
+  }
+
+  .cn-live-console .cn-sidebar-windowbar button[aria-label="折叠会话栏"] {
+    background: var(--cn-soft);
+    border: 1px solid var(--cn-line);
+    border-radius: 999px;
+    height: 42px;
+    min-height: 42px;
+    width: 42px;
+  }
+
+  .cn-live-console .cn-sidebar-brand strong {
+    font-size: 1.28rem;
+  }
+
+  .cn-live-console .cn-sidebar-brand span {
+    display: none;
+  }
+
+  .cn-live-console .cn-device-summary {
+    border-radius: 18px;
+    min-height: 64px;
+    padding: 0.78rem;
+  }
+
+  .cn-live-console .cn-new-chat-button {
+    min-height: 46px;
+  }
+
+  .cn-live-console .cn-project-tree-title {
+    font-size: 0.86rem;
+  }
+
+  .cn-live-console .cn-project-scroll {
+    gap: 0.42rem;
+    padding-bottom: 0.7rem;
+  }
+
+  .cn-live-console .cn-project-heading-copy strong {
+    font-size: 0.98rem;
+  }
+
+  .cn-live-console .cn-thread-row {
+    min-height: 38px;
+    padding-left: 2.05rem;
+  }
+
+  .cn-live-console .cn-history-row small {
+    display: none;
+  }
+
+  .cn-live-console .cn-main {
+    background: var(--cn-surface);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    min-height: 0;
+  }
+
+  .cn-live-console .cn-main-header {
+    border-bottom: 1px solid var(--cn-line);
+    gap: 0.72rem;
+    justify-content: flex-start;
+    min-height: 62px;
+    padding: max(0.62rem, env(safe-area-inset-top)) 0.82rem 0.62rem;
+  }
+
+  .cn-live-console .cn-mobile-menu-button {
+    align-items: center;
+    background: var(--cn-soft);
+    border: 1px solid var(--cn-line);
+    border-radius: 999px;
+    color: var(--cn-ink);
+    display: inline-flex;
+    flex: 0 0 42px;
+    height: 42px;
+    justify-content: center;
+    min-height: 42px;
+    padding: 0;
+    width: 42px;
+  }
+
+  .cn-live-console .cn-main-header > div:first-of-type {
+    min-width: 0;
+  }
+
+  .cn-live-console .cn-main-header h1 {
+    font-size: 1.04rem;
+    max-width: calc(100vw - 12.4rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cn-live-console .cn-main-header p {
+    font-size: 0.74rem;
+    margin-top: 0.16rem;
+    max-width: calc(100vw - 12.4rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cn-live-console .cn-live-header-actions {
+    gap: 0.36rem;
+    margin-left: auto;
+  }
+
+  .cn-live-console .cn-live-header-actions .cn-soft-button {
+    font-size: 0.78rem;
+    min-height: 36px;
+    padding: 0.42rem 0.62rem;
+  }
+
+  .cn-live-console .cn-live-header-actions .cn-soft-button:first-child:not(:last-child) {
+    display: none;
+  }
+
+  .cn-live-console .cn-live-empty {
+    align-content: center;
+    gap: 0.95rem;
+    padding: 1.2rem 1rem 7rem;
+  }
+
+  .cn-live-console .cn-empty-copy h2 {
+    font-size: clamp(1.78rem, 8.4vw, 2.45rem);
+    line-height: 1.12;
+    text-wrap: balance;
+  }
+
+  .cn-live-console .cn-empty-copy p {
+    display: none;
+  }
+
+  .cn-live-console .cn-thread-canvas {
+    gap: 0.78rem;
+    padding: 0.9rem 0.85rem 1rem;
+  }
+
+  .cn-live-console .cn-thread-status-strip {
+    flex-wrap: wrap;
+  }
+
+  .cn-live-console .cn-message {
+    border-radius: 18px;
+    font-size: 0.94rem;
+    max-width: 100%;
+    padding: 0.82rem 0.92rem;
+  }
+
+  .cn-live-console .cn-message.user {
+    max-width: 86%;
+  }
+
+  .cn-live-console .cn-message.assistant,
+  .cn-live-console .cn-message.command,
+  .cn-live-console .cn-message.diff,
+  .cn-live-console .cn-message.system {
+    max-width: 100%;
+  }
+
+  .cn-live-console .cn-live-composer {
+    border-radius: 28px;
+    box-shadow: 0 16px 46px rgba(17, 19, 21, 0.13);
+    gap: 0.4rem;
+    margin: 0 0.72rem max(0.72rem, env(safe-area-inset-bottom));
+    padding: 0.74rem;
+  }
+
+  .cn-live-console .cn-live-composer textarea {
+    font-size: 0.98rem;
+    line-height: 1.45;
+    max-height: 8rem;
+    min-height: 3.1rem;
+    padding: 0.38rem 0.48rem;
+  }
+
+  .cn-live-console .cn-composer-toolbar {
+    flex-wrap: nowrap;
+    gap: 0.36rem;
+    min-width: 0;
+  }
+
+  .cn-live-console .cn-icon-button {
+    background: var(--cn-surface);
+    border: 1px solid var(--cn-line);
+    border-radius: 999px;
+    color: var(--cn-ink);
+    flex: 0 0 36px;
+    height: 36px;
+    min-height: 36px;
+    width: 36px;
+  }
+
+  .cn-live-console .cn-composer-pill {
+    flex: 0 1 auto;
+    font-size: 0.75rem;
+    max-width: 31vw;
+    min-height: 34px;
+    min-width: 0;
+    overflow: hidden;
+    padding: 0.38rem 0.55rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cn-live-console .cn-send-button {
+    flex: 0 0 42px;
+    height: 42px;
+    min-height: 42px;
+    width: 42px;
+  }
+
+  .cn-live-console .cn-attachment-row {
+    max-height: 4.4rem;
+    overflow: auto;
+  }
+
+  .cn-live-console .cn-live-popover,
+  .cn-live-console .cn-live-popover.permission,
+  .cn-live-console .cn-live-popover.model {
+    border-radius: 22px;
+    bottom: 6.7rem;
+    left: 0.72rem;
+    max-height: 70dvh;
+    overflow: auto;
+    right: 0.72rem;
+    width: auto;
+  }
+
+  .cn-live-console .cn-live-popover.model {
+    align-items: start;
+    display: grid;
+    gap: 0.58rem;
+    grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr);
+  }
+
+  .cn-live-console .cn-live-popover.model .cn-menu-divider {
+    display: none;
+  }
+
+  .cn-live-console .cn-live-popover.model p {
+    font-size: 0.82rem;
+    padding: 0.28rem 0.45rem;
+  }
+
+  .cn-live-console .cn-live-popover.model .cn-menu-row.compact {
+    font-size: 0.82rem;
+    min-height: 38px;
+    padding: 0.48rem 0.55rem;
+  }
+
+  .cn-live-console .cn-live-popover.model .cn-menu-row strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cn-live-console .cn-live-overlay {
+    align-items: flex-end;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .cn-live-console .cn-sheet-card,
+  .cn-live-console .cn-project-card,
+  .cn-live-console .cn-goal-sheet,
+  .cn-live-console .cn-events-sheet {
+    border-left: 0;
+    border-radius: 26px 26px 0 0;
+    box-shadow: 0 -18px 70px rgba(17, 19, 21, 0.14);
+    height: auto;
+    max-height: 84dvh;
+    overflow: auto;
+    padding: 1.1rem;
+    width: 100%;
+  }
+
+  .cn-live-console .cn-close-button {
+    right: 0.8rem;
+    top: 0.8rem;
+  }
+
+  .cn-live-console .cn-live-session-sheet .cn-sticky-close {
+    margin: 0 0 -2rem auto;
+  }
+
+  .cn-live-console .cn-session-settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cn-live-console .cn-real-folder-list {
+    max-height: 34dvh;
+  }
+
+  .cn-live-console .cn-use-folder-button {
+    justify-self: stretch;
+  }
+
+  .cn-live-console .cn-approval-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .cn-live-console .cn-real-approval-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .cn-live-console .cn-approval-modal {
+    border-radius: 26px 26px 0 0;
+    max-height: 84dvh;
+    overflow: auto;
+    padding: 1.1rem;
+    width: 100%;
   }
 }
 
@@ -3187,8 +3581,13 @@ summary {
 .cn-main-header {
   align-items: center;
   display: flex;
+  gap: 0.85rem;
   justify-content: space-between;
   padding: 1.85rem 3.2rem 1.2rem;
+}
+
+.cn-mobile-menu-button {
+  display: none;
 }
 
 .cn-main-header h1 {
@@ -3673,6 +4072,12 @@ summary {
   padding: 0.45rem 0.75rem;
 }
 
+.cn-menu-column {
+  display: grid;
+  gap: 0.24rem;
+  min-width: 0;
+}
+
 .cn-menu-row {
   align-items: center;
   background: transparent;
@@ -3797,5 +4202,450 @@ summary {
 
   .cn-design-preview-area {
     overflow: auto;
+  }
+}
+
+@media (max-width: 900px) {
+  .cn-design-lab {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr);
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
+  }
+
+  .cn-design-control {
+    display: none;
+  }
+
+  .cn-design-control {
+    border-bottom: 1px solid var(--cn-line);
+    border-right: 0;
+    gap: 0.62rem;
+    grid-template-rows: auto auto auto;
+    max-height: 35dvh;
+    overflow: auto;
+    padding: 0.72rem;
+    position: relative;
+    top: auto;
+  }
+
+  .cn-design-control-heading {
+    gap: 0.12rem;
+  }
+
+  .cn-design-control-heading strong {
+    font-size: 1.12rem;
+  }
+
+  .cn-design-control-heading p,
+  .cn-design-notes {
+    display: none;
+  }
+
+  .cn-design-flow-list {
+    border-bottom: 0;
+    display: flex;
+    gap: 0.45rem;
+    overflow-x: auto;
+    padding-bottom: 0.1rem;
+    scrollbar-width: none;
+  }
+
+  .cn-design-flow-list::-webkit-scrollbar,
+  .cn-design-state-list::-webkit-scrollbar {
+    display: none;
+  }
+
+  .cn-design-flow-button {
+    flex: 0 0 152px;
+    padding: 0.58rem 0.64rem;
+  }
+
+  .cn-design-flow-button span {
+    display: none;
+  }
+
+  .cn-design-state-section {
+    gap: 0.35rem;
+  }
+
+  .cn-design-state-list {
+    display: flex;
+    gap: 0.45rem;
+    overflow-x: auto;
+    padding-right: 0;
+    scrollbar-width: none;
+  }
+
+  .cn-design-state-button {
+    flex: 0 0 168px;
+    padding: 0.6rem 0.64rem;
+  }
+
+  .cn-design-state-button span {
+    display: none;
+  }
+
+  .cn-design-preview-area {
+    gap: 0;
+    grid-template-rows: minmax(0, 1fr);
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .cn-design-preview-header {
+    border-bottom: 1px solid var(--cn-line);
+    display: none;
+    padding: 0.58rem 0.82rem;
+  }
+
+  .cn-design-preview-header strong {
+    font-size: 0.95rem;
+  }
+
+  .cn-design-preview-header a {
+    display: none;
+  }
+
+  .cn-design-lab .cn-desktop-frame {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    grid-template-columns: minmax(0, 1fr);
+    height: 100%;
+    max-height: none;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .cn-design-lab .cn-desktop-frame.sidebar-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cn-design-lab .cn-nav-rail {
+    display: none;
+  }
+
+  .cn-design-lab .cn-desktop-frame:not(.sidebar-collapsed) .cn-session-sidebar {
+    display: grid;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .cn-design-lab .cn-desktop-frame:not(.sidebar-collapsed) .cn-main {
+    display: none;
+  }
+
+  .cn-design-lab .cn-desktop-frame.sidebar-collapsed .cn-session-sidebar {
+    display: none;
+  }
+
+  .cn-design-lab .cn-desktop-frame.sidebar-collapsed .cn-main {
+    display: grid;
+  }
+
+  .cn-design-lab .cn-session-sidebar {
+    border-right: 0;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    min-height: 0;
+    padding: max(0.72rem, env(safe-area-inset-top)) 0.85rem
+      max(0.9rem, env(safe-area-inset-bottom));
+  }
+
+  .cn-design-lab .cn-sidebar-windowbar {
+    grid-template-columns: 42px minmax(0, 1fr);
+    min-height: 42px;
+  }
+
+  .cn-design-lab .cn-sidebar-windowbar::after {
+    color: var(--cn-muted);
+    content: "目录";
+    font-size: 0.82rem;
+    font-weight: 780;
+    justify-self: end;
+  }
+
+  .cn-design-lab .cn-sidebar-windowbar .cn-window-dot,
+  .cn-design-lab .cn-sidebar-windowbar button[aria-label="后退"],
+  .cn-design-lab .cn-sidebar-windowbar button[aria-label="前进"] {
+    display: none;
+  }
+
+  .cn-design-lab .cn-sidebar-windowbar button[aria-label="折叠会话栏"] {
+    background: var(--cn-soft);
+    border: 1px solid var(--cn-line);
+    border-radius: 999px;
+    height: 42px;
+    min-height: 42px;
+    width: 42px;
+  }
+
+  .cn-design-lab .cn-sidebar-brand strong {
+    font-size: 1.28rem;
+  }
+
+  .cn-design-lab .cn-sidebar-brand span {
+    display: none;
+  }
+
+  .cn-design-lab .cn-device-summary {
+    border-radius: 18px;
+    min-height: 64px;
+    padding: 0.78rem;
+  }
+
+  .cn-design-lab .cn-new-chat-button {
+    min-height: 46px;
+  }
+
+  .cn-design-lab .cn-project-tree-title {
+    font-size: 0.86rem;
+  }
+
+  .cn-design-lab .cn-project-scroll {
+    gap: 0.42rem;
+    padding-bottom: 0.7rem;
+  }
+
+  .cn-design-lab .cn-project-heading-copy strong {
+    font-size: 0.98rem;
+  }
+
+  .cn-design-lab .cn-thread-row {
+    min-height: 38px;
+    padding-left: 2.05rem;
+  }
+
+  .cn-design-lab .cn-main {
+    background: var(--cn-surface);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    min-height: 0;
+  }
+
+  .cn-design-lab .cn-main-header {
+    border-bottom: 1px solid var(--cn-line);
+    justify-content: flex-start;
+    min-height: 62px;
+    padding: max(0.62rem, env(safe-area-inset-top)) 0.82rem 0.62rem;
+  }
+
+  .cn-design-lab .cn-mobile-menu-button {
+    align-items: center;
+    background: var(--cn-soft);
+    border: 1px solid var(--cn-line);
+    border-radius: 999px;
+    color: var(--cn-ink);
+    display: inline-flex;
+    flex: 0 0 42px;
+    height: 42px;
+    justify-content: center;
+    min-height: 42px;
+    padding: 0;
+    width: 42px;
+  }
+
+  .cn-design-lab .cn-main-header h1 {
+    font-size: 1.04rem;
+  }
+
+  .cn-design-lab .cn-main-header p {
+    font-size: 0.74rem;
+    margin-top: 0.16rem;
+    max-width: calc(100vw - 6.2rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cn-design-lab .cn-empty-canvas {
+    align-content: center;
+    gap: 0.95rem;
+    padding: 1.2rem 1rem 7rem;
+  }
+
+  .cn-design-lab .cn-empty-copy h2 {
+    font-size: clamp(1.78rem, 8.4vw, 2.45rem);
+    line-height: 1.12;
+    text-wrap: balance;
+  }
+
+  .cn-design-lab .cn-empty-copy p {
+    font-size: 0.95rem;
+    line-height: 1.55;
+  }
+
+  .cn-design-lab .cn-flow-card,
+  .cn-design-lab .cn-no-goal-card {
+    border-radius: 18px;
+    padding: 0.95rem;
+  }
+
+  .cn-design-lab .cn-thread-canvas {
+    gap: 0.78rem;
+    padding: 0.9rem 0.85rem 1rem;
+  }
+
+  .cn-design-lab .cn-message {
+    border-radius: 18px;
+    font-size: 0.94rem;
+    max-width: 100%;
+    padding: 0.82rem 0.92rem;
+  }
+
+  .cn-design-lab .cn-message.user {
+    max-width: 86%;
+  }
+
+  .cn-design-lab .cn-message.assistant,
+  .cn-design-lab .cn-message.command {
+    max-width: 100%;
+  }
+
+  .cn-design-lab .cn-desktop-composer {
+    border-radius: 28px;
+    box-shadow: 0 16px 46px rgba(17, 19, 21, 0.13);
+    gap: 0.4rem;
+    margin: 0 0.72rem max(0.72rem, env(safe-area-inset-bottom));
+    padding: 0.74rem;
+  }
+
+  .cn-design-lab .cn-desktop-composer textarea {
+    font-size: 0.98rem;
+    line-height: 1.45;
+    max-height: 8rem;
+    min-height: 3.1rem;
+    padding: 0.38rem 0.48rem;
+  }
+
+  .cn-design-lab .cn-composer-toolbar {
+    flex-wrap: nowrap;
+    gap: 0.36rem;
+    min-width: 0;
+  }
+
+  .cn-design-lab .cn-icon-button {
+    background: var(--cn-surface);
+    border: 1px solid var(--cn-line);
+    border-radius: 999px;
+    color: var(--cn-ink);
+    flex: 0 0 36px;
+    height: 36px;
+    min-height: 36px;
+    width: 36px;
+  }
+
+  .cn-design-lab .cn-composer-pill {
+    flex: 0 1 auto;
+    font-size: 0.75rem;
+    max-width: 31vw;
+    min-height: 34px;
+    min-width: 0;
+    overflow: hidden;
+    padding: 0.38rem 0.55rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cn-design-lab .cn-send-button {
+    flex: 0 0 42px;
+    height: 42px;
+    min-height: 42px;
+    width: 42px;
+  }
+
+  .cn-design-lab .cn-overlay-panel {
+    align-items: flex-end;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .cn-design-lab .cn-sheet-card,
+  .cn-design-lab .cn-project-card {
+    border-radius: 26px 26px 0 0;
+    max-height: 84dvh;
+    overflow: auto;
+    padding: 1.1rem;
+    width: 100%;
+  }
+
+  .cn-design-lab .cn-close-button {
+    right: 0.8rem;
+    top: 0.8rem;
+  }
+
+  .cn-design-lab .cn-sheet-card h2,
+  .cn-design-lab .cn-project-card h2,
+  .cn-design-lab .cn-approval-modal h2 {
+    font-size: 1.45rem;
+  }
+
+  .cn-design-lab .cn-device-row,
+  .cn-design-lab .cn-add-device-row {
+    border-radius: 18px;
+  }
+
+  .cn-design-lab .cn-popover {
+    border-radius: 22px;
+    bottom: 6.7rem;
+    left: 0.72rem;
+    max-height: 70dvh;
+    overflow: auto;
+    right: 0.72rem;
+    width: auto;
+  }
+
+  .cn-design-lab .cn-popover.permission,
+  .cn-design-lab .cn-popover.model {
+    bottom: 6.7rem;
+    left: 0.72rem;
+    width: auto;
+  }
+
+  .cn-design-lab .cn-approval-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .cn-design-lab .cn-inline-approval {
+    display: none;
+  }
+
+  .cn-design-lab .cn-approval-modal {
+    border-radius: 26px 26px 0 0;
+    max-height: 84dvh;
+    overflow: auto;
+    padding: 1.1rem;
+    width: 100%;
+  }
+
+  .cn-design-lab .cn-approval-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .cn-design-control {
+    max-height: 31dvh;
+  }
+
+  .cn-design-flow-button {
+    flex-basis: 138px;
+  }
+
+  .cn-design-state-button {
+    flex-basis: 150px;
+  }
+
+  .cn-design-lab .cn-empty-copy p {
+    display: none;
+  }
+
+  .cn-design-lab .cn-composer-pill {
+    max-width: 29vw;
   }
 }
