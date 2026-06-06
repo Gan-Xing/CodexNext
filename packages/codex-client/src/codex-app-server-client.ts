@@ -9,8 +9,12 @@ import type {
   ThreadGoalGetResponse,
   ThreadGoalSetParams,
   ThreadGoalSetResponse,
+  ThreadResumeParams,
+  ThreadResumeResponse,
   ThreadStartParams,
   ThreadStartResponse,
+  ThreadUnarchiveParams,
+  ThreadUnarchiveResponse,
   TurnInterruptParams,
   TurnStartParams,
   TurnStartResponse,
@@ -114,6 +118,22 @@ export class CodexAppServerClient {
     );
   }
 
+  public threadResume(params: ThreadResumeParams): Promise<ThreadResumeResponse> {
+    return this.rpc.request<ThreadResumeResponse>(
+      CodexClientMethod.ThreadResume,
+      params
+    );
+  }
+
+  public threadUnarchive(
+    params: ThreadUnarchiveParams
+  ): Promise<ThreadUnarchiveResponse> {
+    return this.rpc.request<ThreadUnarchiveResponse>(
+      CodexClientMethod.ThreadUnarchive,
+      params
+    );
+  }
+
   public setGoal(
     params: ThreadGoalSetParams
   ): Promise<ThreadGoalSetResponse> {
@@ -190,4 +210,3 @@ function defaultDeclineApprovalResponse(method: string): ApprovalResponse {
   }
   return { decision: "decline" };
 }
-

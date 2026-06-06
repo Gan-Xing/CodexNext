@@ -51,6 +51,8 @@ export const CodexClientMethod = {
   Initialize: "initialize",
   Initialized: "initialized",
   ThreadStart: "thread/start",
+  ThreadResume: "thread/resume",
+  ThreadUnarchive: "thread/unarchive",
   ThreadGoalSet: "thread/goal/set",
   ThreadGoalGet: "thread/goal/get",
   ThreadGoalClear: "thread/goal/clear",
@@ -211,6 +213,38 @@ export interface ThreadStartResponse {
     [key: string]: unknown;
   };
 }
+
+export interface ThreadResumeParams {
+  threadId: string;
+  model?: string | null;
+  modelProvider?: string | null;
+  serviceTier?: string | null;
+  cwd?: string | null;
+  approvalPolicy?: AskForApproval | null;
+  approvalsReviewer?: ApprovalsReviewer | null;
+  sandbox?: SandboxMode | null;
+  config?: JsonObject | null;
+  baseInstructions?: string | null;
+  developerInstructions?: string | null;
+  personality?: JsonObject | null;
+}
+
+export interface ThreadResumeResponse extends ThreadStartResponse {
+  model?: string;
+  modelProvider?: string;
+  serviceTier?: string | null;
+  cwd?: string;
+  approvalPolicy?: AskForApproval;
+  approvalsReviewer?: ApprovalsReviewer;
+  reasoningEffort?: LocalReasoningEffort | "none" | "minimal" | null;
+  instructionSources?: string[];
+}
+
+export interface ThreadUnarchiveParams {
+  threadId: string;
+}
+
+export type ThreadUnarchiveResponse = Record<string, never>;
 
 export type UserInput =
   | {
@@ -421,6 +455,34 @@ export const LocalStartSessionSchema = z.object({
 
 export type LocalStartSessionInput = z.infer<typeof LocalStartSessionSchema>;
 
+export const LocalResumeSessionSchema = z.object({
+  id: z.string().min(1),
+  cwd: z.string().min(1),
+  filePath: z.string().min(1).optional(),
+  model: z.string().min(1).nullable().optional(),
+  permissionMode: z
+    .enum(["request-approval", "auto-approve", "full-access", "custom-config"])
+    .default("request-approval"),
+  approvalPolicy: z
+    .enum(["untrusted", "on-failure", "on-request", "never"])
+    .nullable()
+    .optional(),
+  reasoningEffort: z
+    .enum(["low", "medium", "high", "xhigh"])
+    .nullable()
+    .optional(),
+  approvalsReviewer: z
+    .enum(["user", "auto_review", "guardian_subagent"])
+    .nullable()
+    .optional(),
+  sandbox: z
+    .enum(["read-only", "workspace-write", "danger-full-access"])
+    .nullable()
+    .optional()
+});
+
+export type LocalResumeSessionInput = z.infer<typeof LocalResumeSessionSchema>;
+
 export const LocalSendMessageSchema = z.object({
   text: z.string().min(1)
 });
@@ -449,9 +511,33 @@ export interface LocalCodexHistoryEntry {
   filePath: string;
 }
 
+export type LocalCodexHistoryMessageRole =
+  | "user"
+  | "assistant"
+  | "command"
+  | "system"
+  | "diff";
+
+export interface LocalCodexHistoryMessage {
+  id: string;
+  role: LocalCodexHistoryMessageRole;
+  text: string;
+  ts: string;
+}
+
 export interface LocalCodexHistoryResponse {
   root: string;
   entries: LocalCodexHistoryEntry[];
+}
+
+export interface LocalCodexHistoryDetailResponse {
+  entry: LocalCodexHistoryEntry;
+  messages: LocalCodexHistoryMessage[];
+}
+
+export interface LocalResumeSessionResponse {
+  session: LocalSessionSummary;
+  history: LocalCodexHistoryDetailResponse;
 }
 
 export const LocalSetGoalSchema = z.object({
