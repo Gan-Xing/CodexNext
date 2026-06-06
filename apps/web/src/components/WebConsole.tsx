@@ -1,21 +1,32 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import type {
   LocalReasoningEffort,
   ThreadGoal
 } from "@codexnext/protocol";
 import {
   agentFetch,
+  getCodexHistoryDetail,
   health,
   listCodexHistory,
   listDirectories,
   listSessions,
+  resumeCodexHistory,
   type AgentConnection
 } from "../lib/api";
 import { openEventStream } from "../lib/event-stream";
 import type {
   ChatItem,
+  LocalCodexHistoryDetailResponse,
   LocalCodexHistoryEntry,
   LocalDirectoryListResponse,
   LocalEvent,
@@ -34,6 +45,14 @@ interface AttachmentDraft {
   type: string;
   size: number;
   content: string | null;
+}
+
+interface ProjectThreadGroupData {
+  cwd: string;
+  name: string;
+  updatedAt: number;
+  sessions: LocalSessionSummary[];
+  entries: LocalCodexHistoryEntry[];
 }
 
 const modelOptions = [
@@ -89,6 +108,12 @@ const permissionOptions: Array<{
   }
 ];
 
+const MESSAGE_ESTIMATED_HEIGHT = 180;
+const MESSAGE_GAP = 16;
+const MESSAGE_OVERSCAN_PX = 420;
+
+type ResumeState = "resuming" | "failed";
+
 export function WebConsole() {
   const [agentUrl, setAgentUrl] = useState("http://127.0.0.1:17361");
   const [token, setToken] = useState("");
@@ -98,6 +123,9 @@ export function WebConsole() {
   const [sessions, setSessions] = useState<LocalSessionSummary[]>([]);
   const [codexHistory, setCodexHistory] = useState<LocalCodexHistoryEntry[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [selectedHistoryKey, setSelectedHistoryKey] = useState<string | null>(null);
+  const [historyLoadingKey, setHistoryLoadingKey] = useState<string | null>(null);
+  const [resumeStates, setResumeStates] = useState<Record<string, ResumeState>>({});
   const [chatItems, setChatItems] = useState<ChatItem[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApprovalView[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +154,10 @@ export function WebConsole() {
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const historyDetailCacheRef = useRef(
+    new Map<string, LocalCodexHistoryDetailResponse>()
+  );
+  const threadEndRef = useRef<HTMLDivElement | null>(null);
 
   const connection: AgentConnection = { agentUrl, token };
   const currentSession = currentSessionId
@@ -134,8 +166,12 @@ export function WebConsole() {
   const visibleChatItems = currentSession
     ? chatItems.filter((item) => item.sessionId === currentSession.sessionId)
     : [];
+  const latestVisibleChatItem = visibleChatItems.at(-1);
   const connected = Boolean(healthStatus?.ok && streamStatus === "connected");
   const activeTurn = Boolean(currentSession?.activeTurnId);
+  const currentResumeState = currentSession
+    ? resumeStates[currentSession.sessionId] ?? null
+    : null;
   const selectedModel =
     modelOptions.find((option) => option.value === model) ?? modelOptions[0]!;
   const selectedReasoning =
@@ -197,6 +233,21 @@ export function WebConsole() {
       eventSourceRef.current?.close();
     };
   }, []);
+
+  useEffect(() => {
+    const end = threadEndRef.current;
+    end?.scrollIntoView({ block: "end" });
+    const scroller = end?.closest(".cn-thread-canvas");
+    if (scroller instanceof HTMLElement) {
+      window.requestAnimationFrame(() => {
+        scroller.scrollTop = scroller.scrollHeight;
+      });
+    }
+  }, [
+    currentSessionId,
+    latestVisibleChatItem?.id,
+    latestVisibleChatItem?.text.length
+  ]);
 
   async function connect(nextConnection: AgentConnection = connection) {
     setError(null);
@@ -304,8 +355,73 @@ export function WebConsole() {
       }
     );
     setCurrentSessionId(result.session.sessionId);
+    clearSelectedHistory();
     upsertSession(result.session);
     setActiveSheet(null);
+  }
+
+  async function selectHistory(entry: LocalCodexHistoryEntry) {
+    const key = codexHistoryKey(entry);
+    if (!connected) {
+      setActiveSheet("device");
+      return;
+    }
+    const previewSession = makeHistoryPreviewSession(entry);
+    const previewSessionId = previewSession.sessionId;
+    setError(null);
+    setSelectedHistoryKey(key);
+    setHistoryLoadingKey(key);
+    setActiveSheet(null);
+    setCwd(entry.cwd);
+    upsertSession(previewSession);
+    setResumeStates((previous) => ({
+      ...previous,
+      [previewSessionId]: "resuming"
+    }));
+    setCurrentSessionId(previewSessionId);
+    try {
+      const cachedDetail = historyDetailCacheRef.current.get(key);
+      const detail =
+        cachedDetail ??
+        (await getCodexHistoryDetail(connection, {
+          id: entry.id,
+          cwd: entry.cwd,
+          filePath: entry.filePath
+        }));
+      historyDetailCacheRef.current.set(key, detail);
+      hydrateSessionFromHistory(previewSessionId, detail.messages);
+      setHistoryLoadingKey(null);
+
+      const result = await resumeCodexHistory(connection, {
+        id: entry.id,
+        cwd: entry.cwd,
+        filePath: entry.filePath,
+        model,
+        permissionMode,
+        reasoningEffort
+      });
+      upsertSession(result.session);
+      reassignSessionChatItems(previewSessionId, result.session.sessionId);
+      hydrateSessionFromHistory(result.session.sessionId, result.history.messages);
+      clearSelectedHistory();
+      setCurrentSessionId(result.session.sessionId);
+      setCwd(result.session.cwd);
+      removeSession(previewSessionId);
+      setResumeStates((previous) => {
+        const next = { ...previous };
+        delete next[previewSessionId];
+        delete next[result.session.sessionId];
+        return next;
+      });
+    } catch (err) {
+      setResumeStates((previous) => ({
+        ...previous,
+        [previewSessionId]: "failed"
+      }));
+      setError(formatError(err));
+    } finally {
+      setHistoryLoadingKey(null);
+    }
   }
 
   async function submitComposer() {
@@ -320,6 +436,15 @@ export function WebConsole() {
 
     const message = buildMessageWithAttachments(text, attachments);
     setError(null);
+
+    if (currentResumeState === "resuming") {
+      setError("正在恢复历史会话，恢复完成后就可以继续发送。");
+      return;
+    }
+    if (currentResumeState === "failed") {
+      setError("这条历史会话恢复失败，当前只是历史预览，不能直接发送。");
+      return;
+    }
 
     if (currentSession) {
       await agentFetch(connection, `/api/sessions/${currentSession.sessionId}/messages`, {
@@ -452,6 +577,7 @@ export function WebConsole() {
         if (isSessionSummary(event.payload)) {
           upsertSession(event.payload);
           if (options.selectSessions) {
+            clearSelectedHistory();
             setCurrentSessionId(event.payload.sessionId);
           }
         }
@@ -545,8 +671,55 @@ export function WebConsole() {
     ]);
   }
 
+  function removeSession(sessionId: string) {
+    setSessions((previous) =>
+      previous.filter((session) => session.sessionId !== sessionId)
+    );
+  }
+
+  function selectSession(sessionId: string) {
+    clearSelectedHistory();
+    setCurrentSessionId(sessionId);
+    revealMainOnMobile();
+  }
+
+  function clearSelectedHistory() {
+    setSelectedHistoryKey(null);
+  }
+
   function addChatItem(item: ChatItem) {
-    setChatItems((previous) => [...previous, item].slice(-240));
+    setChatItems((previous) => [...previous, item].slice(-500));
+  }
+
+  function reassignSessionChatItems(fromSessionId: string, toSessionId: string) {
+    setChatItems((previous) =>
+      previous.map((item) =>
+        item.sessionId === fromSessionId
+          ? {
+              ...item,
+              id: item.id.replace(fromSessionId, toSessionId),
+              sessionId: toSessionId
+            }
+          : item
+      )
+    );
+  }
+
+  function hydrateSessionFromHistory(
+    sessionId: string,
+    messages: LocalCodexHistoryDetailResponse["messages"]
+  ) {
+    const historyItems = messages.map((message) =>
+      historyMessageToChatItem(sessionId, message)
+    );
+    setChatItems((previous) => [
+      ...previous.filter(
+        (item) =>
+          item.sessionId !== sessionId ||
+          !item.id.startsWith(`history-${sessionId}-`)
+      ),
+      ...historyItems
+    ].slice(-500));
   }
 
   function appendStreamingItem(
@@ -573,16 +746,11 @@ export function WebConsole() {
           ...(sessionId ? { sessionId } : {}),
           ...(turnId ? { turnId } : {})
         }
-      ].slice(-240);
+      ].slice(-500);
     });
   }
 
-  const sessionGroups = groupSessions(sessions);
-  const directoryEntries = directoryList?.entries ?? [];
-  const sidebarFolders = directoryEntries.filter(
-    (entry) => !sessionGroups.some((group) => group.cwd === entry.path)
-  );
-  const historyGroups = groupCodexHistory(codexHistory);
+  const projectGroups = groupProjectThreads(sessions, codexHistory);
   const firstApproval = pendingApprovals[0] ?? null;
 
   function revealMainOnMobile() {
@@ -612,11 +780,6 @@ export function WebConsole() {
   function selectDirectory(pathValue: string) {
     setCwd(pathValue);
     setCurrentSessionId(null);
-    revealMainOnMobile();
-  }
-
-  function selectSession(sessionId: string) {
-    setCurrentSessionId(sessionId);
     revealMainOnMobile();
   }
 
@@ -710,52 +873,27 @@ export function WebConsole() {
               </span>
             </button>
 
-            <button
-              className="cn-new-chat-button"
-              type="button"
-              onClick={openNewSessionSetup}
-            >
-              <CodexIcon name="compose" />
-              新建对话
-            </button>
           </div>
 
           <div className="cn-project-tree">
             <span className="cn-project-tree-title">项目</span>
             <div className="cn-project-scroll">
-              {sidebarFolders.slice(0, 40).map((entry) => (
-                <DirectoryProjectRow
-                  key={entry.path}
-                  entry={entry}
-                  selected={cwd === entry.path && !currentSession}
-                  onSelect={selectDirectory}
-                />
-              ))}
-
-              {sessionGroups.map((group) => (
-                <SessionProjectGroup
+              {projectGroups.map((group) => (
+                <ProjectThreadGroup
                   key={group.cwd}
                   activeSessionId={currentSessionId}
                   chatItems={chatItems}
                   group={group}
+                  historyLoadingKey={historyLoadingKey}
+                  selectedHistoryKey={selectedHistoryKey}
+                  onSelectHistory={(entry) => void selectHistory(entry)}
                   onSelectSession={selectSession}
                 />
               ))}
 
-              {historyGroups.map((group) => (
-                <CodexHistoryGroup
-                  key={group.cwd}
-                  cwd={cwd}
-                  group={group}
-                  onSelect={selectDirectory}
-                />
-              ))}
-
-              {sidebarFolders.length === 0 &&
-              sessionGroups.length === 0 &&
-              historyGroups.length === 0 ? (
+              {projectGroups.length === 0 ? (
                 <div className="cn-empty-sidebar">
-                  已连接，但没有发现项目文件夹或本地 Codex 记录。
+                  已连接，但没有发现本地 Codex 对话记录。
                 </div>
               ) : null}
             </div>
@@ -788,8 +926,14 @@ export function WebConsole() {
               <CodexIcon name="collapse" />
             </button>
             <div>
-              <h1>{currentSession ? shortPath(currentSession.cwd) : "新会话"}</h1>
-              <p>{currentSession ? sessionSubtitle(currentSession) : "选择项目后发送第一条消息"}</p>
+              <h1>
+                {currentSession ? sessionTitle(currentSession, chatItems) : "新会话"}
+              </h1>
+              <p>
+                {currentSession
+                  ? sessionSubtitle(currentSession)
+                  : "选择项目后发送第一条消息"}
+              </p>
             </div>
             <div className="cn-live-header-actions">
               {currentSession ? (
@@ -822,9 +966,11 @@ export function WebConsole() {
           {currentSession ? (
             <ChatCanvas
               active={activeTurn}
+              endRef={threadEndRef}
               goal={currentSession.goal ?? null}
               items={visibleChatItems}
               pendingApprovals={pendingApprovals.length}
+              resumeState={currentResumeState}
               session={currentSession}
               onOpenApproval={() => setActiveSheet("events")}
               onOpenGoal={() => setActiveSheet("goal")}
@@ -970,83 +1116,13 @@ export function WebConsole() {
   );
 }
 
-function DirectoryProjectRow(props: {
-  entry: LocalDirectoryListResponse["entries"][number];
-  selected: boolean;
-  onSelect: (pathValue: string) => void;
-}) {
-  return (
-    <div className="cn-project-group">
-      <button
-        className={
-          props.selected
-            ? "cn-project-name cn-directory-project selected"
-            : "cn-project-name cn-directory-project"
-        }
-        title={props.entry.path}
-        type="button"
-        onClick={() => props.onSelect(props.entry.path)}
-      >
-        <span className="cn-project-heading-copy">
-          <CodexIcon name="folder" className="cn-project-icon" />
-          <strong>{props.entry.name}</strong>
-        </span>
-      </button>
-    </div>
-  );
-}
-
-function CodexHistoryGroup(props: {
-  cwd: string;
-  group: { cwd: string; name: string; entries: LocalCodexHistoryEntry[] };
-  onSelect: (pathValue: string) => void;
-}) {
-  const [collapsed, setCollapsed] = useState(false);
-  return (
-    <div className="cn-project-group cn-history-group">
-      <button
-        className="cn-project-name"
-        title={props.group.cwd}
-        type="button"
-        onClick={() => setCollapsed((value) => !value)}
-      >
-        <span className="cn-project-heading-copy">
-          <CodexIcon name="folder" className="cn-project-icon" />
-          <strong>{props.group.name}</strong>
-        </span>
-        <CodexIcon
-          name={collapsed ? "chevronRight" : "chevronDown"}
-          className="cn-project-collapse-icon"
-        />
-      </button>
-      {collapsed ? null : (
-        <div className="cn-thread-list">
-          {props.group.entries.slice(0, 8).map((entry) => (
-            <button
-              key={codexHistoryKey(entry)}
-              className={
-                props.cwd === entry.cwd
-                  ? "cn-thread-row cn-history-row selected"
-                  : "cn-thread-row cn-history-row"
-              }
-              title={entry.title}
-              type="button"
-              onClick={() => props.onSelect(entry.cwd)}
-            >
-              <span>{entry.title}</span>
-              <small>Codex history</small>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SessionProjectGroup(props: {
+function ProjectThreadGroup(props: {
   activeSessionId: string | null;
   chatItems: ChatItem[];
-  group: { cwd: string; name: string; sessions: LocalSessionSummary[] };
+  group: ProjectThreadGroupData;
+  historyLoadingKey: string | null;
+  selectedHistoryKey: string | null;
+  onSelectHistory: (entry: LocalCodexHistoryEntry) => void;
   onSelectSession: (sessionId: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -1082,8 +1158,30 @@ function SessionProjectGroup(props: {
               onClick={() => props.onSelectSession(session.sessionId)}
             >
               <span>{sessionTitle(session, props.chatItems)}</span>
+              <small>{statusLabel(session.status)}</small>
             </button>
           ))}
+          {props.group.entries.slice(0, 12).map((entry) => {
+            const key = codexHistoryKey(entry);
+            return (
+              <button
+                key={key}
+                className={
+                  props.selectedHistoryKey === key
+                    ? "cn-thread-row cn-history-row selected"
+                    : "cn-thread-row cn-history-row"
+                }
+                title={entry.title}
+                type="button"
+                onClick={() => props.onSelectHistory(entry)}
+              >
+                <span>{entry.title}</span>
+                <small>
+                  {props.historyLoadingKey === key ? "正在读取..." : historyTime(entry)}
+                </small>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1106,19 +1204,235 @@ function NewSessionCanvas() {
 
 function ChatCanvas(props: {
   active: boolean;
+  endRef: React.RefObject<HTMLDivElement | null>;
   goal: ThreadGoal | null;
   items: ChatItem[];
   pendingApprovals: number;
+  resumeState: ResumeState | null;
   session: LocalSessionSummary;
   onOpenApproval: () => void;
   onOpenGoal: () => void;
 }) {
+  const viewportRef = useRef<HTMLElement | null>(null);
+  const statusRef = useRef<HTMLDivElement | null>(null);
+  const messageHeightsRef = useRef<Map<string, number>>(new Map());
+  const scrollUpdateFrameRef = useRef<number | null>(null);
+  const heightUpdateFrameRef = useRef<number | null>(null);
+  const pinnedRef = useRef(true);
+  const previousSessionRef = useRef<string | null>(null);
+  const previousTailRef = useRef("");
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const [heightVersion, setHeightVersion] = useState(0);
+  const [showJumpButton, setShowJumpButton] = useState(false);
+  const tailSignature = buildChatTailSignature(props.items.at(-1));
+
+  useEffect(() => {
+    messageHeightsRef.current.clear();
+    setHeightVersion((current) => current + 1);
+    pinnedRef.current = true;
+    setShowJumpButton(false);
+  }, [props.session.sessionId]);
+
+  useEffect(() => () => {
+    if (scrollUpdateFrameRef.current !== null) {
+      cancelAnimationFrame(scrollUpdateFrameRef.current);
+    }
+    if (heightUpdateFrameRef.current !== null) {
+      cancelAnimationFrame(heightUpdateFrameRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    function commitScrollState() {
+      if (!viewport) {
+        return;
+      }
+      const distanceFromBottom =
+        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+      pinnedRef.current = distanceFromBottom < 56;
+      const roundedScrollTop = Math.round(viewport.scrollTop / 12) * 12;
+      setScrollTop((current) =>
+        current === roundedScrollTop ? current : roundedScrollTop
+      );
+      setViewportHeight((current) =>
+        current === viewport.clientHeight ? current : viewport.clientHeight
+      );
+      setShowJumpButton((current) =>
+        current === !pinnedRef.current ? current : !pinnedRef.current
+      );
+    }
+
+    function scheduleScrollState() {
+      if (scrollUpdateFrameRef.current !== null) {
+        return;
+      }
+      scrollUpdateFrameRef.current = requestAnimationFrame(() => {
+        scrollUpdateFrameRef.current = null;
+        commitScrollState();
+      });
+    }
+
+    commitScrollState();
+    const resizeObserver = new ResizeObserver(commitScrollState);
+    resizeObserver.observe(viewport);
+    viewport.addEventListener("scroll", scheduleScrollState, { passive: true });
+    return () => {
+      resizeObserver.disconnect();
+      viewport.removeEventListener("scroll", scheduleScrollState);
+    };
+  }, [props.session.sessionId]);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      previousSessionRef.current = props.session.sessionId;
+      previousTailRef.current = tailSignature;
+      return;
+    }
+    const sessionChanged = previousSessionRef.current !== props.session.sessionId;
+    const tailChanged = previousTailRef.current !== tailSignature;
+    if (sessionChanged || (tailChanged && pinnedRef.current)) {
+      viewport.scrollTop = viewport.scrollHeight;
+      pinnedRef.current = true;
+      setShowJumpButton(false);
+    } else if (tailChanged && !pinnedRef.current) {
+      setShowJumpButton(true);
+    }
+    previousSessionRef.current = props.session.sessionId;
+    previousTailRef.current = tailSignature;
+  }, [heightVersion, props.session.sessionId, tailSignature]);
+
+  const handleMessageMeasure = useCallback((id: string, height: number) => {
+    if (!Number.isFinite(height) || height <= 0) {
+      return;
+    }
+    const previous = messageHeightsRef.current.get(id);
+    if (typeof previous === "number" && Math.abs(previous - height) < 1) {
+      return;
+    }
+    messageHeightsRef.current.set(id, height);
+    if (heightUpdateFrameRef.current !== null) {
+      return;
+    }
+    heightUpdateFrameRef.current = requestAnimationFrame(() => {
+      heightUpdateFrameRef.current = null;
+      setHeightVersion((current) => current + 1);
+    });
+  }, []);
+
+  const virtualState = useMemo(() => {
+    if (props.items.length === 0) {
+      return {
+        bottomPadding: 0,
+        topPadding: 0,
+        totalHeight: 0,
+        visibleItems: [] as ChatItem[]
+      };
+    }
+    const statusHeight = statusRef.current?.offsetHeight ?? 0;
+    const listScrollTop = Math.max(0, scrollTop - statusHeight - MESSAGE_GAP);
+    const visibleTop = Math.max(0, listScrollTop - MESSAGE_OVERSCAN_PX);
+    const visibleBottom =
+      listScrollTop + viewportHeight + MESSAGE_OVERSCAN_PX;
+    let offset = 0;
+    let startIndex = 0;
+    let endIndex = props.items.length - 1;
+    let foundStart = false;
+
+    for (let index = 0; index < props.items.length; index += 1) {
+      const item = props.items[index];
+      if (!item) {
+        continue;
+      }
+      const height =
+        messageHeightsRef.current.get(item.id) ?? MESSAGE_ESTIMATED_HEIGHT;
+      const itemEnd = offset + height;
+      if (!foundStart && itemEnd >= visibleTop) {
+        startIndex = index;
+        foundStart = true;
+      }
+      if (offset <= visibleBottom) {
+        endIndex = index;
+      }
+      offset += height + (index === props.items.length - 1 ? 0 : MESSAGE_GAP);
+    }
+
+    const totalHeight = offset;
+    let topPadding = 0;
+    for (let index = 0; index < startIndex; index += 1) {
+      const item = props.items[index];
+      if (!item) {
+        continue;
+      }
+      topPadding +=
+        (messageHeightsRef.current.get(item.id) ?? MESSAGE_ESTIMATED_HEIGHT) +
+        MESSAGE_GAP;
+    }
+
+    let renderedHeight = 0;
+    for (let index = startIndex; index <= endIndex; index += 1) {
+      const item = props.items[index];
+      if (!item) {
+        continue;
+      }
+      renderedHeight +=
+        messageHeightsRef.current.get(item.id) ?? MESSAGE_ESTIMATED_HEIGHT;
+      if (index < endIndex) {
+        renderedHeight += MESSAGE_GAP;
+      }
+    }
+
+    return {
+      bottomPadding: Math.max(0, totalHeight - topPadding - renderedHeight),
+      topPadding,
+      totalHeight,
+      visibleItems: props.items.slice(startIndex, endIndex + 1)
+    };
+  }, [heightVersion, props.items, scrollTop, viewportHeight]);
+
+  function scrollToBottom(behavior: ScrollBehavior = "smooth") {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior });
+    pinnedRef.current = true;
+    setShowJumpButton(false);
+  }
+
+  const statusLabelText =
+    props.resumeState === "resuming"
+      ? "正在恢复"
+      : props.resumeState === "failed"
+        ? "历史预览"
+        : props.active
+          ? "正在运行"
+          : props.session.status;
+
   return (
-    <section className="cn-thread-canvas cn-live-thread">
-      <div className="cn-thread-status-strip">
-        <span className={props.active ? "cn-run-status running" : "cn-run-status"}>
-          {props.active ? "正在运行" : props.session.status}
+    <section className="cn-thread-canvas cn-live-thread" ref={viewportRef}>
+      <div className="cn-thread-status-strip" ref={statusRef}>
+        <span
+          className={
+            props.active || props.resumeState === "resuming"
+              ? "cn-run-status running"
+              : "cn-run-status"
+          }
+        >
+          {statusLabelText}
         </span>
+        {props.resumeState === "resuming" ? (
+          <span className="cn-resume-note">先显示本地历史，后台接入原 thread…</span>
+        ) : null}
+        {props.resumeState === "failed" ? (
+          <span className="cn-resume-note danger">恢复失败，只能查看历史。</span>
+        ) : null}
         {props.goal ? (
           <button className="cn-soft-button" type="button" onClick={props.onOpenGoal}>
             Goal {props.goal.status}
@@ -1137,16 +1451,80 @@ function ChatCanvas(props: {
           <p>发送消息会调用 `turn/start`；运行中继续发送会调用 `turn/steer`。</p>
         </div>
       ) : (
-        props.items.map((item) => (
-          <article key={item.id} className={`cn-message ${messageClass(item.role)}`}>
-            <span className="cn-message-label">{roleLabel(item.role)}</span>
-            <div className="cn-message-text">{item.text}</div>
-          </article>
-        ))
+        <div
+          className="cn-message-virtual-list"
+          style={{ height: `${virtualState.totalHeight}px` }}
+        >
+          <div
+            className="cn-message-window"
+            style={{
+              paddingBottom: `${virtualState.bottomPadding}px`,
+              transform: `translateY(${virtualState.topPadding}px)`
+            }}
+          >
+            {virtualState.visibleItems.map((item) => (
+              <ChatMessageRow
+                key={item.id}
+                item={item}
+                onMeasure={handleMessageMeasure}
+              />
+            ))}
+          </div>
+          <div
+            ref={props.endRef}
+            className="cn-thread-end"
+            style={{ transform: `translateY(${virtualState.totalHeight}px)` }}
+          />
+        </div>
       )}
+      {showJumpButton ? (
+        <div className="cn-thread-jump-wrap">
+          <button
+            className="cn-thread-jump"
+            type="button"
+            onClick={() => scrollToBottom("smooth")}
+          >
+            回到底部 <strong>↓</strong>
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }
+
+const ChatMessageRow = memo(function ChatMessageRow(props: {
+  item: ChatItem;
+  onMeasure: (id: string, height: number) => void;
+}) {
+  const rowRef = useRef<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    const node = rowRef.current;
+    if (!node) {
+      return;
+    }
+    function measure() {
+      if (!node) {
+        return;
+      }
+      props.onMeasure(props.item.id, node.getBoundingClientRect().height);
+    }
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [props.item.id, props.item.text, props.onMeasure]);
+
+  return (
+    <article
+      ref={rowRef}
+      className={`cn-message ${messageClass(props.item.role)}`}
+    >
+      <span className="cn-message-label">{roleLabel(props.item.role)}</span>
+      <div className="cn-message-text">{props.item.text}</div>
+    </article>
+  );
+});
 
 function LiveComposer(props: {
   activeMenu: ActiveMenu;
@@ -1772,30 +2150,27 @@ function ApprovalModal(props: {
   );
 }
 
-function groupSessions(sessions: LocalSessionSummary[]) {
-  const groups = new Map<string, { cwd: string; name: string; sessions: LocalSessionSummary[] }>();
+function groupProjectThreads(
+  sessions: LocalSessionSummary[],
+  entries: LocalCodexHistoryEntry[]
+): ProjectThreadGroupData[] {
+  const groups = new Map<string, ProjectThreadGroupData>();
   for (const session of sessions) {
     const existing = groups.get(session.cwd);
     if (existing) {
       existing.sessions.push(session);
+      existing.updatedAt = Math.max(existing.updatedAt, session.updatedAt);
     } else {
       groups.set(session.cwd, {
         cwd: session.cwd,
         name: shortPath(session.cwd),
-        sessions: [session]
+        updatedAt: session.updatedAt,
+        sessions: [session],
+        entries: []
       });
     }
   }
-  return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      sessions: group.sessions.sort((a, b) => b.updatedAt - a.updatedAt)
-    }))
-    .sort((a, b) => (b.sessions[0]?.updatedAt ?? 0) - (a.sessions[0]?.updatedAt ?? 0));
-}
 
-function groupCodexHistory(entries: LocalCodexHistoryEntry[]) {
-  const groups = new Map<string, { cwd: string; name: string; entries: LocalCodexHistoryEntry[] }>();
   const seen = new Set<string>();
   for (const entry of entries) {
     const uniqueKey = codexHistoryKey(entry);
@@ -1804,12 +2179,16 @@ function groupCodexHistory(entries: LocalCodexHistoryEntry[]) {
     }
     seen.add(uniqueKey);
     const existing = groups.get(entry.cwd);
+    const updatedAt = Date.parse(entry.updatedAt) || 0;
     if (existing) {
       existing.entries.push(entry);
+      existing.updatedAt = Math.max(existing.updatedAt, updatedAt);
     } else {
       groups.set(entry.cwd, {
         cwd: entry.cwd,
         name: shortPath(entry.cwd),
+        updatedAt,
+        sessions: [],
         entries: [entry]
       });
     }
@@ -1817,19 +2196,61 @@ function groupCodexHistory(entries: LocalCodexHistoryEntry[]) {
   return [...groups.values()]
     .map((group) => ({
       ...group,
+      sessions: group.sessions.sort((a, b) => b.updatedAt - a.updatedAt),
       entries: group.entries.sort(
         (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
       )
     }))
-    .sort(
-      (a, b) =>
-        Date.parse(b.entries[0]?.updatedAt ?? "") -
-        Date.parse(a.entries[0]?.updatedAt ?? "")
-    );
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 function codexHistoryKey(entry: LocalCodexHistoryEntry): string {
   return `${entry.id}::${entry.cwd}`;
+}
+
+function historyPreviewSessionId(entry: LocalCodexHistoryEntry): string {
+  return `history-preview:${codexHistoryKey(entry)}`;
+}
+
+function makeHistoryPreviewSession(
+  entry: LocalCodexHistoryEntry
+): LocalSessionSummary {
+  const updatedAt = Date.parse(entry.updatedAt);
+  const createdAt = Date.parse(entry.createdAt);
+  return {
+    sessionId: historyPreviewSessionId(entry),
+    threadId: entry.id,
+    status: "idle",
+    cwd: entry.cwd,
+    model: null,
+    reasoningEffort: null,
+    permissionMode: "request-approval",
+    approvalPolicy: "on-request",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+    goal: null,
+    createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
+    updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now()
+  };
+}
+
+function buildChatTailSignature(item: ChatItem | undefined): string {
+  if (!item) {
+    return "";
+  }
+  return `${item.id}:${item.text.length}:${item.text.slice(-24)}`;
+}
+
+function historyMessageToChatItem(
+  sessionId: string,
+  message: LocalCodexHistoryDetailResponse["messages"][number]
+): ChatItem {
+  return {
+    id: `history-${sessionId}-${message.id}`,
+    role: message.role,
+    text: message.text,
+    sessionId
+  };
 }
 
 function sessionTitle(session: LocalSessionSummary, chatItems: ChatItem[]): string {
@@ -1849,6 +2270,14 @@ function sessionTitle(session: LocalSessionSummary, chatItems: ChatItem[]): stri
 function sessionSubtitle(session: LocalSessionSummary): string {
   const model = session.model ? session.model.replace("gpt-", "") : "default model";
   return `${shortPath(session.cwd)} · ${model} · ${reasoningLabel(session.reasoningEffort)} · ${permissionLabel(session.permissionMode)}`;
+}
+
+function historySubtitle(entry: LocalCodexHistoryEntry): string {
+  return `${shortPath(entry.cwd)} · Codex history · ${formatRelativeTime(entry.updatedAt)}`;
+}
+
+function historyTime(entry: LocalCodexHistoryEntry): string {
+  return formatRelativeTime(entry.updatedAt);
 }
 
 function buildMessageWithAttachments(prompt: string, attachments: AttachmentDraft[]): string {
@@ -1902,6 +2331,33 @@ function statusLabel(status: string): string {
     return "interrupted";
   }
   return status || "offline";
+}
+
+function formatRelativeTime(input: string): string {
+  const timestamp = Date.parse(input);
+  if (!Number.isFinite(timestamp)) {
+    return "Codex history";
+  }
+  const diffMs = Date.now() - timestamp;
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diffMs < minute) {
+    return "刚刚";
+  }
+  if (diffMs < hour) {
+    return `${Math.max(1, Math.floor(diffMs / minute))} 分`;
+  }
+  if (diffMs < day) {
+    return `${Math.max(1, Math.floor(diffMs / hour))} 小时`;
+  }
+  if (diffMs < 14 * day) {
+    return `${Math.max(1, Math.floor(diffMs / day))} 天`;
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric"
+  }).format(timestamp);
 }
 
 function reasoningLabel(value: LocalReasoningEffort | null | undefined): string {

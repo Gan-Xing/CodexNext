@@ -1,20 +1,28 @@
 import type {
+  LocalCodexHistoryDetailResponse,
   LocalCodexHistoryEntry,
+  LocalCodexHistoryMessage,
   LocalCodexHistoryResponse,
   LocalDirectoryListResponse,
   LocalEvent,
   LocalHealthResponse,
   LocalPermissionMode,
+  LocalReasoningEffort,
+  LocalResumeSessionResponse,
   LocalSessionSummary
 } from "@codexnext/protocol";
 
 export type {
+  LocalCodexHistoryDetailResponse,
   LocalCodexHistoryEntry,
+  LocalCodexHistoryMessage,
   LocalCodexHistoryResponse,
   LocalDirectoryListResponse,
   LocalEvent,
   LocalHealthResponse,
   LocalPermissionMode,
+  LocalReasoningEffort,
+  LocalResumeSessionResponse,
   LocalSessionSummary
 };
 

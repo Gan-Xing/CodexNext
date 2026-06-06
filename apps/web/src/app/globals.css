@@ -28,7 +28,8 @@
 
 html,
 body {
-  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -1917,7 +1918,8 @@ summary {
   color: var(--cn-ink);
   display: flex;
   justify-content: center;
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   overflow: hidden;
   padding: 1rem;
 }
@@ -1938,9 +1940,9 @@ summary {
 }
 
 .cn-app-frame {
-  height: min(940px, calc(100vh - 2rem));
+  height: calc(100vh - 2rem);
   max-width: 1680px;
-  min-height: 780px;
+  min-height: 0;
   min-width: min(1180px, calc(100vw - 2rem));
   width: min(1680px, calc(100vw - 2rem));
 }
@@ -1949,22 +1951,15 @@ summary {
   padding-bottom: 0.5rem;
 }
 
-.cn-directory-project.selected,
 .cn-history-row.selected {
   background: var(--cn-soft-2);
-}
-
-.cn-history-group {
-  border-top: 1px solid var(--cn-line);
-  margin-top: 0.35rem;
-  padding-top: 0.5rem;
 }
 
 .cn-history-row {
   gap: 0.16rem;
 }
 
-.cn-history-row small {
+.cn-thread-row small {
   color: var(--cn-muted);
   display: block;
   font-size: 0.68rem;
@@ -2386,14 +2381,14 @@ summary {
 @media (max-width: 1180px) {
   .cn-live-console {
     align-items: stretch;
-    overflow: auto;
+    overflow: hidden;
     padding: 0;
   }
 
   .cn-app-frame {
     border-radius: 0;
     height: 100vh;
-    min-height: 760px;
+    min-height: 0;
     min-width: 1040px;
     width: 1040px;
   }
@@ -3252,9 +3247,9 @@ summary {
 
 .cn-sidebar-fixed {
   display: grid;
-  gap: 1rem;
+  gap: 0.78rem;
   min-width: 0;
-  padding-bottom: 1rem;
+  padding-bottom: 0.72rem;
 }
 
 .cn-sidebar-windowbar {
@@ -3333,11 +3328,11 @@ summary {
   border-radius: 20px;
   color: var(--cn-ink);
   display: grid;
-  gap: 0.55rem;
+  gap: 0.5rem;
   grid-template-columns: 22px 10px minmax(0, 1fr);
   justify-items: start;
-  min-height: 82px;
-  padding: 1rem;
+  min-height: 62px;
+  padding: 0.68rem 0.78rem;
   text-align: left;
 }
 
@@ -3363,6 +3358,7 @@ summary {
 
 .cn-device-copy strong,
 .cn-device-copy small {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3382,21 +3378,6 @@ summary {
   width: 10px;
 }
 
-.cn-new-chat-button {
-  align-items: center;
-  background: var(--cn-black);
-  color: #fff;
-  display: inline-flex;
-  gap: 0.5rem;
-  justify-content: center;
-  min-height: 44px;
-}
-
-.cn-new-chat-button:hover {
-  background: #0f1113;
-  transform: none;
-}
-
 .cn-project-tree {
   display: grid;
   gap: 0.5rem;
@@ -3408,7 +3389,7 @@ summary {
 
 .cn-project-scroll {
   display: grid;
-  gap: 0.62rem;
+  gap: 0.42rem;
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
@@ -3590,10 +3571,18 @@ summary {
   display: none;
 }
 
+.cn-main-header > div {
+  min-width: 0;
+}
+
 .cn-main-header h1 {
   font-size: 1.35rem;
   letter-spacing: -0.02em;
   margin: 0;
+  max-width: min(720px, 54vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cn-main-header p {
@@ -3673,6 +3662,28 @@ summary {
 
 .cn-desktop-composer.steer {
   background: #f8f8f6;
+}
+
+.cn-history-locked-composer {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.cn-history-locked-composer div {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.cn-history-locked-composer strong {
+  font-size: 0.96rem;
+}
+
+.cn-history-locked-composer span {
+  color: var(--cn-muted);
+  font-size: 0.84rem;
+  font-weight: 650;
 }
 
 .cn-desktop-composer textarea {
@@ -3768,7 +3779,37 @@ summary {
   flex-direction: column;
   gap: 1rem;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 1rem 3.2rem;
+  position: relative;
+}
+
+.cn-history-preview-strip {
+  align-items: center;
+  background: var(--cn-soft);
+  border: 1px solid var(--cn-line);
+  border-radius: 18px;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.78rem 0.9rem;
+}
+
+.cn-history-preview-strip span {
+  background: var(--cn-soft-2);
+  border-radius: 999px;
+  color: var(--cn-muted);
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  font-weight: 820;
+  padding: 0.35rem 0.62rem;
+}
+
+.cn-history-preview-strip strong {
+  color: var(--cn-ink);
+  flex: 1;
+  font-size: 0.9rem;
+  min-width: 0;
 }
 
 .cn-soft-button,
@@ -3802,6 +3843,66 @@ summary {
   font-size: 0.96rem;
   line-height: 1.6;
   padding: 1rem 1.15rem;
+}
+
+.cn-message-virtual-list {
+  min-height: 0;
+  position: relative;
+  width: 100%;
+}
+
+.cn-message-window {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+  will-change: transform;
+}
+
+.cn-thread-end {
+  height: 1px;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+}
+
+.cn-thread-jump-wrap {
+  align-self: center;
+  bottom: 1rem;
+  margin-top: -3.2rem;
+  pointer-events: none;
+  position: sticky;
+  z-index: 4;
+}
+
+.cn-thread-jump {
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--cn-line);
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.13);
+  color: var(--cn-ink);
+  gap: 0.5rem;
+  min-height: 38px;
+  padding: 0 0.9rem;
+  pointer-events: auto;
+}
+
+.cn-thread-jump strong {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.cn-resume-note {
+  color: var(--cn-muted);
+  font-size: 0.82rem;
+  font-weight: 760;
+}
+
+.cn-resume-note.danger {
+  color: var(--cn-red);
 }
 
 .cn-message p {

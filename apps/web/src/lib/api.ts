@@ -1,7 +1,11 @@
 import type {
+  LocalCodexHistoryDetailResponse,
   LocalCodexHistoryResponse,
   LocalDirectoryListResponse,
   LocalHealthResponse,
+  LocalPermissionMode,
+  LocalReasoningEffort,
+  LocalResumeSessionResponse,
   LocalSessionSummary
 } from "./types";
 
@@ -57,4 +61,35 @@ export function listCodexHistory(
   limit = 80
 ): Promise<LocalCodexHistoryResponse> {
   return agentFetch(connection, `/api/codex-history?limit=${limit}`);
+}
+
+export function getCodexHistoryDetail(
+  connection: AgentConnection,
+  input: { id: string; cwd: string; filePath?: string }
+): Promise<LocalCodexHistoryDetailResponse> {
+  const query = new URLSearchParams({
+    id: input.id,
+    cwd: input.cwd
+  });
+  if (input.filePath) {
+    query.set("filePath", input.filePath);
+  }
+  return agentFetch(connection, `/api/codex-history/detail?${query.toString()}`);
+}
+
+export function resumeCodexHistory(
+  connection: AgentConnection,
+  input: {
+    id: string;
+    cwd: string;
+    filePath?: string;
+    model?: string | null;
+    permissionMode: LocalPermissionMode;
+    reasoningEffort?: LocalReasoningEffort | null;
+  }
+): Promise<LocalResumeSessionResponse> {
+  return agentFetch(connection, "/api/codex-history/resume", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
 }
