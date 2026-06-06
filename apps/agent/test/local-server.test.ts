@@ -272,6 +272,7 @@ describe("local HTTP server guards", () => {
     const originalHome = process.env.HOME;
     const tempHome = await mkdtemp(path.join(os.tmpdir(), "codexnext-home-"));
     process.env.HOME = tempHome;
+    const missingProjectPath = path.join(tempHome, "missing-project");
     const sessionDir = path.join(tempHome, ".codex", "sessions", "2026", "06", "06");
     await mkdir(sessionDir, { recursive: true });
     await writeFile(
@@ -301,7 +302,7 @@ describe("local HTTP server guards", () => {
           type: "session_meta",
           payload: {
             id: "history_1",
-            cwd: "/tmp/project",
+            cwd: missingProjectPath,
             timestamp: "2026-06-06T00:00:00.000Z",
             originator: "Codex Desktop"
           }
@@ -312,7 +313,7 @@ describe("local HTTP server guards", () => {
           payload: {
             type: "user_message",
             message: [
-              "# AGENTS.md instructions for /tmp/project",
+              `# AGENTS.md instructions for ${missingProjectPath}`,
               "",
               "<INSTRUCTIONS>",
               "# CodexBridge Global Instructions",
@@ -320,7 +321,7 @@ describe("local HTTP server guards", () => {
               "</INSTRUCTIONS>",
               "",
               "<environment_context>",
-              "<cwd>/tmp/project</cwd>",
+              `<cwd>${missingProjectPath}</cwd>`,
               "</environment_context>"
             ].join("\n")
           }
@@ -461,7 +462,7 @@ describe("local HTTP server guards", () => {
       };
       expect(listBody.entries.find((entry) => entry.id === "history_1")).toMatchObject({
         id: "history_1",
-        cwd: "/tmp/project",
+        cwd: missingProjectPath,
         cwdExists: false,
         title: "官方 Codex 标题",
         filePath: sessionFile
@@ -487,7 +488,7 @@ describe("local HTTP server guards", () => {
       const detailQuery = new URLSearchParams({
         token: "secret",
         id: "history_1",
-        cwd: "/tmp/project",
+        cwd: missingProjectPath,
         filePath: sessionFile
       });
       const detail = await fetch(
@@ -507,7 +508,7 @@ describe("local HTTP server guards", () => {
       const outsideQuery = new URLSearchParams({
         token: "secret",
         id: "history_1",
-        cwd: "/tmp/project",
+        cwd: missingProjectPath,
         filePath: outsideFile
       });
       const outside = await fetch(
