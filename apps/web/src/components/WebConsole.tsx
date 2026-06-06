@@ -156,7 +156,7 @@ const MESSAGE_ESTIMATED_HEIGHT = 180;
 const MESSAGE_GAP = 16;
 const MESSAGE_OVERSCAN_PX = 420;
 
-type ResumeState = "resuming" | "failed" | "preview";
+type ResumeState = "history" | "resuming" | "failed" | "missing";
 
 const savedDevicesStorageKey = "codexnext.savedDevices.v1";
 
@@ -210,6 +210,10 @@ export function WebConsole() {
   const codexHistory = activeWorkspace?.codexHistory ?? [];
   const currentSessionId = activeWorkspace?.currentSessionId ?? null;
   const selectedHistoryKey = activeWorkspace?.selectedHistoryKey ?? null;
+  const selectedHistoryEntry = selectedHistoryKey
+    ? codexHistory.find((entry) => codexHistoryKey(entry) === selectedHistoryKey) ??
+      null
+    : null;
   const historyLoadingKey = activeWorkspace?.historyLoadingKey ?? null;
   const resumeStates = activeWorkspace?.resumeStates ?? {};
   const chatItems = activeWorkspace?.chatItems ?? [];
@@ -971,9 +975,10 @@ export function WebConsole() {
     upsertSession(previewSession);
     setResumeStates((previous) => ({
       ...previous,
-      [previewSessionId]: "resuming"
+      [previewSessionId]: isPreviewOnlyHistoryEntry(entry) ? "missing" : "history"
     }));
     setCurrentSessionId(previewSessionId);
+    revealMainOnMobile();
     try {
       const cachedDetail = historyDetailCacheRef.current.get(key);
       const detail =
@@ -985,41 +990,17 @@ export function WebConsole() {
         }));
       historyDetailCacheRef.current.set(key, detail);
       hydrateSessionFromHistory(previewSessionId, detail.messages);
-      setHistoryLoadingKey(null);
-      if (isPreviewOnlyHistoryEntry(detail.entry)) {
-        setResumeStates((previous) => ({
-          ...previous,
-          [previewSessionId]: "preview"
-        }));
-        return;
-      }
-
-      const result = await resumeCodexHistory(connection, {
-        id: entry.id,
-        cwd: entry.cwd,
-        filePath: entry.filePath,
-        model,
-        permissionMode,
-        reasoningEffort
-      });
-      upsertSession(result.session);
-      reassignSessionChatItems(previewSessionId, result.session.sessionId);
-      hydrateSessionFromHistory(result.session.sessionId, result.history.messages);
-      clearSelectedHistory();
-      setCurrentSessionId(result.session.sessionId);
-      setCwd(result.session.cwd);
-      removeSession(previewSessionId);
-      setResumeStates((previous) => {
-        const next = { ...previous };
-        delete next[previewSessionId];
-        delete next[result.session.sessionId];
-        return next;
-      });
+      setResumeStates((previous) => ({
+        ...previous,
+        [previewSessionId]: isPreviewOnlyHistoryEntry(detail.entry)
+          ? "missing"
+          : "history"
+      }));
     } catch (err) {
       if (isMissingHistoryCwdError(err)) {
         setResumeStates((previous) => ({
           ...previous,
-          [previewSessionId]: "preview"
+          [previewSessionId]: "missing"
         }));
         return;
       }
@@ -1030,6 +1011,65 @@ export function WebConsole() {
       setError(formatError(err));
     } finally {
       setHistoryLoadingKey(null);
+    }
+  }
+
+  async function resumeHistorySessionForMessage(
+    entry: LocalCodexHistoryEntry,
+    previewSession: LocalSessionSummary,
+    message: string
+  ) {
+    if (isPreviewOnlyHistoryEntry(entry)) {
+      setResumeStates((previous) => ({
+        ...previous,
+        [previewSession.sessionId]: "missing"
+      }));
+      throw new Error("这条历史的项目目录已经不存在，只能查看历史记录。");
+    }
+
+    setResumeStates((previous) => ({
+      ...previous,
+      [previewSession.sessionId]: "resuming"
+    }));
+
+    try {
+      const result = await resumeCodexHistory(connection, {
+        id: entry.id,
+        cwd: entry.cwd,
+        filePath: entry.filePath,
+        model,
+        permissionMode,
+        reasoningEffort
+      });
+      upsertSession(result.session);
+      reassignSessionChatItems(previewSession.sessionId, result.session.sessionId);
+      hydrateSessionFromHistory(result.session.sessionId, result.history.messages);
+      clearSelectedHistory();
+      setCurrentSessionId(result.session.sessionId);
+      setCwd(result.session.cwd);
+      removeSession(previewSession.sessionId);
+      setResumeStates((previous) => {
+        const next = { ...previous };
+        delete next[previewSession.sessionId];
+        delete next[result.session.sessionId];
+        return next;
+      });
+      await agentFetch(
+        connection,
+        `/api/sessions/${result.session.sessionId}/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({ text: message })
+        }
+      );
+    } catch (err) {
+      setResumeStates((previous) => ({
+        ...previous,
+        [previewSession.sessionId]: isMissingHistoryCwdError(err)
+          ? "missing"
+          : "failed"
+      }));
+      throw err;
     }
   }
 
@@ -1054,12 +1094,28 @@ export function WebConsole() {
       setError("这条历史会话恢复失败，当前只是历史预览，不能直接发送。");
       return;
     }
-    if (currentResumeState === "preview") {
+    if (currentResumeState === "missing") {
       setError("这条历史的项目目录已经不存在，只能查看历史；请选择现有项目后新建会话。");
       return;
     }
 
     if (currentSession) {
+      if (isHistoryPreviewSessionId(currentSession.sessionId)) {
+        const historyEntry =
+          selectedHistoryEntry ??
+          codexHistory.find(
+            (entry) => historyPreviewSessionId(entry) === currentSession.sessionId
+          ) ??
+          null;
+        if (!historyEntry) {
+          setError("找不到这条历史会话的 thread 信息，请刷新历史列表后重试。");
+          return;
+        }
+        await resumeHistorySessionForMessage(historyEntry, currentSession, message);
+        setDraft("");
+        setAttachments([]);
+        return;
+      }
       await agentFetch(connection, `/api/sessions/${currentSession.sessionId}/messages`, {
         method: "POST",
         body: JSON.stringify({ text: message })
@@ -1207,8 +1263,12 @@ export function WebConsole() {
   }
 
   function selectSession(sessionId: string) {
+    const previousSessionId = currentSessionId;
     clearSelectedHistory();
     setCurrentSessionId(sessionId);
+    if (previousSessionId && isHistoryPreviewSessionId(previousSessionId)) {
+      removeSession(previousSessionId);
+    }
     revealMainOnMobile();
   }
 
@@ -1299,7 +1359,12 @@ export function WebConsole() {
   }
 
   function openNewSessionSetup() {
+    const previousSessionId = currentSessionId;
     setCurrentSessionId(null);
+    clearSelectedHistory();
+    if (previousSessionId && isHistoryPreviewSessionId(previousSessionId)) {
+      removeSession(previousSessionId);
+    }
     setDraft("");
     revealMainOnMobile();
     setActiveSheet("session");
@@ -1307,8 +1372,13 @@ export function WebConsole() {
   }
 
   function selectDirectory(pathValue: string) {
+    const previousSessionId = currentSessionId;
     setCwd(pathValue);
     setCurrentSessionId(null);
+    clearSelectedHistory();
+    if (previousSessionId && isHistoryPreviewSessionId(previousSessionId)) {
+      removeSession(previousSessionId);
+    }
     revealMainOnMobile();
   }
 
@@ -1456,12 +1526,18 @@ export function WebConsole() {
             </button>
             <div>
               <h1>
-                {currentSession ? sessionTitle(currentSession, chatItems) : "新会话"}
+                {selectedHistoryEntry
+                  ? selectedHistoryEntry.title
+                  : currentSession
+                    ? sessionTitle(currentSession, chatItems)
+                    : "新会话"}
               </h1>
               <p>
-                {currentSession
-                  ? sessionSubtitle(currentSession)
-                  : "选择项目后发送第一条消息"}
+                {selectedHistoryEntry
+                  ? historySubtitle(selectedHistoryEntry)
+                  : currentSession
+                    ? sessionSubtitle(currentSession)
+                    : "选择项目后发送第一条消息"}
               </p>
             </div>
             <div className="cn-live-header-actions">
@@ -1941,11 +2017,13 @@ function ChatCanvas(props: {
       ? "正在恢复"
       : props.resumeState === "failed"
         ? "历史预览"
-        : props.resumeState === "preview"
+        : props.resumeState === "missing"
           ? "历史预览"
-          : props.active
-            ? "正在运行"
-            : props.session.status;
+          : props.resumeState === "history"
+            ? "历史记录"
+            : props.active
+              ? "正在运行"
+              : props.session.status;
 
   return (
     <section className="cn-thread-canvas cn-live-thread" ref={viewportRef}>
@@ -1965,8 +2043,11 @@ function ChatCanvas(props: {
         {props.resumeState === "failed" ? (
           <span className="cn-resume-note danger">恢复失败，只能查看历史。</span>
         ) : null}
-        {props.resumeState === "preview" ? (
+        {props.resumeState === "missing" ? (
           <span className="cn-resume-note">项目目录不存在，只显示历史记录。</span>
+        ) : null}
+        {props.resumeState === "history" ? (
+          <span className="cn-resume-note">发送消息时会接入原 Codex thread。</span>
         ) : null}
         {props.goal ? (
           <button className="cn-soft-button" type="button" onClick={props.onOpenGoal}>

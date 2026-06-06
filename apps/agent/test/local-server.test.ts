@@ -274,6 +274,21 @@ describe("local HTTP server guards", () => {
     process.env.HOME = tempHome;
     const sessionDir = path.join(tempHome, ".codex", "sessions", "2026", "06", "06");
     await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      path.join(tempHome, ".codex", "session_index.jsonl"),
+      [
+        JSON.stringify({
+          id: "history_1",
+          thread_name: "官方 Codex 标题",
+          updated_at: "2026-06-06T00:10:00.000Z"
+        }),
+        JSON.stringify({
+          id: "mission_1",
+          thread_name: "# AGENTS.md instructions for /tmp/CodexBridge",
+          updated_at: "2026-06-06T03:10:00.000Z"
+        })
+      ].join("\n")
+    );
     const sessionFile = path.join(
       sessionDir,
       "rollout-2026-06-06T00-00-00-history_1.jsonl"
@@ -448,7 +463,7 @@ describe("local HTTP server guards", () => {
         id: "history_1",
         cwd: "/tmp/project",
         cwdExists: false,
-        title: "检查这个项目",
+        title: "官方 Codex 标题",
         filePath: sessionFile
       });
       expect(listBody.entries).not.toEqual(

@@ -52,6 +52,23 @@ export interface LocalServerHandle {
   close(): Promise<void>;
 }
 
+interface CodexSessionIndexEntry {
+  id: string;
+  title: string;
+  updatedAt: string;
+}
+
+interface CodexHistoryFileMetadata {
+  id: string;
+  cwd: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  source: string;
+  filePath: string;
+  hasUsefulHistoryContent: boolean;
+}
+
 export function createLocalServer(options: LocalServerOptions): LocalServerHandle {
   const eventStore = new EventStore({ limit: options.eventLimit });
   const approvalBridge = new ApprovalBridge({
@@ -488,21 +505,78 @@ async function listDirectories(url: URL): Promise<LocalDirectoryListResponse> {
 }
 
 async function listCodexHistory(url: URL): Promise<LocalCodexHistoryResponse> {
-  const root = path.join(os.homedir(), ".codex", "sessions");
+  const root = codexSessionsRoot();
   const limit = Math.max(
     1,
     Math.min(200, Number(url.searchParams.get("limit") ?? "80") || 80)
   );
-  const files = await collectCodexSessionFiles(root, limit * 3);
+  const indexEntries = await readCodexSessionIndex();
+  const files = await collectCodexSessionFiles(codexHistoryRoots(), Math.max(800, limit * 8));
+  const metadataById = new Map<string, CodexHistoryFileMetadata>();
   const entries: LocalCodexHistoryEntry[] = [];
 
   for (const filePath of files) {
-    const entry = await readCodexHistoryEntry(filePath);
-    if (entry && !isHiddenCodexHistoryEntry(entry)) {
-      entries.push(entry);
+    const metadata = await readCodexHistoryFileMetadata(filePath);
+    if (!metadata) {
+      continue;
     }
+    const previous = metadataById.get(metadata.id);
+    if (
+      !previous ||
+      Date.parse(metadata.updatedAt || metadata.createdAt) >
+        Date.parse(previous.updatedAt || previous.createdAt)
+    ) {
+      metadataById.set(metadata.id, metadata);
+    }
+  }
+
+  const seen = new Set<string>();
+  const sortedIndexEntries = [...indexEntries.values()].sort(
+    (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
+  );
+  for (const indexEntry of sortedIndexEntries) {
+    const metadata = metadataById.get(indexEntry.id);
+    if (!metadata) {
+      continue;
+    }
+    const entry = await buildCodexHistoryEntry(metadata, indexEntry);
+    if (!entry || isHiddenCodexHistoryEntry(entry)) {
+      continue;
+    }
+    const key = codexHistoryKey(entry);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    entries.push(entry);
     if (entries.length >= limit) {
       break;
+    }
+  }
+
+  if (entries.length < limit) {
+    const fallbackMetadata = [...metadataById.values()].sort(
+      (a, b) =>
+        Date.parse(b.updatedAt || b.createdAt) -
+        Date.parse(a.updatedAt || a.createdAt)
+    );
+    for (const metadata of fallbackMetadata) {
+      const entry = await buildCodexHistoryEntry(
+        metadata,
+        indexEntries.get(metadata.id) ?? null
+      );
+      if (!entry || isHiddenCodexHistoryEntry(entry)) {
+        continue;
+      }
+      const key = codexHistoryKey(entry);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      entries.push(entry);
+      if (entries.length >= limit) {
+        break;
+      }
     }
   }
 
@@ -533,13 +607,14 @@ async function readCodexHistoryDetailById(input: {
 }): Promise<LocalCodexHistoryDetailResponse> {
   const { filePath, id, cwd } = input;
 
-  const root = path.join(os.homedir(), ".codex", "sessions");
+  const indexEntries = await readCodexSessionIndex();
+  const indexEntry = indexEntries.get(id) ?? null;
   if (filePath) {
     const resolvedFilePath = path.resolve(filePath);
-    if (!isPathInside(root, resolvedFilePath)) {
+    if (!isCodexHistoryFilePath(resolvedFilePath)) {
       throw new Error("Codex history filePath is outside the sessions store");
     }
-    const entry = await readCodexHistoryEntry(resolvedFilePath);
+    const entry = await readCodexHistoryEntry(resolvedFilePath, indexEntry);
     if (entry?.id === id && entry.cwd === cwd) {
       return {
         entry,
@@ -548,9 +623,9 @@ async function readCodexHistoryDetailById(input: {
     }
   }
 
-  const files = await collectCodexSessionFiles(root, 800);
+  const files = await collectCodexSessionFiles(codexHistoryRoots(), 2_000);
   for (const filePath of files) {
-    const entry = await readCodexHistoryEntry(filePath);
+    const entry = await readCodexHistoryEntry(filePath, indexEntry);
     if (!entry || entry.id !== id || entry.cwd !== cwd) {
       continue;
     }
@@ -568,13 +643,33 @@ function isPathInside(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function codexSessionsRoot(): string {
+  return path.join(os.homedir(), ".codex", "sessions");
+}
+
+function codexArchivedSessionsRoot(): string {
+  return path.join(os.homedir(), ".codex", "archived_sessions");
+}
+
+function codexSessionIndexPath(): string {
+  return path.join(os.homedir(), ".codex", "session_index.jsonl");
+}
+
+function codexHistoryRoots(): string[] {
+  return [codexSessionsRoot(), codexArchivedSessionsRoot()];
+}
+
+function isCodexHistoryFilePath(candidate: string): boolean {
+  return codexHistoryRoots().some((root) => isPathInside(root, candidate));
+}
+
 function dedupeCodexHistoryEntries(
   entries: LocalCodexHistoryEntry[]
 ): LocalCodexHistoryEntry[] {
   const seen = new Set<string>();
   const unique: LocalCodexHistoryEntry[] = [];
   for (const entry of entries) {
-    const key = `${entry.id}::${entry.cwd}`;
+    const key = codexHistoryKey(entry);
     if (seen.has(key)) {
       continue;
     }
@@ -584,11 +679,55 @@ function dedupeCodexHistoryEntries(
   return unique;
 }
 
+function codexHistoryKey(entry: LocalCodexHistoryEntry): string {
+  return `${entry.id}::${entry.cwd}`;
+}
+
+async function readCodexSessionIndex(): Promise<Map<string, CodexSessionIndexEntry>> {
+  const index = new Map<string, CodexSessionIndexEntry>();
+  const filePath = codexSessionIndexPath();
+  const stream = createReadStream(filePath, { encoding: "utf8" });
+  const reader = createInterface({ input: stream, crlfDelay: Infinity });
+
+  try {
+    for await (const line of reader) {
+      let record: unknown;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!isPlainRecord(record)) {
+        continue;
+      }
+      const id = readString(record, "id");
+      const title = readString(record, "thread_name");
+      const updatedAt = readString(record, "updated_at");
+      if (!id || !title || !updatedAt) {
+        continue;
+      }
+      const existing = index.get(id);
+      if (existing && Date.parse(existing.updatedAt) >= Date.parse(updatedAt)) {
+        continue;
+      }
+      index.set(id, { id, title, updatedAt });
+    }
+  } catch {
+    return index;
+  } finally {
+    reader.close();
+    stream.destroy();
+  }
+
+  return index;
+}
+
 async function collectCodexSessionFiles(
-  root: string,
+  roots: string | string[],
   limit: number
 ): Promise<string[]> {
   const files: string[] = [];
+  const rootList = Array.isArray(roots) ? roots : [roots];
 
   async function walk(currentPath: string, depth: number): Promise<void> {
     if (files.length >= limit || depth > 4) {
@@ -617,13 +756,26 @@ async function collectCodexSessionFiles(
     }
   }
 
-  await walk(root, 0);
+  for (const root of rootList) {
+    if (files.length >= limit) {
+      break;
+    }
+    await walk(root, 0);
+  }
   return files;
 }
 
 async function readCodexHistoryEntry(
-  filePath: string
+  filePath: string,
+  indexEntry: CodexSessionIndexEntry | null = null
 ): Promise<LocalCodexHistoryEntry | null> {
+  const metadata = await readCodexHistoryFileMetadata(filePath);
+  return metadata ? buildCodexHistoryEntry(metadata, indexEntry) : null;
+}
+
+async function readCodexHistoryFileMetadata(
+  filePath: string
+): Promise<CodexHistoryFileMetadata | null> {
   let id = "";
   let cwd = "";
   let title = "";
@@ -687,20 +839,38 @@ async function readCodexHistoryEntry(
   if (!cwd) {
     return null;
   }
-  if (!title || !hasUsefulHistoryContent) {
-    return null;
-  }
-  const cwdExists = await directoryExists(cwd);
 
   return {
     id,
     cwd,
-    cwdExists,
-    title: compactTitle(title),
+    title,
     createdAt: createdAt || updatedAt || new Date().toISOString(),
     updatedAt: updatedAt || createdAt || new Date().toISOString(),
     source,
-    filePath
+    filePath,
+    hasUsefulHistoryContent
+  };
+}
+
+async function buildCodexHistoryEntry(
+  metadata: CodexHistoryFileMetadata,
+  indexEntry: CodexSessionIndexEntry | null
+): Promise<LocalCodexHistoryEntry | null> {
+  const title = chooseHistoryTitle(indexEntry?.title ?? "", metadata.title);
+  if (!title || (!metadata.hasUsefulHistoryContent && !indexEntry?.title)) {
+    return null;
+  }
+  const cwdExists = await directoryExists(metadata.cwd);
+
+  return {
+    id: metadata.id,
+    cwd: metadata.cwd,
+    cwdExists,
+    title,
+    createdAt: metadata.createdAt,
+    updatedAt: indexEntry?.updatedAt || metadata.updatedAt,
+    source: metadata.source,
+    filePath: metadata.filePath
   };
 }
 
@@ -723,7 +893,6 @@ async function readCodexHistoryMessages(
   filePath: string
 ): Promise<LocalCodexHistoryMessage[]> {
   const messages: LocalCodexHistoryMessage[] = [];
-  const seen = new Set<string>();
   let lineCount = 0;
   const stream = createReadStream(filePath, { encoding: "utf8" });
   const reader = createInterface({ input: stream, crlfDelay: Infinity });
@@ -731,9 +900,6 @@ async function readCodexHistoryMessages(
   try {
     for await (const line of reader) {
       lineCount += 1;
-      if (lineCount > 2_500) {
-        break;
-      }
 
       let record: unknown;
       try {
@@ -755,19 +921,14 @@ async function readCodexHistoryMessages(
       if (!text || !isUsableHistoryMessage(text)) {
         continue;
       }
-      const duplicateKey = `${extracted.role}:${text}`;
-      if (seen.has(duplicateKey)) {
-        continue;
-      }
-      seen.add(duplicateKey);
       messages.push({
         id: `${path.basename(filePath, ".jsonl")}-${lineCount}`,
         role: extracted.role,
         text,
         ts
       });
-      if (messages.length >= 160) {
-        break;
+      if (messages.length > 240) {
+        messages.shift();
       }
     }
   } finally {
@@ -896,6 +1057,20 @@ function normalizeHistoryUserText(input: string): string {
   return trimmed;
 }
 
+function chooseHistoryTitle(primary: string, fallback: string): string {
+  for (const candidate of [primary, fallback]) {
+    const normalized = normalizeHistoryUserText(candidate);
+    if (
+      normalized &&
+      isUsableHistoryTitle(normalized) &&
+      !isAutomationPromptTitle(normalized)
+    ) {
+      return compactTitle(normalized);
+    }
+  }
+  return "";
+}
+
 function stripSyntheticTitleInstruction(input: string): string {
   const markers = [
     "\n\nBased on this message, call functions.happy__change_title",
@@ -986,7 +1161,7 @@ function hasUsefulHistoryMessage(
 
 function isUsableHistoryMessage(input: string): boolean {
   const trimmed = input.trim();
-  return Boolean(trimmed) && !trimmed.startsWith("<");
+  return Boolean(trimmed) && !trimmed.startsWith("<") && !isCodexInjectedContext(trimmed);
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
