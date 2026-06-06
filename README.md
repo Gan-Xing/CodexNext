@@ -12,9 +12,11 @@ Included:
 - `packages/protocol`
 - `packages/codex-client`
 - `apps/agent`
+- `apps/web`
 - docs and ADR
 - `codexnext doctor`
 - `codexnext goal-smoke --cwd <path> --goal <text> [--model <model>] [--token-budget <number>]`
+- `codexnext serve`
 
 Not included:
 
@@ -70,6 +72,29 @@ The command starts `codex app-server --stdio`, sends `initialize`, sends the `in
 
 Ctrl+C sends `turn/interrupt` when a turn is active, then closes the child process.
 
+## Run The Local Web Console
+
+Start the local agent:
+
+```bash
+pnpm --filter @codexnext/agent dev -- serve \
+  --host 127.0.0.1 \
+  --port 17361 \
+  --web-origin http://127.0.0.1:3000
+```
+
+Start the Web Console:
+
+```bash
+pnpm --filter @codexnext/web dev
+```
+
+The Web dev server listens on `0.0.0.0:3000`, so the page is reachable from this Mac and from trusted devices on the same local network. Open the URL printed by `serve`. The page connects to the local agent, starts Codex sessions, sends chat messages, steers active turns, interrupts turns, manages Goals through `thread/goal/*`, streams app-server events, and resolves approval requests in the browser.
+
+## Design Lab
+
+Open `http://127.0.0.1:3000/design` while the Web app is running to review the fake-data UI workbench before wiring real agent logic. Stable design routes include `/design/new-session`, `/design/thread`, `/design/approval`, `/design/device`, `/design/components`, and `/design/archive`.
+
 ## Approval Behavior
 
 Phase 1 defaults command and file approval requests to decline. This is not hard-coded into JSON-RPC internals. It is implemented through `onApprovalRequest`, so later UI work can replace the callback with an approval dialog.
@@ -121,4 +146,4 @@ If `goal-smoke` fails with an app-server JSON-RPC error, check:
 - `packages/protocol`: shared JSON-RPC, Codex method names, lightweight app-server types, and Zod CLI validation.
 - `packages/codex-client`: JSON-RPC client, stdio transport, Codex app-server wrappers, and approval callback routing.
 - `apps/agent`: CLI commands and human-readable smoke-test event output.
-
+- `apps/web`: Next.js App Router local Web Console for Phase 2A.

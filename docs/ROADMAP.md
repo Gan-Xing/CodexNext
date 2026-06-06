@@ -17,7 +17,7 @@ Goals:
 
 ## Phase 2: Local Web Console
 
-Do not start until explicitly requested.
+Status: implemented as Phase 2A Local Interactive Web Console.
 
 Target:
 
@@ -28,6 +28,8 @@ Target:
 - model input
 - live event stream
 - visible approval dialog
+- chat through turn/start and turn/steer
+- interrupt active turns
 
 ## Phase 3: Control Server
 
@@ -59,4 +61,3 @@ Target:
 - event replay
 - local daemon mode
 - machine/session layering
-
