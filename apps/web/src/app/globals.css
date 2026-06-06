@@ -2170,6 +2170,12 @@ summary {
   padding: 1rem;
 }
 
+.cn-real-device-row > div {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .cn-real-device-row strong,
 .cn-real-device-row small {
   display: block;
@@ -2184,6 +2190,177 @@ summary {
   font-size: 0.82rem;
   font-weight: 650;
   margin-top: 0.15rem;
+}
+
+.cn-device-sheet {
+  width: min(840px, calc(100vw - 8rem));
+}
+
+.cn-device-manager {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  min-width: 0;
+}
+
+.cn-device-library,
+.cn-device-editor {
+  background: var(--cn-soft);
+  border: 1px solid var(--cn-line);
+  border-radius: 22px;
+  min-width: 0;
+  padding: 0.9rem;
+}
+
+.cn-device-editor {
+  background: var(--cn-surface);
+  display: grid;
+  gap: 0.85rem;
+}
+
+.cn-device-editor label {
+  color: var(--cn-muted);
+  display: grid;
+  gap: 0.42rem;
+  font-size: 0.78rem;
+  font-weight: 780;
+}
+
+.cn-device-editor input {
+  background: var(--cn-soft);
+  border: 1px solid var(--cn-line);
+  border-radius: 14px;
+  color: var(--cn-ink);
+  min-height: 42px;
+  padding: 0.72rem 0.85rem;
+}
+
+.cn-device-library-header {
+  align-items: center;
+  display: flex;
+  gap: 0.7rem;
+  justify-content: space-between;
+  margin-bottom: 0.72rem;
+}
+
+.cn-device-library-header strong {
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+}
+
+.cn-add-mini-button {
+  align-items: center;
+  background: var(--cn-surface);
+  border: 1px solid var(--cn-line);
+  border-radius: 999px;
+  color: var(--cn-ink);
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 780;
+  gap: 0.28rem;
+  min-height: 32px;
+  padding: 0 0.65rem;
+}
+
+.cn-add-mini-button .cn-codex-icon {
+  height: 15px;
+  width: 15px;
+}
+
+.cn-saved-device-list {
+  display: grid;
+  gap: 0.55rem;
+  max-height: min(410px, 52vh);
+  overflow: auto;
+  padding-right: 0.1rem;
+}
+
+.cn-empty-device-list {
+  color: var(--cn-muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+  line-height: 1.5;
+  padding: 0.72rem 0.2rem;
+}
+
+.cn-saved-device-card {
+  align-items: stretch;
+  background: var(--cn-surface);
+  border: 1px solid var(--cn-line);
+  border-radius: 18px;
+  display: grid;
+  gap: 0.35rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0.72rem;
+}
+
+.cn-saved-device-card.selected {
+  background: #eeeeeb;
+}
+
+.cn-saved-device-main {
+  background: transparent;
+  border: 0;
+  color: var(--cn-ink);
+  display: grid;
+  gap: 0.18rem 0.55rem;
+  grid-template-columns: 10px minmax(0, 1fr);
+  justify-items: start;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+
+.cn-saved-device-main > span {
+  background: var(--cn-faint);
+  border-radius: 999px;
+  grid-row: 1 / 3;
+  height: 9px;
+  margin-top: 0.36rem;
+  width: 9px;
+}
+
+.cn-saved-device-main > span.online {
+  background: var(--cn-green);
+}
+
+.cn-saved-device-main strong,
+.cn-saved-device-main small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cn-saved-device-main strong {
+  font-size: 0.93rem;
+  font-weight: 790;
+}
+
+.cn-saved-device-main small {
+  color: var(--cn-muted);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.cn-device-delete-button {
+  align-self: start;
+  background: transparent;
+  border: 0;
+  color: var(--cn-muted);
+  font-size: 0.74rem;
+  font-weight: 720;
+  min-height: 0;
+  padding: 0.15rem 0;
+}
+
+.cn-device-delete-button:hover {
+  color: var(--cn-red);
 }
 
 .cn-live-session-sheet {
@@ -2757,6 +2934,18 @@ summary {
 
   .cn-live-console .cn-real-folder-list {
     max-height: 34dvh;
+  }
+
+  .cn-live-console .cn-device-sheet {
+    width: 100%;
+  }
+
+  .cn-live-console .cn-device-manager {
+    grid-template-columns: 1fr;
+  }
+
+  .cn-live-console .cn-saved-device-list {
+    max-height: 28dvh;
   }
 
   .cn-live-console .cn-use-folder-button {
@@ -3992,6 +4181,10 @@ summary {
 
 .cn-sheet-card {
   width: 540px;
+}
+
+.cn-sheet-card.cn-device-sheet {
+  width: min(840px, calc(100vw - 8rem));
 }
 
 .cn-project-card {

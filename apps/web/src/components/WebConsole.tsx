@@ -55,6 +55,50 @@ interface ProjectThreadGroupData {
   entries: LocalCodexHistoryEntry[];
 }
 
+interface SavedDevice {
+  id: string;
+  name: string;
+  agentUrl: string;
+  token: string;
+  codexVersion?: string | null;
+  lastConnectedAt?: number | null;
+}
+
+interface DeviceDraftState {
+  selectedDeviceId: string | null;
+  name: string;
+  agentUrl: string;
+  token: string;
+}
+
+interface DevicePresenceState {
+  checkedAt: number;
+  codexVersion?: string | null;
+  error?: string | null;
+  status: "checking" | "offline" | "online";
+}
+
+interface DeviceWorkspace {
+  chatItems: ChatItem[];
+  codexHistory: LocalCodexHistoryEntry[];
+  connection: AgentConnection;
+  currentSessionId: string | null;
+  cwd: string;
+  directoryError: string | null;
+  directoryList: LocalDirectoryListResponse | null;
+  directoryLoading: boolean;
+  events: LocalEvent[];
+  healthStatus: LocalHealthResponse | null;
+  historyLoadingKey: string | null;
+  pendingApprovals: PendingApprovalView[];
+  resumeStates: Record<string, ResumeState>;
+  selectedHistoryKey: string | null;
+  sessions: LocalSessionSummary[];
+  streamStatus: string;
+}
+
+type StateUpdater<T> = T | ((previous: T) => T);
+
 const modelOptions = [
   { label: "GPT-5.5", shortLabel: "5.5", value: "gpt-5.5" },
   { label: "GPT-5.4", shortLabel: "5.4", value: "gpt-5.4" },
@@ -112,34 +156,28 @@ const MESSAGE_ESTIMATED_HEIGHT = 180;
 const MESSAGE_GAP = 16;
 const MESSAGE_OVERSCAN_PX = 420;
 
-type ResumeState = "resuming" | "failed";
+type ResumeState = "resuming" | "failed" | "preview";
+
+const savedDevicesStorageKey = "codexnext.savedDevices.v1";
 
 export function WebConsole() {
   const [agentUrl, setAgentUrl] = useState("http://127.0.0.1:17361");
   const [token, setToken] = useState("");
-  const [healthStatus, setHealthStatus] = useState<LocalHealthResponse | null>(null);
-  const [streamStatus, setStreamStatus] = useState("disconnected");
-  const [events, setEvents] = useState<LocalEvent[]>([]);
-  const [sessions, setSessions] = useState<LocalSessionSummary[]>([]);
-  const [codexHistory, setCodexHistory] = useState<LocalCodexHistoryEntry[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [selectedHistoryKey, setSelectedHistoryKey] = useState<string | null>(null);
-  const [historyLoadingKey, setHistoryLoadingKey] = useState<string | null>(null);
-  const [resumeStates, setResumeStates] = useState<Record<string, ResumeState>>({});
-  const [chatItems, setChatItems] = useState<ChatItem[]>([]);
-  const [pendingApprovals, setPendingApprovals] = useState<PendingApprovalView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [autoConnect, setAutoConnect] = useState<AgentConnection | null>(null);
+  const [savedDevices, setSavedDevices] = useState<SavedDevice[]>([]);
+  const [devicePresence, setDevicePresence] = useState<
+    Record<string, DevicePresenceState>
+  >({});
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [deviceName, setDeviceName] = useState("");
   const [activeSheet, setActiveSheet] = useState<ActiveSheet>(null);
   const [activeMenu, setActiveMenu] = useState<ActiveMenu>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [deviceWorkspaces, setDeviceWorkspaces] = useState<
+    Record<string, DeviceWorkspace>
+  >({});
 
-  const [cwd, setCwd] = useState("");
-  const [directoryList, setDirectoryList] =
-    useState<LocalDirectoryListResponse | null>(null);
-  const [directoryError, setDirectoryError] = useState<string | null>(null);
-  const [directoryLoading, setDirectoryLoading] = useState(false);
   const [model, setModel] = useState("gpt-5.5");
   const [reasoningEffort, setReasoningEffort] =
     useState<LocalReasoningEffort>("xhigh");
@@ -152,14 +190,34 @@ export function WebConsole() {
   const [goalObjective, setGoalObjective] = useState("");
   const [goalTokenBudget, setGoalTokenBudget] = useState("");
 
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const eventSourceRefs = useRef(new Map<string, EventSource>());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const historyDetailCacheRef = useRef(
     new Map<string, LocalCodexHistoryDetailResponse>()
   );
+  const pendingDeviceStreamIds = useRef(new Set<string>());
+  const selectedDeviceIdRef = useRef<string | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
-  const connection: AgentConnection = { agentUrl, token };
+  const activeWorkspace = selectedDeviceId
+    ? deviceWorkspaces[selectedDeviceId] ?? null
+    : null;
+  const connection: AgentConnection = activeWorkspace?.connection ?? { agentUrl, token };
+  const healthStatus = activeWorkspace?.healthStatus ?? null;
+  const streamStatus = activeWorkspace?.streamStatus ?? "disconnected";
+  const events = activeWorkspace?.events ?? [];
+  const sessions = activeWorkspace?.sessions ?? [];
+  const codexHistory = activeWorkspace?.codexHistory ?? [];
+  const currentSessionId = activeWorkspace?.currentSessionId ?? null;
+  const selectedHistoryKey = activeWorkspace?.selectedHistoryKey ?? null;
+  const historyLoadingKey = activeWorkspace?.historyLoadingKey ?? null;
+  const resumeStates = activeWorkspace?.resumeStates ?? {};
+  const chatItems = activeWorkspace?.chatItems ?? [];
+  const pendingApprovals = activeWorkspace?.pendingApprovals ?? [];
+  const cwd = activeWorkspace?.cwd ?? "";
+  const directoryList = activeWorkspace?.directoryList ?? null;
+  const directoryError = activeWorkspace?.directoryError ?? null;
+  const directoryLoading = activeWorkspace?.directoryLoading ?? false;
   const currentSession = currentSessionId
     ? sessions.find((session) => session.sessionId === currentSessionId) ?? null
     : null;
@@ -167,7 +225,9 @@ export function WebConsole() {
     ? chatItems.filter((item) => item.sessionId === currentSession.sessionId)
     : [];
   const latestVisibleChatItem = visibleChatItems.at(-1);
-  const connected = Boolean(healthStatus?.ok && streamStatus === "connected");
+  const connected = Boolean(
+    healthStatus?.ok && streamStatus === "connected"
+  );
   const activeTurn = Boolean(currentSession?.activeTurnId);
   const currentResumeState = currentSession
     ? resumeStates[currentSession.sessionId] ?? null
@@ -185,7 +245,160 @@ export function WebConsole() {
     healthStatus?.device?.defaultName ||
     defaultDeviceName(agentUrl);
 
+  function patchDeviceWorkspace(
+    deviceId: string,
+    updater: (workspace: DeviceWorkspace) => DeviceWorkspace
+  ) {
+    setDeviceWorkspaces((previous) => {
+      const device = savedDevices.find((item) => item.id === deviceId);
+      const current =
+        previous[deviceId] ??
+        createDeviceWorkspace({
+          agentUrl: device?.agentUrl ?? agentUrl,
+          token: device?.token ?? token
+        });
+      return {
+        ...previous,
+        [deviceId]: updater(current)
+      };
+    });
+  }
+
+  function patchActiveWorkspace(
+    updater: (workspace: DeviceWorkspace) => DeviceWorkspace
+  ) {
+    if (!selectedDeviceId) {
+      return;
+    }
+    patchDeviceWorkspace(selectedDeviceId, updater);
+  }
+
+  function setHealthStatus(updater: StateUpdater<LocalHealthResponse | null>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      healthStatus: resolveStateUpdater(workspace.healthStatus, updater)
+    }));
+  }
+
+  function setStreamStatus(updater: StateUpdater<string>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      streamStatus: resolveStateUpdater(workspace.streamStatus, updater)
+    }));
+  }
+
+  function setEvents(updater: StateUpdater<LocalEvent[]>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      events: resolveStateUpdater(workspace.events, updater)
+    }));
+  }
+
+  function setSessions(updater: StateUpdater<LocalSessionSummary[]>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      sessions: resolveStateUpdater(workspace.sessions, updater)
+    }));
+  }
+
+  function setCodexHistory(updater: StateUpdater<LocalCodexHistoryEntry[]>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      codexHistory: resolveStateUpdater(workspace.codexHistory, updater)
+    }));
+  }
+
+  function setCurrentSessionId(updater: StateUpdater<string | null>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      currentSessionId: resolveStateUpdater(workspace.currentSessionId, updater)
+    }));
+  }
+
+  function setSelectedHistoryKey(updater: StateUpdater<string | null>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      selectedHistoryKey: resolveStateUpdater(
+        workspace.selectedHistoryKey,
+        updater
+      )
+    }));
+  }
+
+  function setHistoryLoadingKey(updater: StateUpdater<string | null>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      historyLoadingKey: resolveStateUpdater(workspace.historyLoadingKey, updater)
+    }));
+  }
+
+  function setResumeStates(updater: StateUpdater<Record<string, ResumeState>>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      resumeStates: resolveStateUpdater(workspace.resumeStates, updater)
+    }));
+  }
+
+  function setChatItems(updater: StateUpdater<ChatItem[]>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      chatItems: resolveStateUpdater(workspace.chatItems, updater)
+    }));
+  }
+
+  function setPendingApprovals(updater: StateUpdater<PendingApprovalView[]>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      pendingApprovals: resolveStateUpdater(workspace.pendingApprovals, updater)
+    }));
+  }
+
+  function setCwd(updater: StateUpdater<string>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      cwd: resolveStateUpdater(workspace.cwd, updater)
+    }));
+  }
+
+  function setDirectoryList(
+    updater: StateUpdater<LocalDirectoryListResponse | null>
+  ) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      directoryList: resolveStateUpdater(workspace.directoryList, updater)
+    }));
+  }
+
+  function setDirectoryError(updater: StateUpdater<string | null>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      directoryError: resolveStateUpdater(workspace.directoryError, updater)
+    }));
+  }
+
+  function setDirectoryLoading(updater: StateUpdater<boolean>) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      directoryLoading: resolveStateUpdater(workspace.directoryLoading, updater)
+    }));
+  }
+
   useEffect(() => {
+    const storedDevices = readSavedDevices();
+    setSavedDevices(storedDevices);
+    setDeviceWorkspaces((previous) => {
+      const next = { ...previous };
+      for (const device of storedDevices) {
+        next[device.id] =
+          next[device.id] ??
+          createDeviceWorkspace({
+            agentUrl: device.agentUrl,
+            token: device.token
+          });
+      }
+      return next;
+    });
+
     const params = new URLSearchParams(window.location.search);
     const queryAgent = params.get("agent");
     const queryToken = params.get("token");
@@ -195,15 +408,146 @@ export function WebConsole() {
     if (queryToken) {
       setToken(queryToken);
     }
+    if (queryAgent) {
+      const matchedDevice = findSavedDevice(
+        storedDevices,
+        queryAgent,
+        queryToken ?? ""
+      );
+      if (matchedDevice) {
+        setSelectedDeviceId(matchedDevice.id);
+        setDeviceName(matchedDevice.name);
+      } else {
+        const savedName = window.localStorage.getItem(
+          deviceNameStorageKey(queryAgent)
+        );
+        setDeviceName(savedName ?? defaultDeviceName(queryAgent));
+      }
+    } else {
+      const preferredDevice = [...storedDevices].sort(
+        (a, b) => (b.lastConnectedAt ?? 0) - (a.lastConnectedAt ?? 0)
+      )[0];
+      if (preferredDevice) {
+        setSelectedDeviceId(preferredDevice.id);
+        setAgentUrl(preferredDevice.agentUrl);
+        setToken(preferredDevice.token);
+        setDeviceName(preferredDevice.name);
+      }
+    }
     if (queryAgent && queryToken) {
       setAutoConnect({ agentUrl: queryAgent, token: queryToken });
     }
   }, []);
 
   useEffect(() => {
+    selectedDeviceIdRef.current = selectedDeviceId;
+  }, [selectedDeviceId]);
+
+  useEffect(() => {
+    const selectedDevice = savedDevices.find(
+      (device) => device.id === selectedDeviceId
+    );
+    if (selectedDevice && isSameDeviceEndpoint(selectedDevice, agentUrl, token)) {
+      setDeviceName(selectedDevice.name);
+      return;
+    }
+    const matchingDevice = findSavedDevice(savedDevices, agentUrl, token);
+    if (matchingDevice) {
+      setSelectedDeviceId(matchingDevice.id);
+      setDeviceName(matchingDevice.name);
+      return;
+    }
     const savedName = window.localStorage.getItem(deviceNameStorageKey(agentUrl));
     setDeviceName(savedName ?? "");
-  }, [agentUrl]);
+  }, [agentUrl, savedDevices, selectedDeviceId, token]);
+
+  useEffect(() => {
+    if (savedDevices.length === 0) {
+      setDevicePresence({});
+      return;
+    }
+
+    let cancelled = false;
+    const savedDeviceIds = new Set(savedDevices.map((device) => device.id));
+
+    const refreshPresence = async () => {
+      const checkedAt = Date.now();
+      setDevicePresence((previous) => {
+        const next: Record<string, DevicePresenceState> = {};
+        for (const device of savedDevices) {
+          next[device.id] = previous[device.id] ?? {
+            checkedAt,
+            codexVersion: device.codexVersion ?? null,
+            status: "checking"
+          };
+        }
+        return next;
+      });
+
+      const results = await Promise.all(
+        savedDevices.map(async (device) => {
+          try {
+            const status = await health({
+              agentUrl: device.agentUrl,
+              token: device.token
+            });
+            void attachSavedDeviceStream(device, status);
+            return {
+              id: device.id,
+              presence: {
+                checkedAt: Date.now(),
+                codexVersion: status.codex?.version ?? device.codexVersion ?? null,
+                status: "online" as const
+              }
+            };
+          } catch (err) {
+            eventSourceRefs.current.get(device.id)?.close();
+            eventSourceRefs.current.delete(device.id);
+            pendingDeviceStreamIds.current.delete(device.id);
+            patchDeviceWorkspace(device.id, (workspace) => ({
+              ...workspace,
+              healthStatus: null,
+              streamStatus: "error"
+            }));
+            return {
+              id: device.id,
+              presence: {
+                checkedAt: Date.now(),
+                codexVersion: device.codexVersion ?? null,
+                error: formatError(err),
+                status: "offline" as const
+              }
+            };
+          }
+        })
+      );
+
+      if (cancelled) {
+        return;
+      }
+      setDevicePresence((previous) => {
+        const next: Record<string, DevicePresenceState> = {};
+        for (const [deviceId, presence] of Object.entries(previous)) {
+          if (savedDeviceIds.has(deviceId)) {
+            next[deviceId] = presence;
+          }
+        }
+        for (const result of results) {
+          if (savedDeviceIds.has(result.id)) {
+            next[result.id] = result.presence;
+          }
+        }
+        return next;
+      });
+    };
+
+    void refreshPresence();
+    const interval = window.setInterval(() => void refreshPresence(), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [savedDevices]);
 
   useEffect(() => {
     if (!autoConnect) {
@@ -212,7 +556,7 @@ export function WebConsole() {
     setAutoConnect(null);
     void connect(autoConnect).catch((err) => {
       setStreamStatus("error");
-      setError(formatError(err));
+      setError(formatConnectionError(err, autoConnect.agentUrl));
     });
   }, [autoConnect]);
 
@@ -230,7 +574,10 @@ export function WebConsole() {
 
   useEffect(() => {
     return () => {
-      eventSourceRef.current?.close();
+      for (const source of eventSourceRefs.current.values()) {
+        source.close();
+      }
+      eventSourceRefs.current.clear();
     };
   }, []);
 
@@ -249,74 +596,322 @@ export function WebConsole() {
     latestVisibleChatItem?.text.length
   ]);
 
-  async function connect(nextConnection: AgentConnection = connection) {
+  async function connect(
+    nextConnection: AgentConnection = connection,
+    options?: { deviceId?: string | null; deviceName?: string }
+  ) {
     setError(null);
-    setStreamStatus("connecting");
-    eventSourceRef.current?.close();
-
-    const status = await health(nextConnection);
-    setHealthStatus(status);
-    const savedName = window.localStorage.getItem(
-      deviceNameStorageKey(nextConnection.agentUrl)
-    );
-    if (!savedName) {
-      setDeviceName(status.device?.defaultName ?? defaultDeviceName(nextConnection.agentUrl));
-    }
-
-    const replay = await agentFetch<{ events: LocalEvent[] }>(
-      nextConnection,
-      "/api/events?after=0"
-    );
-    ingestEvents(replay.events, { selectSessions: false });
-    const loadedSessions = await listSessions(nextConnection);
-    setSessions(loadedSessions.sessions);
-    const history = await listCodexHistory(nextConnection);
-    setCodexHistory(history.entries);
-    const latestSession = [...loadedSessions.sessions].sort(
-      (a, b) => b.updatedAt - a.updatedAt
-    )[0];
-    if (latestSession) {
-      setCurrentSessionId((current) => current ?? latestSession.sessionId);
-      setCwd((current) => current || latestSession.cwd);
-    }
-    setDirectoryLoading(true);
-    setDirectoryError(null);
+    let connectingDeviceId: string | null = options?.deviceId ?? null;
     try {
-      const directories = await listDirectories(
+      const status = await health(nextConnection);
+      const connectedDevice = upsertConnectedDevice(
         nextConnection,
-        cwd || latestSession?.cwd || undefined
+        status,
+        options
       );
-      setDirectoryList(directories);
+      connectingDeviceId = connectedDevice.id;
+      const deviceConnection = {
+        agentUrl: connectedDevice.agentUrl,
+        token: connectedDevice.token
+      };
+      setSelectedDeviceId(connectedDevice.id);
+      setAgentUrl(connectedDevice.agentUrl);
+      setToken(connectedDevice.token);
+      setDeviceName(connectedDevice.name);
+      setDeviceWorkspaces((previous) => {
+        const current =
+          previous[connectedDevice.id] ??
+          createDeviceWorkspace(deviceConnection);
+        return {
+          ...previous,
+          [connectedDevice.id]: {
+            ...current,
+            connection: deviceConnection,
+            healthStatus: status,
+            streamStatus: "connecting"
+          }
+        };
+      });
+      setDevicePresence((previous) => ({
+        ...previous,
+        [connectedDevice.id]: {
+          checkedAt: Date.now(),
+          codexVersion: status.codex?.version ?? null,
+          status: "online"
+        }
+      }));
+
+      const replay = await agentFetch<{ events: LocalEvent[] }>(
+        deviceConnection,
+        "/api/events?after=0"
+      );
+      ingestDeviceEvents(connectedDevice.id, replay.events, {
+        selectSessions: false
+      });
+      const loadedSessions = await listSessions(deviceConnection);
+      const history = await listCodexHistory(deviceConnection);
+      const latestSession = [...loadedSessions.sessions].sort(
+        (a, b) => b.updatedAt - a.updatedAt
+      )[0];
+      patchDeviceWorkspace(connectedDevice.id, (workspace) => ({
+        ...workspace,
+        codexHistory: history.entries,
+        currentSessionId: workspace.currentSessionId ?? latestSession?.sessionId ?? null,
+        cwd: workspace.cwd || latestSession?.cwd || "",
+        directoryError: null,
+        directoryLoading: true,
+        sessions: loadedSessions.sessions
+      }));
+      try {
+        const directories = await listDirectories(
+          deviceConnection,
+          cwd || latestSession?.cwd || undefined
+        );
+        patchDeviceWorkspace(connectedDevice.id, (workspace) => ({
+          ...workspace,
+          directoryList: directories
+        }));
+      } catch (err) {
+        patchDeviceWorkspace(connectedDevice.id, (workspace) => ({
+          ...workspace,
+          directoryError: formatError(err)
+        }));
+      } finally {
+        patchDeviceWorkspace(connectedDevice.id, (workspace) => ({
+          ...workspace,
+          directoryLoading: false
+        }));
+      }
+
+      let connectedOnce = false;
+      const markConnected = () => {
+        connectedOnce = true;
+        patchDeviceWorkspace(connectedDevice.id, (workspace) => ({
+          ...workspace,
+          streamStatus: "connected"
+        }));
+      };
+
+      eventSourceRefs.current.get(connectedDevice.id)?.close();
+      const source = openEventStream(
+        deviceConnection,
+        replay.events.at(-1)?.seq ?? 0,
+        (event) => {
+          markConnected();
+          ingestDeviceEvents(connectedDevice.id, [event], {
+            selectSessions: true
+          });
+        },
+        () => {
+          patchDeviceWorkspace(connectedDevice.id, (workspace) => ({
+            ...workspace,
+            streamStatus: connectedOnce ? "reconnecting" : "error"
+          }));
+        }
+      );
+      source.onopen = markConnected;
+      eventSourceRefs.current.set(connectedDevice.id, source);
+      window.setTimeout(() => {
+        if (!connectedOnce && source.readyState !== EventSource.CLOSED) {
+          markConnected();
+        }
+      }, 750);
     } catch (err) {
-      setDirectoryError(formatError(err));
-    } finally {
-      setDirectoryLoading(false);
+      if (connectingDeviceId) {
+        eventSourceRefs.current.get(connectingDeviceId)?.close();
+        eventSourceRefs.current.delete(connectingDeviceId);
+        patchDeviceWorkspace(connectingDeviceId, (workspace) => ({
+          ...workspace,
+          healthStatus: null,
+          streamStatus: "error"
+        }));
+      }
+      throw err;
     }
+  }
 
-    let connectedOnce = false;
-    const markConnected = () => {
-      connectedOnce = true;
-      setStreamStatus("connected");
+  async function attachSavedDeviceStream(
+    device: SavedDevice,
+    initialHealthStatus?: LocalHealthResponse
+  ) {
+    if (
+      eventSourceRefs.current.has(device.id) ||
+      pendingDeviceStreamIds.current.has(device.id)
+    ) {
+      return;
+    }
+    pendingDeviceStreamIds.current.add(device.id);
+    const deviceConnection = {
+      agentUrl: device.agentUrl,
+      token: device.token
     };
+    try {
+      const status = initialHealthStatus ?? (await health(deviceConnection));
+      patchDeviceWorkspace(device.id, (workspace) => ({
+        ...workspace,
+        connection: deviceConnection,
+        healthStatus: status,
+        streamStatus: "connecting"
+      }));
 
-    const source = openEventStream(
-      nextConnection,
-      replay.events.at(-1)?.seq ?? 0,
-      (event) => {
+      const replay = await agentFetch<{ events: LocalEvent[] }>(
+        deviceConnection,
+        "/api/events?after=0"
+      );
+      ingestDeviceEvents(device.id, replay.events, { selectSessions: false });
+      const [loadedSessions, history] = await Promise.all([
+        listSessions(deviceConnection),
+        listCodexHistory(deviceConnection)
+      ]);
+      const latestSession = [...loadedSessions.sessions].sort(
+        (a, b) => b.updatedAt - a.updatedAt
+      )[0];
+      patchDeviceWorkspace(device.id, (workspace) => ({
+        ...workspace,
+        codexHistory: history.entries,
+        currentSessionId: workspace.currentSessionId ?? latestSession?.sessionId ?? null,
+        cwd: workspace.cwd || latestSession?.cwd || "",
+        sessions: loadedSessions.sessions
+      }));
+
+      let connectedOnce = false;
+      const markConnected = () => {
+        connectedOnce = true;
+        patchDeviceWorkspace(device.id, (workspace) => ({
+          ...workspace,
+          streamStatus: "connected"
+        }));
+        setDevicePresence((previous) => ({
+          ...previous,
+          [device.id]: {
+            checkedAt: Date.now(),
+            codexVersion: status.codex?.version ?? device.codexVersion ?? null,
+            status: "online"
+          }
+        }));
+      };
+
+      if (eventSourceRefs.current.has(device.id)) {
         markConnected();
-        ingestEvents([event], { selectSessions: true });
-      },
-      () => {
-        setStreamStatus(connectedOnce ? "reconnecting" : "error");
+        return;
       }
+      const source = openEventStream(
+        deviceConnection,
+        replay.events.at(-1)?.seq ?? 0,
+        (event) => {
+          markConnected();
+          ingestDeviceEvents(device.id, [event], { selectSessions: true });
+        },
+        () => {
+          patchDeviceWorkspace(device.id, (workspace) => ({
+            ...workspace,
+            streamStatus: connectedOnce ? "reconnecting" : "error"
+          }));
+        }
+      );
+      source.onopen = markConnected;
+      eventSourceRefs.current.set(device.id, source);
+      window.setTimeout(() => {
+        if (!connectedOnce && source.readyState !== EventSource.CLOSED) {
+          markConnected();
+        }
+      }, 750);
+    } catch (err) {
+      eventSourceRefs.current.get(device.id)?.close();
+      eventSourceRefs.current.delete(device.id);
+      patchDeviceWorkspace(device.id, (workspace) => ({
+        ...workspace,
+        healthStatus: null,
+        streamStatus: "error"
+      }));
+      setDevicePresence((previous) => ({
+        ...previous,
+        [device.id]: {
+          checkedAt: Date.now(),
+          codexVersion: device.codexVersion ?? null,
+          error: formatError(err),
+          status: "offline"
+        }
+      }));
+    } finally {
+      pendingDeviceStreamIds.current.delete(device.id);
+    }
+  }
+
+  function persistDevices(nextDevices: SavedDevice[]) {
+    const sortedDevices = [...nextDevices].sort(
+      (a, b) => (b.lastConnectedAt ?? 0) - (a.lastConnectedAt ?? 0)
     );
-    source.onopen = markConnected;
-    eventSourceRef.current = source;
-    window.setTimeout(() => {
-      if (!connectedOnce && source.readyState !== EventSource.CLOSED) {
-        markConnected();
-      }
-    }, 750);
+    setSavedDevices(sortedDevices);
+    window.localStorage.setItem(
+      savedDevicesStorageKey,
+      JSON.stringify(sortedDevices)
+    );
+  }
+
+  function upsertConnectedDevice(
+    nextConnection: AgentConnection,
+    status: LocalHealthResponse,
+    options?: { deviceId?: string | null; deviceName?: string }
+  ): SavedDevice {
+    const normalizedAgentUrl = normalizeAgentUrl(nextConnection.agentUrl);
+    const existingBySelection = options?.deviceId
+      ? savedDevices.find((device) => device.id === options.deviceId)
+      : null;
+    const existingByEndpoint = findSavedDevice(
+      savedDevices,
+      normalizedAgentUrl,
+      nextConnection.token
+    );
+    const existingDevice = existingBySelection ?? existingByEndpoint ?? null;
+    const nextDevice: SavedDevice = {
+      id: existingDevice?.id ?? createSavedDeviceId(),
+      name:
+        options?.deviceName?.trim() ||
+        deviceName.trim() ||
+        existingDevice?.name ||
+        status.device?.defaultName ||
+        defaultDeviceName(normalizedAgentUrl),
+      agentUrl: normalizedAgentUrl,
+      token: nextConnection.token,
+      codexVersion: status.codex?.version ?? null,
+      lastConnectedAt: Date.now()
+    };
+    const nextDevices = [
+      nextDevice,
+      ...savedDevices.filter(
+        (device) =>
+          device.id !== nextDevice.id &&
+          !isSameDeviceEndpoint(device, nextDevice.agentUrl, nextDevice.token)
+      )
+    ];
+    persistDevices(nextDevices);
+    window.localStorage.setItem(
+      deviceNameStorageKey(nextDevice.agentUrl),
+      nextDevice.name
+    );
+    return nextDevice;
+  }
+
+  function deleteSavedDevice(deviceId: string) {
+    const nextDevices = savedDevices.filter((device) => device.id !== deviceId);
+    persistDevices(nextDevices);
+    eventSourceRefs.current.get(deviceId)?.close();
+    eventSourceRefs.current.delete(deviceId);
+    pendingDeviceStreamIds.current.delete(deviceId);
+    setDevicePresence((previous) => {
+      const next = { ...previous };
+      delete next[deviceId];
+      return next;
+    });
+    setDeviceWorkspaces((previous) => {
+      const next = { ...previous };
+      delete next[deviceId];
+      return next;
+    });
+    if (deviceId === selectedDeviceId) {
+      setSelectedDeviceId(null);
+    }
   }
 
   async function loadDirectories(path?: string) {
@@ -391,6 +986,13 @@ export function WebConsole() {
       historyDetailCacheRef.current.set(key, detail);
       hydrateSessionFromHistory(previewSessionId, detail.messages);
       setHistoryLoadingKey(null);
+      if (isPreviewOnlyHistoryEntry(detail.entry)) {
+        setResumeStates((previous) => ({
+          ...previous,
+          [previewSessionId]: "preview"
+        }));
+        return;
+      }
 
       const result = await resumeCodexHistory(connection, {
         id: entry.id,
@@ -414,6 +1016,13 @@ export function WebConsole() {
         return next;
       });
     } catch (err) {
+      if (isMissingHistoryCwdError(err)) {
+        setResumeStates((previous) => ({
+          ...previous,
+          [previewSessionId]: "preview"
+        }));
+        return;
+      }
       setResumeStates((previous) => ({
         ...previous,
         [previewSessionId]: "failed"
@@ -443,6 +1052,10 @@ export function WebConsole() {
     }
     if (currentResumeState === "failed") {
       setError("这条历史会话恢复失败，当前只是历史预览，不能直接发送。");
+      return;
+    }
+    if (currentResumeState === "preview") {
+      setError("这条历史的项目目录已经不存在，只能查看历史；请选择现有项目后新建会话。");
       return;
     }
 
@@ -556,111 +1169,27 @@ export function WebConsole() {
     incoming: LocalEvent[],
     options: { selectSessions: boolean } = { selectSessions: true }
   ) {
-    setEvents((previous) => {
-      const bySeq = new Map(previous.map((event) => [event.seq, event]));
-      for (const event of incoming) {
-        bySeq.set(event.seq, event);
-      }
-      const next = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
-      return next.slice(-500);
-    });
-
-    for (const event of incoming) {
-      applyEvent(event, options);
+    if (!selectedDeviceId) {
+      return;
     }
+    ingestDeviceEvents(selectedDeviceId, incoming, options);
   }
 
-  function applyEvent(event: LocalEvent, options: { selectSessions: boolean }) {
-    switch (event.type) {
-      case "session.created":
-      case "session.updated":
-        if (isSessionSummary(event.payload)) {
-          upsertSession(event.payload);
-          if (options.selectSessions) {
-            clearSelectedHistory();
-            setCurrentSessionId(event.payload.sessionId);
-          }
-        }
-        return;
-      case "approval.requested":
-        const pendingPayload = event.payload;
-        if (isPendingApproval(pendingPayload)) {
-          setPendingApprovals((previous) => [
-            ...previous.filter(
-              (approval) => approval.approvalId !== pendingPayload.approvalId
-            ),
-            pendingPayload
-          ]);
-        }
-        return;
-      case "approval.resolved":
-        const resolvedPayload = event.payload;
-        if (isRecord(resolvedPayload) && typeof resolvedPayload.approvalId === "string") {
-          setPendingApprovals((previous) =>
-            previous.filter((approval) => approval.approvalId !== resolvedPayload.approvalId)
-          );
-        }
-        return;
-      case "chat.user":
-        addChatItem({
-          id: event.id,
-          role: "user",
-          text: readText(event.payload),
-          ...(event.sessionId ? { sessionId: event.sessionId } : {}),
-          ...(event.turnId ? { turnId: event.turnId } : {})
-        });
-        return;
-      case "chat.assistant.delta":
-        appendStreamingItem(
-          "assistant",
-          event.sessionId,
-          event.turnId,
-          readText(event.payload),
-          event.id
-        );
-        return;
-      case "command.output.delta":
-        appendStreamingItem(
-          "command",
-          event.sessionId,
-          event.turnId,
-          readText(event.payload),
-          event.id
-        );
-        return;
-      case "diff.updated":
-        addChatItem({
-          id: event.id,
-          role: "diff",
-          text: readDiff(event.payload),
-          ...(event.sessionId ? { sessionId: event.sessionId } : {}),
-          ...(event.turnId ? { turnId: event.turnId } : {})
-        });
-        return;
-      case "plan.updated":
-        addChatItem({
-          id: event.id,
-          role: "system",
-          text: readPlan(event.payload),
-          ...(event.sessionId ? { sessionId: event.sessionId } : {}),
-          ...(event.turnId ? { turnId: event.turnId } : {})
-        });
-        return;
-      case "turn.completed":
-        addChatItem({
-          id: event.id,
-          role: "system",
-          text: `Turn completed: ${readTurnStatus(event.payload)}`,
-          ...(event.sessionId ? { sessionId: event.sessionId } : {}),
-          ...(event.turnId ? { turnId: event.turnId } : {})
-        });
-        return;
-      case "agent.error":
-      case "codex.error":
-        setError(JSON.stringify(event.payload));
-        return;
-      default:
-        return;
+  function ingestDeviceEvents(
+    deviceId: string,
+    incoming: LocalEvent[],
+    options: { selectSessions: boolean } = { selectSessions: true }
+  ) {
+    patchDeviceWorkspace(deviceId, (workspace) =>
+      ingestEventsIntoWorkspace(workspace, incoming, options)
+    );
+    if (selectedDeviceIdRef.current === deviceId) {
+      const errorEvent = incoming.find(
+        (event) => event.type === "agent.error" || event.type === "codex.error"
+      );
+      if (errorEvent) {
+        setError(JSON.stringify(errorEvent.payload));
+      }
     }
   }
 
@@ -1009,25 +1538,26 @@ export function WebConsole() {
             <DeviceSheet
               agentUrl={agentUrl}
               connected={connected}
-              deviceName={deviceDisplayName}
+              devicePresence={devicePresence}
+              deviceName={deviceName}
               healthStatus={healthStatus}
+              savedDevices={savedDevices}
+              selectedDeviceId={selectedDeviceId}
               streamStatus={streamStatus}
               token={token}
-              onAgentUrlChange={setAgentUrl}
               onClose={() => setActiveSheet(null)}
-              onConnect={async () => {
+              onConnect={async (nextConnection, nextDeviceName, nextDeviceId) => {
                 try {
-                  await connect();
+                  await connect(nextConnection, {
+                    deviceId: nextDeviceId,
+                    deviceName: nextDeviceName
+                  });
                   setActiveSheet(null);
                 } catch (err) {
-                  setError(formatError(err));
+                  setError(formatConnectionError(err, nextConnection.agentUrl));
                 }
               }}
-              onDeviceNameChange={(value) => {
-                setDeviceName(value);
-                window.localStorage.setItem(deviceNameStorageKey(agentUrl), value);
-              }}
-              onTokenChange={setToken}
+              onDeleteDevice={deleteSavedDevice}
             />
           ) : null}
 
@@ -1411,9 +1941,11 @@ function ChatCanvas(props: {
       ? "正在恢复"
       : props.resumeState === "failed"
         ? "历史预览"
-        : props.active
-          ? "正在运行"
-          : props.session.status;
+        : props.resumeState === "preview"
+          ? "历史预览"
+          : props.active
+            ? "正在运行"
+            : props.session.status;
 
   return (
     <section className="cn-thread-canvas cn-live-thread" ref={viewportRef}>
@@ -1432,6 +1964,9 @@ function ChatCanvas(props: {
         ) : null}
         {props.resumeState === "failed" ? (
           <span className="cn-resume-note danger">恢复失败，只能查看历史。</span>
+        ) : null}
+        {props.resumeState === "preview" ? (
+          <span className="cn-resume-note">项目目录不存在，只显示历史记录。</span>
         ) : null}
         {props.goal ? (
           <button className="cn-soft-button" type="button" onClick={props.onOpenGoal}>
@@ -1725,75 +2260,490 @@ function LiveComposer(props: {
 function DeviceSheet(props: {
   agentUrl: string;
   connected: boolean;
+  devicePresence: Record<string, DevicePresenceState>;
   deviceName: string;
   healthStatus: LocalHealthResponse | null;
+  savedDevices: SavedDevice[];
+  selectedDeviceId: string | null;
   streamStatus: string;
   token: string;
-  onAgentUrlChange: (value: string) => void;
   onClose: () => void;
-  onConnect: () => Promise<void>;
-  onDeviceNameChange: (value: string) => void;
-  onTokenChange: (value: string) => void;
+  onConnect: (
+    connection: AgentConnection,
+    deviceName: string,
+    deviceId: string | null
+  ) => Promise<void>;
+  onDeleteDevice: (deviceId: string) => void;
 }) {
+  const [draft, setDraft] = useState<DeviceDraftState>(() =>
+    createActiveDeviceDraft({
+      agentUrl: props.agentUrl,
+      deviceName: props.deviceName,
+      savedDevices: props.savedDevices,
+      selectedDeviceId: props.selectedDeviceId,
+      token: props.token
+    })
+  );
+  const draftSavedDevice = draft.selectedDeviceId
+    ? props.savedDevices.find((device) => device.id === draft.selectedDeviceId) ?? null
+    : null;
+  const draftPresence = draftSavedDevice
+    ? props.devicePresence[draftSavedDevice.id] ?? null
+    : null;
+  const draftConnected = Boolean(
+    draft.selectedDeviceId &&
+      props.connected &&
+      isSameDeviceEndpoint(
+        {
+          id: draft.selectedDeviceId,
+          name: draft.name,
+          agentUrl: draft.agentUrl,
+          token: draft.token
+        },
+        props.agentUrl,
+        props.token
+      )
+  );
+  const draftOnline =
+    draftConnected || draftPresence?.status === "online";
+  const draftStatus = draftConnected
+    ? props.streamStatus
+    : draftPresence?.status === "online"
+      ? "connected"
+      : draftPresence?.status ?? "disconnected";
+  const draftCodexVersion = draftConnected
+    ? props.healthStatus?.codex?.version
+    : draftPresence?.codexVersion ?? draftSavedDevice?.codexVersion;
+  const draftDisplayName =
+    draft.name.trim() || draftSavedDevice?.name || "新设备";
+
+  useEffect(() => {
+    if (
+      draft.selectedDeviceId &&
+      !props.savedDevices.some((device) => device.id === draft.selectedDeviceId)
+    ) {
+      setDraft(createEmptyDeviceDraft());
+    }
+  }, [draft.selectedDeviceId, props.savedDevices]);
+
   return (
     <div className="cn-overlay-panel device cn-live-overlay">
-      <div className="cn-sheet-card cn-live-sheet">
+      <div className="cn-sheet-card cn-live-sheet cn-device-sheet">
         <button className="cn-close-button" type="button" onClick={props.onClose}>
           <CodexIcon name="x" />
         </button>
         <h2>连接设备</h2>
-        <p>设备名代表你要控制的 Codex Agent，可以是这台 Mac，也可以是远程服务器。</p>
+        <p>保存多个 Codex Agent endpoint，然后选择其中一台 Mac 或服务器连接。</p>
 
-        <div className={props.connected ? "cn-real-device-row online" : "cn-real-device-row"}>
-          <CodexIcon name="terminal" />
-          <span className={props.connected ? "cn-live-dot" : "cn-live-dot offline"} />
-          <div>
-            <strong>{props.deviceName}</strong>
-            <small>
-              {statusLabel(props.streamStatus)} ·{" "}
-              {props.healthStatus?.codex?.version ?? "codex-cli unknown"}
-            </small>
-          </div>
-        </div>
+        <div className="cn-device-manager">
+          <section className="cn-device-library" aria-label="已保存设备">
+            <div className="cn-device-library-header">
+              <strong>设备</strong>
+              <button
+                className="cn-add-mini-button"
+                type="button"
+                onClick={() => setDraft(createEmptyDeviceDraft())}
+              >
+                <CodexIcon name="plus" />
+                新增
+              </button>
+            </div>
 
-        <label>
-          设备名称
-          <input
-            value={props.deviceName}
-            onChange={(event) => props.onDeviceNameChange(event.target.value)}
-            placeholder="MacBookAir / Office Mac mini / Build server"
-          />
-        </label>
-        <label>
-          Agent URL
-          <input
-            value={props.agentUrl}
-            onChange={(event) => props.onAgentUrlChange(event.target.value)}
-          />
-        </label>
-        <label>
-          Access Token
-          <input
-            value={props.token}
-            onChange={(event) => props.onTokenChange(event.target.value)}
-          />
-        </label>
+            <div className="cn-saved-device-list">
+              {props.savedDevices.length === 0 ? (
+                <div className="cn-empty-device-list">
+                  还没有保存设备。填写右侧信息并连接后会自动保存。
+                </div>
+              ) : null}
+              {props.savedDevices.map((device) => {
+                const selected = draft.selectedDeviceId === device.id;
+                const presence = props.devicePresence[device.id];
+                const online =
+                  presence?.status === "online" ||
+                  (props.connected &&
+                    isSameDeviceEndpoint(device, props.agentUrl, props.token));
+                return (
+                  <article
+                    key={device.id}
+                    className={
+                      selected
+                        ? "cn-saved-device-card selected"
+                        : "cn-saved-device-card"
+                    }
+                  >
+                    <button
+                      className="cn-saved-device-main"
+                      type="button"
+                      onClick={() =>
+                        setDraft({
+                          selectedDeviceId: device.id,
+                          name: device.name,
+                          agentUrl: device.agentUrl,
+                          token: device.token
+                        })
+                      }
+                      title={`${device.name} · ${device.agentUrl}`}
+                    >
+                      <span className={online ? "online" : ""} />
+                      <strong>{device.name}</strong>
+                      <small>
+                        {shortAgentUrl(device.agentUrl)}
+                        {presence?.codexVersion
+                          ? ` · ${presence.codexVersion}`
+                          : device.codexVersion
+                            ? ` · ${device.codexVersion}`
+                            : ""}
+                      </small>
+                    </button>
+                    <button
+                      className="cn-device-delete-button"
+                      type="button"
+                      onClick={() => {
+                        props.onDeleteDevice(device.id);
+                        if (draft.selectedDeviceId === device.id) {
+                          setDraft(createEmptyDeviceDraft());
+                        }
+                      }}
+                      aria-label={`删除设备 ${device.name}`}
+                    >
+                      删除
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
 
-        <div className="cn-sheet-actions">
-          <button className="cn-soft-button" type="button" onClick={props.onClose}>
-            取消
-          </button>
-          <button
-            className="cn-primary-button"
-            type="button"
-            onClick={() => void props.onConnect()}
-          >
-            {props.connected ? "重新连接" : "连接"}
-          </button>
+          <section className="cn-device-editor" aria-label="设备连接设置">
+            <div
+              className={
+                draftOnline ? "cn-real-device-row online" : "cn-real-device-row"
+              }
+            >
+              <CodexIcon name="terminal" />
+              <span className={draftOnline ? "cn-live-dot" : "cn-live-dot offline"} />
+              <div>
+                <strong>{draftDisplayName}</strong>
+                <small>
+                  {statusLabel(draftStatus)} · {draftCodexVersion ?? "codex-cli unknown"}
+                </small>
+              </div>
+            </div>
+
+            <label>
+              设备名称
+              <input
+                value={draft.name}
+                onChange={(event) =>
+                  setDraft((previous) => ({
+                    ...previous,
+                    name: event.target.value
+                  }))
+                }
+                placeholder="MacBookAir / Office Mac mini / Build server"
+              />
+            </label>
+            <label>
+              Agent URL
+              <input
+                value={draft.agentUrl}
+                onChange={(event) =>
+                  setDraft((previous) => ({
+                    ...previous,
+                    agentUrl: event.target.value,
+                    selectedDeviceId: null
+                  }))
+                }
+                placeholder="http://127.0.0.1:17361"
+              />
+            </label>
+            <label>
+              Access Token
+              <input
+                value={draft.token}
+                onChange={(event) =>
+                  setDraft((previous) => ({
+                    ...previous,
+                    selectedDeviceId: null,
+                    token: event.target.value
+                  }))
+                }
+                placeholder="test-token"
+              />
+            </label>
+
+            <div className="cn-sheet-actions">
+              <button className="cn-soft-button" type="button" onClick={props.onClose}>
+                取消
+              </button>
+              <button
+                className="cn-primary-button"
+                type="button"
+                onClick={() =>
+                  void props.onConnect(
+                    { agentUrl: draft.agentUrl, token: draft.token },
+                    draft.name,
+                    draft.selectedDeviceId
+                  )
+                }
+              >
+                {draftConnected
+                  ? "重新连接"
+                  : draft.selectedDeviceId
+                    ? "连接此设备"
+                    : "保存并连接"}
+              </button>
+            </div>
+          </section>
         </div>
       </div>
     </div>
   );
+}
+
+function createActiveDeviceDraft(params: {
+  agentUrl: string;
+  deviceName: string;
+  savedDevices: SavedDevice[];
+  selectedDeviceId: string | null;
+  token: string;
+}): DeviceDraftState {
+  const selectedDevice = params.selectedDeviceId
+    ? params.savedDevices.find((device) => device.id === params.selectedDeviceId) ??
+      null
+    : null;
+  const matchedDevice =
+    selectedDevice ??
+    findSavedDevice(params.savedDevices, params.agentUrl, params.token);
+  if (matchedDevice) {
+    return {
+      selectedDeviceId: matchedDevice.id,
+      name: matchedDevice.name,
+      agentUrl: matchedDevice.agentUrl,
+      token: matchedDevice.token
+    };
+  }
+  return {
+    selectedDeviceId: null,
+    name: params.deviceName || defaultDeviceName(params.agentUrl),
+    agentUrl: params.agentUrl,
+    token: params.token
+  };
+}
+
+function createEmptyDeviceDraft(): DeviceDraftState {
+  return {
+    selectedDeviceId: null,
+    name: "",
+    agentUrl: "http://127.0.0.1:17361",
+    token: "test-token"
+  };
+}
+
+function createDeviceWorkspace(connection: AgentConnection): DeviceWorkspace {
+  return {
+    chatItems: [],
+    codexHistory: [],
+    connection,
+    currentSessionId: null,
+    cwd: "",
+    directoryError: null,
+    directoryList: null,
+    directoryLoading: false,
+    events: [],
+    healthStatus: null,
+    historyLoadingKey: null,
+    pendingApprovals: [],
+    resumeStates: {},
+    selectedHistoryKey: null,
+    sessions: [],
+    streamStatus: "disconnected"
+  };
+}
+
+function resolveStateUpdater<T>(previous: T, updater: StateUpdater<T>): T {
+  return typeof updater === "function"
+    ? (updater as (value: T) => T)(previous)
+    : updater;
+}
+
+function ingestEventsIntoWorkspace(
+  workspace: DeviceWorkspace,
+  incoming: LocalEvent[],
+  options: { selectSessions: boolean }
+): DeviceWorkspace {
+  let next = {
+    ...workspace,
+    events: mergeLocalEvents(workspace.events, incoming)
+  };
+  for (const event of incoming) {
+    next = applyEventToWorkspace(next, event, options);
+  }
+  return next;
+}
+
+function mergeLocalEvents(
+  existing: LocalEvent[],
+  incoming: LocalEvent[]
+): LocalEvent[] {
+  const bySeq = new Map(existing.map((event) => [event.seq, event]));
+  for (const event of incoming) {
+    bySeq.set(event.seq, event);
+  }
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq).slice(-500);
+}
+
+function applyEventToWorkspace(
+  workspace: DeviceWorkspace,
+  event: LocalEvent,
+  options: { selectSessions: boolean }
+): DeviceWorkspace {
+  switch (event.type) {
+    case "session.created":
+    case "session.updated":
+      if (!isSessionSummary(event.payload)) {
+        return workspace;
+      }
+      return {
+        ...upsertSessionInWorkspace(workspace, event.payload),
+        currentSessionId: options.selectSessions
+          ? event.payload.sessionId
+          : workspace.currentSessionId,
+        selectedHistoryKey: options.selectSessions
+          ? null
+          : workspace.selectedHistoryKey
+      };
+    case "approval.requested":
+      if (!isPendingApproval(event.payload)) {
+        return workspace;
+      }
+      const pendingApproval = event.payload;
+      return {
+        ...workspace,
+        pendingApprovals: [
+          ...workspace.pendingApprovals.filter(
+            (approval) => approval.approvalId !== pendingApproval.approvalId
+          ),
+          pendingApproval
+        ]
+      };
+    case "approval.resolved":
+      if (!isRecord(event.payload) || typeof event.payload.approvalId !== "string") {
+        return workspace;
+      }
+      const resolvedApprovalId = event.payload.approvalId;
+      return {
+        ...workspace,
+        pendingApprovals: workspace.pendingApprovals.filter(
+          (approval) => approval.approvalId !== resolvedApprovalId
+        )
+      };
+    case "chat.user":
+      return addChatItemToWorkspace(workspace, {
+        id: event.id,
+        role: "user",
+        text: readText(event.payload),
+        ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+        ...(event.turnId ? { turnId: event.turnId } : {})
+      });
+    case "chat.assistant.delta":
+      return appendStreamingItemToWorkspace(
+        workspace,
+        "assistant",
+        event.sessionId,
+        event.turnId,
+        readText(event.payload),
+        event.id
+      );
+    case "command.output.delta":
+      return appendStreamingItemToWorkspace(
+        workspace,
+        "command",
+        event.sessionId,
+        event.turnId,
+        readText(event.payload),
+        event.id
+      );
+    case "diff.updated":
+      return addChatItemToWorkspace(workspace, {
+        id: event.id,
+        role: "diff",
+        text: readDiff(event.payload),
+        ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+        ...(event.turnId ? { turnId: event.turnId } : {})
+      });
+    case "plan.updated":
+      return addChatItemToWorkspace(workspace, {
+        id: event.id,
+        role: "system",
+        text: readPlan(event.payload),
+        ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+        ...(event.turnId ? { turnId: event.turnId } : {})
+      });
+    case "turn.completed":
+      return addChatItemToWorkspace(workspace, {
+        id: event.id,
+        role: "system",
+        text: `Turn completed: ${readTurnStatus(event.payload)}`,
+        ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+        ...(event.turnId ? { turnId: event.turnId } : {})
+      });
+    default:
+      return workspace;
+  }
+}
+
+function upsertSessionInWorkspace(
+  workspace: DeviceWorkspace,
+  session: LocalSessionSummary
+): DeviceWorkspace {
+  return {
+    ...workspace,
+    sessions: [
+      session,
+      ...workspace.sessions.filter((item) => item.sessionId !== session.sessionId)
+    ]
+  };
+}
+
+function addChatItemToWorkspace(
+  workspace: DeviceWorkspace,
+  item: ChatItem
+): DeviceWorkspace {
+  return {
+    ...workspace,
+    chatItems: [...workspace.chatItems, item].slice(-500)
+  };
+}
+
+function appendStreamingItemToWorkspace(
+  workspace: DeviceWorkspace,
+  role: "assistant" | "command",
+  sessionId: string | undefined,
+  turnId: string | undefined,
+  text: string,
+  fallbackId: string
+): DeviceWorkspace {
+  if (!text) {
+    return workspace;
+  }
+  const last = workspace.chatItems.at(-1);
+  if (last?.role === role && last.turnId === turnId && last.sessionId === sessionId) {
+    return {
+      ...workspace,
+      chatItems: [
+        ...workspace.chatItems.slice(0, -1),
+        { ...last, text: `${last.text}${text}` }
+      ]
+    };
+  }
+  return addChatItemToWorkspace(workspace, {
+    id: fallbackId,
+    role,
+    text,
+    ...(sessionId ? { sessionId } : {}),
+    ...(turnId ? { turnId } : {})
+  });
 }
 
 function SessionSetupSheet(props: {
@@ -2156,6 +3106,9 @@ function groupProjectThreads(
 ): ProjectThreadGroupData[] {
   const groups = new Map<string, ProjectThreadGroupData>();
   for (const session of sessions) {
+    if (isHistoryPreviewSessionId(session.sessionId)) {
+      continue;
+    }
     const existing = groups.get(session.cwd);
     if (existing) {
       existing.sessions.push(session);
@@ -2172,7 +3125,7 @@ function groupProjectThreads(
   }
 
   const seen = new Set<string>();
-  for (const entry of entries) {
+  for (const entry of entries.filter(isVisibleCodexHistoryEntry)) {
     const uniqueKey = codexHistoryKey(entry);
     if (seen.has(uniqueKey)) {
       continue;
@@ -2208,8 +3161,39 @@ function codexHistoryKey(entry: LocalCodexHistoryEntry): string {
   return `${entry.id}::${entry.cwd}`;
 }
 
+function isVisibleCodexHistoryEntry(entry: LocalCodexHistoryEntry): boolean {
+  const cwdName = shortPath(entry.cwd);
+  return !(
+    entry.cwd.startsWith("/tmp/codex-goal-probe-") ||
+    cwdName.startsWith("codex-goal-probe-") ||
+    isAutomationPromptHistoryTitle(entry.title)
+  );
+}
+
+function isAutomationPromptHistoryTitle(title: string): boolean {
+  const trimmed = title.trim();
+  return (
+    trimmed.startsWith("# Codex Native API Loop Prompt") ||
+    trimmed.startsWith("# Codex Gateway Loop Prompt") ||
+    trimmed.startsWith("# CodexBridge Loop Prompt") ||
+    trimmed.startsWith("你正在执行 CodexBridge 后台 Agent 任务")
+  );
+}
+
+function isPreviewOnlyHistoryEntry(entry: LocalCodexHistoryEntry): boolean {
+  return entry.cwdExists === false;
+}
+
+function isMissingHistoryCwdError(error: unknown): boolean {
+  return formatError(error).includes("cwd does not exist:");
+}
+
 function historyPreviewSessionId(entry: LocalCodexHistoryEntry): string {
   return `history-preview:${codexHistoryKey(entry)}`;
+}
+
+function isHistoryPreviewSessionId(sessionId: string): boolean {
+  return sessionId.startsWith("history-preview:");
 }
 
 function makeHistoryPreviewSession(
@@ -2295,6 +3279,98 @@ function buildMessageWithAttachments(prompt: string, attachments: AttachmentDraf
 
 function deviceNameStorageKey(agentUrl: string): string {
   return `codexnext.deviceName.${agentUrl}`;
+}
+
+function readSavedDevices(): SavedDevice[] {
+  try {
+    const raw = window.localStorage.getItem(savedDevicesStorageKey);
+    if (!raw) {
+      return [];
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter(isSavedDevice)
+      .map((device) => ({
+        ...device,
+        agentUrl: normalizeAgentUrl(device.agentUrl)
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function isSavedDevice(value: unknown): value is SavedDevice {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.agentUrl === "string" &&
+    typeof value.token === "string"
+  );
+}
+
+function findSavedDevice(
+  devices: SavedDevice[],
+  agentUrl: string,
+  token: string
+): SavedDevice | null {
+  const normalizedAgentUrl = normalizeAgentUrl(agentUrl);
+  return (
+    devices.find((device) =>
+      isSameDeviceEndpoint(device, normalizedAgentUrl, token)
+    ) ?? null
+  );
+}
+
+function isSameDeviceEndpoint(
+  device: SavedDevice,
+  agentUrl: string,
+  token: string
+): boolean {
+  return normalizeAgentUrl(device.agentUrl) === normalizeAgentUrl(agentUrl) &&
+    device.token === token;
+}
+
+function isSameAgentConnection(
+  left: AgentConnection,
+  right: AgentConnection
+): boolean {
+  return normalizeAgentUrl(left.agentUrl) === normalizeAgentUrl(right.agentUrl) &&
+    left.token === right.token;
+}
+
+function normalizeAgentUrl(agentUrl: string): string {
+  const trimmed = agentUrl.trim();
+  try {
+    const url = new URL(trimmed);
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return trimmed.replace(/\/+$/, "");
+  }
+}
+
+function createSavedDeviceId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `device_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+function shortAgentUrl(agentUrl: string): string {
+  try {
+    const url = new URL(agentUrl);
+    return `${url.hostname}:${url.port || (url.protocol === "https:" ? "443" : "80")}`;
+  } catch {
+    return agentUrl;
+  }
 }
 
 function defaultDeviceName(agentUrl: string): string {
@@ -2474,4 +3550,24 @@ function readString(record: Record<string, unknown>, key: string): string | null
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function formatConnectionError(error: unknown, agentUrl: string): string {
+  const message = formatError(error);
+  const pageOrigin =
+    typeof window === "undefined" ? "current Web page" : window.location.origin;
+  let agentHost = "";
+  try {
+    agentHost = new URL(agentUrl).host;
+  } catch {
+    agentHost = agentUrl;
+  }
+  if (
+    message.includes("Unexpected Origin") ||
+    message.includes("Failed to fetch") ||
+    message.includes("NetworkError")
+  ) {
+    return `连接 ${agentHost} 失败：远端 Agent 可能没有允许当前页面 ${pageOrigin}。请把这个 origin 加到 codexnext serve --web-origin，或打开远端 Agent 对应的 Web 页面。`;
+  }
+  return message;
 }

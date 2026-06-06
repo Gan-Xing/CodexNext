@@ -292,14 +292,131 @@ describe("local HTTP server guards", () => {
           }
         }),
         JSON.stringify({
+          timestamp: "2026-06-06T00:00:00.500Z",
+          type: "event_msg",
+          payload: {
+            type: "user_message",
+            message: [
+              "# AGENTS.md instructions for /tmp/project",
+              "",
+              "<INSTRUCTIONS>",
+              "# CodexBridge Global Instructions",
+              "These are injected instructions and should not become a title.",
+              "</INSTRUCTIONS>",
+              "",
+              "<environment_context>",
+              "<cwd>/tmp/project</cwd>",
+              "</environment_context>"
+            ].join("\n")
+          }
+        }),
+        JSON.stringify({
           timestamp: "2026-06-06T00:00:01.000Z",
           type: "event_msg",
-          payload: { type: "user_message", message: "检查这个项目" }
+          payload: {
+            type: "user_message",
+            message: [
+              "检查这个项目",
+              "",
+              "Based on this message, call functions.happy__change_title to change chat session title that would represent the current task."
+            ].join("\n")
+          }
         }),
         JSON.stringify({
           timestamp: "2026-06-06T00:00:02.000Z",
           type: "event_msg",
           payload: { type: "agent_message", message: "我会先查看文件结构。" }
+        })
+      ].join("\n")
+    );
+    await writeFile(
+      path.join(sessionDir, "rollout-2026-06-06T01-00-00-probe_1.jsonl"),
+      [
+        JSON.stringify({
+          timestamp: "2026-06-06T01:00:00.000Z",
+          type: "session_meta",
+          payload: {
+            id: "probe_1",
+            cwd: "/tmp/codex-goal-probe-hidden",
+            timestamp: "2026-06-06T01:00:00.000Z",
+            originator: "Codex Desktop"
+          }
+        }),
+        JSON.stringify({
+          timestamp: "2026-06-06T01:00:01.000Z",
+          type: "event_msg",
+          payload: { type: "user_message", message: "Goal A" }
+        })
+      ].join("\n")
+    );
+    await writeFile(
+      path.join(sessionDir, "rollout-2026-06-06T02-00-00-empty_1.jsonl"),
+      [
+        JSON.stringify({
+          timestamp: "2026-06-06T02:00:00.000Z",
+          type: "session_meta",
+          payload: {
+            id: "empty_1",
+            cwd: "/tmp/CodexBridge",
+            timestamp: "2026-06-06T02:00:00.000Z",
+            originator: "codexbridge"
+          }
+        }),
+        JSON.stringify({
+          timestamp: "2026-06-06T02:00:01.000Z",
+          type: "event_msg",
+          payload: { type: "task_complete" }
+        })
+      ].join("\n")
+    );
+    await writeFile(
+      path.join(sessionDir, "rollout-2026-06-06T03-00-00-mission_1.jsonl"),
+      [
+        JSON.stringify({
+          timestamp: "2026-06-06T03:00:00.000Z",
+          type: "session_meta",
+          payload: {
+            id: "mission_1",
+            cwd: "/tmp/CodexBridge",
+            timestamp: "2026-06-06T03:00:00.000Z",
+            originator: "codexbridge"
+          }
+        }),
+        JSON.stringify({
+          timestamp: "2026-06-06T03:00:01.000Z",
+          type: "event_msg",
+          payload: {
+            type: "user_message",
+            message: [
+              "你正在执行 CodexBridge 后台 Agent 任务。",
+              "Mission ID: 123",
+              "Mission title: 实现稳定的 package API",
+              "Workspace: /tmp/CodexBridge"
+            ].join("\n")
+          }
+        })
+      ].join("\n")
+    );
+    await writeFile(
+      path.join(sessionDir, "rollout-2026-06-06T04-00-00-loop_1.jsonl"),
+      [
+        JSON.stringify({
+          timestamp: "2026-06-06T04:00:00.000Z",
+          type: "session_meta",
+          payload: {
+            id: "loop_1",
+            cwd: "/tmp/CodexBridge",
+            timestamp: "2026-06-06T04:00:00.000Z",
+            originator: "codex_exec"
+          }
+        }),
+        JSON.stringify({
+          timestamp: "2026-06-06T04:00:01.000Z",
+          type: "event_msg",
+          payload: {
+            type: "user_message",
+            message: "# Codex Native API Loop Prompt\n请继续推进自动化循环。"
+          }
         })
       ].join("\n")
     );
@@ -319,14 +436,38 @@ describe("local HTTP server guards", () => {
     try {
       const list = await fetch(`${base}/api/codex-history?token=secret`);
       const listBody = await list.json() as {
-        entries: Array<{ filePath: string; id: string; cwd: string; title: string }>;
+        entries: Array<{
+          cwdExists?: boolean;
+          filePath: string;
+          id: string;
+          cwd: string;
+          title: string;
+        }>;
       };
-      expect(listBody.entries[0]).toMatchObject({
+      expect(listBody.entries.find((entry) => entry.id === "history_1")).toMatchObject({
         id: "history_1",
         cwd: "/tmp/project",
+        cwdExists: false,
         title: "检查这个项目",
         filePath: sessionFile
       });
+      expect(listBody.entries).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "probe_1" })])
+      );
+      expect(listBody.entries).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "empty_1" })])
+      );
+      expect(listBody.entries).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "loop_1" })])
+      );
+      expect(listBody.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "mission_1",
+            title: "实现稳定的 package API"
+          })
+        ])
+      );
 
       const detailQuery = new URLSearchParams({
         token: "secret",

@@ -498,7 +498,7 @@ async function listCodexHistory(url: URL): Promise<LocalCodexHistoryResponse> {
 
   for (const filePath of files) {
     const entry = await readCodexHistoryEntry(filePath);
-    if (entry) {
+    if (entry && !isHiddenCodexHistoryEntry(entry)) {
       entries.push(entry);
     }
     if (entries.length >= limit) {
@@ -631,6 +631,7 @@ async function readCodexHistoryEntry(
   let updatedAt = "";
   let source = "Codex";
   let lineCount = 0;
+  let hasUsefulHistoryContent = false;
   const stream = createReadStream(filePath, { encoding: "utf8" });
   const reader = createInterface({ input: stream, crlfDelay: Infinity });
 
@@ -667,6 +668,9 @@ async function readCodexHistoryEntry(
       }
 
       title = title || extractHistoryTitle(record);
+      if (!hasUsefulHistoryContent && hasUsefulHistoryMessage(record, timestamp ?? "")) {
+        hasUsefulHistoryContent = true;
+      }
 
       if (id && cwd && title) {
         break;
@@ -683,16 +687,36 @@ async function readCodexHistoryEntry(
   if (!cwd) {
     return null;
   }
+  if (!title || !hasUsefulHistoryContent) {
+    return null;
+  }
+  const cwdExists = await directoryExists(cwd);
 
   return {
     id,
     cwd,
-    title: compactTitle(title || path.basename(cwd) || "Codex session"),
+    cwdExists,
+    title: compactTitle(title),
     createdAt: createdAt || updatedAt || new Date().toISOString(),
     updatedAt: updatedAt || createdAt || new Date().toISOString(),
     source,
     filePath
   };
+}
+
+async function directoryExists(candidatePath: string): Promise<boolean> {
+  try {
+    return (await stat(candidatePath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function isHiddenCodexHistoryEntry(entry: LocalCodexHistoryEntry): boolean {
+  const basename = path.basename(entry.cwd);
+  return entry.cwd.startsWith("/tmp/codex-goal-probe-") ||
+    basename.startsWith("codex-goal-probe-") ||
+    isAutomationPromptTitle(entry.title);
 }
 
 async function readCodexHistoryMessages(
@@ -726,7 +750,8 @@ async function readCodexHistoryMessages(
       if (!extracted) {
         continue;
       }
-      const text = compactMessageText(extracted.text);
+      const historyText = normalizeHistoryUserText(extracted.text);
+      const text = compactMessageText(historyText);
       if (!text || !isUsableHistoryMessage(text)) {
         continue;
       }
@@ -824,7 +849,8 @@ function extractHistoryTitle(record: Record<string, unknown>): string {
     const eventType = readString(record.payload, "type");
     if (eventType === "user_message") {
       const message = readString(record.payload, "message") ?? "";
-      return isUsableHistoryTitle(message) ? message : "";
+      const title = normalizeHistoryUserText(message);
+      return isUsableHistoryTitle(title) ? title : "";
     }
   }
 
@@ -843,16 +869,96 @@ function extractHistoryTitle(record: Record<string, unknown>): string {
       continue;
     }
     const text = readString(item, "text") ?? readString(item, "input_text");
-    if (text && isUsableHistoryTitle(text)) {
-      return text;
+    const title = normalizeHistoryUserText(text ?? "");
+    if (title && isUsableHistoryTitle(title)) {
+      return title;
     }
   }
   return "";
 }
 
+function normalizeHistoryUserText(input: string): string {
+  const trimmed = stripSyntheticTitleInstruction(input).trim();
+  if (!trimmed) {
+    return "";
+  }
+  const missionTitle = extractMissionTitle(trimmed);
+  if (missionTitle) {
+    return missionTitle;
+  }
+  const explicitRequest = extractMarkedUserRequest(trimmed);
+  if (explicitRequest) {
+    return explicitRequest;
+  }
+  if (isCodexInjectedContext(trimmed)) {
+    return "";
+  }
+  return trimmed;
+}
+
+function stripSyntheticTitleInstruction(input: string): string {
+  const markers = [
+    "\n\nBased on this message, call functions.happy__change_title",
+    "Based on this message, call functions.happy__change_title"
+  ];
+  for (const marker of markers) {
+    const index = input.indexOf(marker);
+    if (index !== -1) {
+      return input.slice(0, index);
+    }
+  }
+  return input;
+}
+
+function extractMissionTitle(input: string): string {
+  const match = input.match(/^Mission title:\s*(.+)$/im);
+  return match ? match[1]?.trim() ?? "" : "";
+}
+
+function extractMarkedUserRequest(input: string): string {
+  const markers = [
+    "## My request for Codex:",
+    "# My request for Codex:",
+    "My request for Codex:",
+    "## 用户请求:",
+    "用户请求:"
+  ];
+  for (const marker of markers) {
+    const index = input.indexOf(marker);
+    if (index === -1) {
+      continue;
+    }
+    return input.slice(index + marker.length).trim();
+  }
+  return "";
+}
+
+function isCodexInjectedContext(input: string): boolean {
+  const normalized = input.replace(/\r\n/g, "\n").trim();
+  const lower = normalized.toLowerCase();
+  return (
+    normalized.startsWith("# AGENTS.md instructions for ") ||
+    normalized.startsWith("<environment_context>") ||
+    normalized.startsWith("<INSTRUCTIONS>") ||
+    lower.includes("codexbridge global instructions") ||
+    lower.includes("<environment_context>") ||
+    lower.includes("</instructions>")
+  );
+}
+
 function isUsableHistoryTitle(input: string): boolean {
   const trimmed = input.trim();
   return Boolean(trimmed) && !trimmed.startsWith("<");
+}
+
+function isAutomationPromptTitle(title: string): boolean {
+  const trimmed = title.trim();
+  return (
+    trimmed.startsWith("# Codex Native API Loop Prompt") ||
+    trimmed.startsWith("# Codex Gateway Loop Prompt") ||
+    trimmed.startsWith("# CodexBridge Loop Prompt") ||
+    trimmed.startsWith("你正在执行 CodexBridge 后台 Agent 任务")
+  );
 }
 
 function compactTitle(input: string): string {
@@ -861,6 +967,21 @@ function compactTitle(input: string): string {
 
 function compactMessageText(input: string): string {
   return input.replace(/\n{3,}/g, "\n\n").trim().slice(0, 16_000);
+}
+
+function hasUsefulHistoryMessage(
+  record: Record<string, unknown>,
+  ts: string
+): boolean {
+  const extracted = extractHistoryMessage(record, ts);
+  if (!extracted) {
+    return false;
+  }
+  const text =
+    extracted.role === "user"
+      ? normalizeHistoryUserText(extracted.text)
+      : extracted.text;
+  return Boolean(compactMessageText(text)) && isUsableHistoryMessage(text);
 }
 
 function isUsableHistoryMessage(input: string): boolean {

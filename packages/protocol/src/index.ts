@@ -504,6 +504,7 @@ export interface LocalDirectoryListResponse {
 export interface LocalCodexHistoryEntry {
   id: string;
   cwd: string;
+  cwdExists?: boolean;
   title: string;
   createdAt: string;
   updatedAt: string;
