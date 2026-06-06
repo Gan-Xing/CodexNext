@@ -184,6 +184,12 @@ export type AskForApproval =
 
 export type ApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+export type LocalPermissionMode =
+  | "request-approval"
+  | "auto-approve"
+  | "full-access"
+  | "custom-config";
+export type LocalReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
 export interface ThreadStartParams {
   model?: string | null;
@@ -314,3 +320,172 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+export const LocalEventType = {
+  AgentHealth: "agent.health",
+  AgentError: "agent.error",
+  SessionCreated: "session.created",
+  SessionUpdated: "session.updated",
+  SessionClosed: "session.closed",
+  GoalUpdated: "goal.updated",
+  GoalCleared: "goal.cleared",
+  TurnStarted: "turn.started",
+  TurnCompleted: "turn.completed",
+  TurnSteerAccepted: "turn.steer.accepted",
+  TurnInterruptRequested: "turn.interrupt.requested",
+  ApprovalRequested: "approval.requested",
+  ApprovalResolved: "approval.resolved",
+  CodexNotification: "codex.notification",
+  CodexError: "codex.error",
+  ChatUser: "chat.user",
+  ChatAssistantDelta: "chat.assistant.delta",
+  CommandOutputDelta: "command.output.delta",
+  DiffUpdated: "diff.updated",
+  PlanUpdated: "plan.updated"
+} as const;
+
+export type LocalEventType =
+  (typeof LocalEventType)[keyof typeof LocalEventType];
+
+export interface LocalEvent {
+  id: string;
+  seq: number;
+  type: LocalEventType;
+  ts: number;
+  sessionId?: string;
+  threadId?: string;
+  turnId?: string;
+  payload?: unknown;
+}
+
+export type LocalSessionStatus =
+  | "idle"
+  | "running"
+  | "waiting_approval"
+  | "completed"
+  | "failed"
+  | "interrupted"
+  | "error";
+
+export interface LocalSessionSummary {
+  sessionId: string;
+  threadId?: string;
+  currentTurnId?: string;
+  activeTurnId?: string;
+  status: LocalSessionStatus;
+  cwd: string;
+  model?: string | null;
+  reasoningEffort?: LocalReasoningEffort | null;
+  permissionMode: LocalPermissionMode;
+  approvalPolicy: AskForApproval | null;
+  approvalsReviewer: ApprovalsReviewer | null;
+  sandbox: SandboxMode | null;
+  goal?: ThreadGoal | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export const LocalApprovalDecisionSchema = z.object({
+  decision: z.enum(["accept", "acceptForSession", "decline", "cancel"])
+});
+
+export type LocalApprovalDecision = z.infer<
+  typeof LocalApprovalDecisionSchema
+>["decision"];
+
+export const LocalStartSessionSchema = z.object({
+  cwd: z.string().min(1),
+  model: z.string().min(1).nullable().optional(),
+  permissionMode: z
+    .enum(["request-approval", "auto-approve", "full-access", "custom-config"])
+    .default("request-approval"),
+  approvalPolicy: z
+    .enum(["untrusted", "on-failure", "on-request", "never"])
+    .nullable()
+    .optional(),
+  reasoningEffort: z
+    .enum(["low", "medium", "high", "xhigh"])
+    .nullable()
+    .optional(),
+  approvalsReviewer: z
+    .enum(["user", "auto_review", "guardian_subagent"])
+    .nullable()
+    .optional(),
+  sandbox: z
+    .enum(["read-only", "workspace-write", "danger-full-access"])
+    .nullable()
+    .optional(),
+  tokenBudget: z.number().int().positive().nullable().optional(),
+  initialGoal: z.string().nullable().optional(),
+  initialMessage: z.string().nullable().optional()
+});
+
+export type LocalStartSessionInput = z.infer<typeof LocalStartSessionSchema>;
+
+export const LocalSendMessageSchema = z.object({
+  text: z.string().min(1)
+});
+
+export type LocalSendMessageInput = z.infer<typeof LocalSendMessageSchema>;
+
+export interface LocalDirectoryEntry {
+  name: string;
+  path: string;
+}
+
+export interface LocalDirectoryListResponse {
+  path: string;
+  parentPath: string | null;
+  homePath: string;
+  entries: LocalDirectoryEntry[];
+}
+
+export interface LocalCodexHistoryEntry {
+  id: string;
+  cwd: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  source: string;
+  filePath: string;
+}
+
+export interface LocalCodexHistoryResponse {
+  root: string;
+  entries: LocalCodexHistoryEntry[];
+}
+
+export const LocalSetGoalSchema = z.object({
+  objective: z.string().nullable().optional(),
+  status: z
+    .enum([
+      "active",
+      "paused",
+      "blocked",
+      "usageLimited",
+      "budgetLimited",
+      "complete"
+    ])
+    .nullable()
+    .optional(),
+  tokenBudget: z.number().int().positive().nullable().optional()
+});
+
+export type LocalSetGoalInput = z.infer<typeof LocalSetGoalSchema>;
+
+export interface LocalHealthResponse {
+  ok: boolean;
+  version: string;
+  pid: number;
+  uptimeSeconds: number;
+  host: string;
+  port: number;
+  device?: {
+    defaultName: string;
+    hostname: string;
+    platform: string;
+  };
+  codex?: {
+    available: boolean;
+    version?: string;
+  };
+}
