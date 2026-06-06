@@ -2,6 +2,7 @@
 import { Command, InvalidArgumentError } from "commander";
 import { runDoctor } from "./commands/doctor.js";
 import { runGoalSmoke } from "./commands/goal-smoke.js";
+import { runServe } from "./commands/serve.js";
 
 const program = new Command();
 
@@ -36,6 +37,37 @@ program
   }) => {
     await runGoalSmoke(options);
   });
+
+program
+  .command("serve")
+  .description("Run the localhost-only CodexNext agent API and SSE event stream.")
+  .option("--host <host>", "Host to bind.", "127.0.0.1")
+  .option("--port <port>", "Port to bind.", parsePositiveInteger, 17361)
+  .option(
+    "--web-origin <origin>",
+    "Allowed Web Console origin.",
+    "http://127.0.0.1:3000"
+  )
+  .option("--token <token>", "Local API token. Generated if omitted.")
+  .option(
+    "--approval-timeout-ms <number>",
+    "Approval request timeout in milliseconds.",
+    parsePositiveInteger,
+    300_000
+  )
+  .option("--codex-bin <path>", "Codex binary path.", "codex")
+  .action(
+    async (options: {
+      host: string;
+      port: number;
+      webOrigin: string;
+      token?: string;
+      approvalTimeoutMs: number;
+      codexBin: string;
+    }) => {
+      await runServe(options);
+    }
+  );
 
 program.parseAsync(normalizeArgv(process.argv)).catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
