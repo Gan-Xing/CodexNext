@@ -36,6 +36,7 @@ export async function runGoalSmoke(rawOptions: GoalSmokeOptions): Promise<void> 
 
   let threadId: string | undefined;
   let turnId: string | undefined;
+  let finalTurnStatus: string | undefined;
   let interrupting = false;
   let resolveTurnCompleted: (() => void) | undefined;
   const turnCompleted = new Promise<void>((resolve) => {
@@ -71,7 +72,10 @@ export async function runGoalSmoke(rawOptions: GoalSmokeOptions): Promise<void> 
     handleNotification(notification, {
       getThreadId: () => threadId,
       getTurnId: () => turnId,
-      onTurnCompleted: () => resolveTurnCompleted?.()
+      onTurnCompleted: (status) => {
+        finalTurnStatus = status;
+        resolveTurnCompleted?.();
+      }
     });
   });
 
@@ -154,6 +158,15 @@ export async function runGoalSmoke(rawOptions: GoalSmokeOptions): Promise<void> 
     );
 
     await turnCompleted;
+    const exitCode = goalSmokeExitCode(finalTurnStatus);
+    if (exitCode !== 0) {
+      process.exitCode = exitCode;
+      throw new Error(
+        `goal-smoke finished with non-completed turn status: ${
+          finalTurnStatus ?? "unknown"
+        }`
+      );
+    }
   } catch (error) {
     throw new Error(formatGoalSmokeError(error));
   } finally {
@@ -203,7 +216,7 @@ function handleNotification(
   context: {
     getThreadId: () => string | undefined;
     getTurnId: () => string | undefined;
-    onTurnCompleted: () => void;
+    onTurnCompleted: (status: string | undefined) => void;
   }
 ): void {
   const params = notification.params;
@@ -249,7 +262,7 @@ function handleNotification(
       printLine("");
       printSection("turn completed", summarizeTurnCompleted(params));
       if (matchesTurn(params, context.getThreadId(), context.getTurnId())) {
-        context.onTurnCompleted();
+        context.onTurnCompleted(extractTurnStatus(params));
       }
       return;
     case CodexNotificationMethod.ServerRequestResolved:
@@ -314,6 +327,17 @@ function summarizeTurnCompleted(params: unknown): string {
   }
   const turn = params.turn;
   return `${String(turn.id ?? "unknown")} ${String(turn.status ?? "unknown")}`;
+}
+
+function extractTurnStatus(params: unknown): string | undefined {
+  if (!isRecord(params) || !isRecord(params.turn)) {
+    return undefined;
+  }
+  return typeof params.turn.status === "string" ? params.turn.status : undefined;
+}
+
+export function goalSmokeExitCode(status: string | undefined): number {
+  return status === "completed" ? 0 : 1;
 }
 
 function matchesTurn(
