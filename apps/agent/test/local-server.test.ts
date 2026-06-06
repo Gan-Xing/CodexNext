@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AppServerNotification,
@@ -159,6 +162,56 @@ describe("SessionManager messages", () => {
       sandbox: "danger-full-access"
     });
   });
+
+  it("resumes an existing Codex thread by id", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    const session = await manager.resumeSession({
+      threadId: "history_1",
+      cwd: process.cwd(),
+      permissionMode: "request-approval",
+      model: "gpt-5.5",
+      reasoningEffort: "high"
+    });
+
+    expect(session.threadId).toBe("history_1");
+    expect(fake.threadResumeParams[0]).toMatchObject({
+      threadId: "history_1",
+      cwd: process.cwd(),
+      model: "gpt-5.5"
+    });
+  });
+
+  it("unarchives a Codex thread before retrying resume", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    fake.failNextResumeAsArchived = true;
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    const session = await manager.resumeSession({
+      threadId: "history_1",
+      cwd: process.cwd(),
+      permissionMode: "request-approval"
+    });
+
+    expect(session.threadId).toBe("history_1");
+    expect(fake.threadUnarchiveParams).toEqual([{ threadId: "history_1" }]);
+    expect(fake.threadResumeParams).toHaveLength(2);
+  });
 });
 
 describe("local HTTP server guards", () => {
@@ -214,6 +267,189 @@ describe("local HTTP server guards", () => {
 
     await handle.close();
   });
+
+  it("returns Codex history details from the local sessions store", async () => {
+    const originalHome = process.env.HOME;
+    const tempHome = await mkdtemp(path.join(os.tmpdir(), "codexnext-home-"));
+    process.env.HOME = tempHome;
+    const sessionDir = path.join(tempHome, ".codex", "sessions", "2026", "06", "06");
+    await mkdir(sessionDir, { recursive: true });
+    const sessionFile = path.join(
+      sessionDir,
+      "rollout-2026-06-06T00-00-00-history_1.jsonl"
+    );
+    await writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          timestamp: "2026-06-06T00:00:00.000Z",
+          type: "session_meta",
+          payload: {
+            id: "history_1",
+            cwd: "/tmp/project",
+            timestamp: "2026-06-06T00:00:00.000Z",
+            originator: "Codex Desktop"
+          }
+        }),
+        JSON.stringify({
+          timestamp: "2026-06-06T00:00:01.000Z",
+          type: "event_msg",
+          payload: { type: "user_message", message: "检查这个项目" }
+        }),
+        JSON.stringify({
+          timestamp: "2026-06-06T00:00:02.000Z",
+          type: "event_msg",
+          payload: { type: "agent_message", message: "我会先查看文件结构。" }
+        })
+      ].join("\n")
+    );
+
+    const handle = createLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      webOrigin: "http://127.0.0.1:3000",
+      token: "secret",
+      approvalTimeoutMs: 1_000,
+      codexBin: "codex",
+      clientFactory: () => new FakeCodexClient()
+    });
+    const address = await listen(handle, "127.0.0.1", 0);
+    const base = `http://${address.address}:${address.port}`;
+
+    try {
+      const list = await fetch(`${base}/api/codex-history?token=secret`);
+      const listBody = await list.json() as {
+        entries: Array<{ filePath: string; id: string; cwd: string; title: string }>;
+      };
+      expect(listBody.entries[0]).toMatchObject({
+        id: "history_1",
+        cwd: "/tmp/project",
+        title: "检查这个项目",
+        filePath: sessionFile
+      });
+
+      const detailQuery = new URLSearchParams({
+        token: "secret",
+        id: "history_1",
+        cwd: "/tmp/project",
+        filePath: sessionFile
+      });
+      const detail = await fetch(
+        `${base}/api/codex-history/detail?${detailQuery.toString()}`
+      );
+      const detailBody = await detail.json() as {
+        messages: Array<{ role: string; text: string }>;
+      };
+      expect(detail.status).toBe(200);
+      expect(detailBody.messages).toMatchObject([
+        { role: "user", text: "检查这个项目" },
+        { role: "assistant", text: "我会先查看文件结构。" }
+      ]);
+
+      const outsideFile = path.join(tempHome, "outside.jsonl");
+      await writeFile(outsideFile, "");
+      const outsideQuery = new URLSearchParams({
+        token: "secret",
+        id: "history_1",
+        cwd: "/tmp/project",
+        filePath: outsideFile
+      });
+      const outside = await fetch(
+        `${base}/api/codex-history/detail?${outsideQuery.toString()}`
+      );
+      const outsideBody = await outside.json() as { error?: string };
+      expect(outside.status).toBe(400);
+      expect(outsideBody.error).toContain("outside the sessions store");
+    } finally {
+      await handle.close();
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("resumes Codex history records through the local HTTP API", async () => {
+    const originalHome = process.env.HOME;
+    const tempHome = await mkdtemp(path.join(os.tmpdir(), "codexnext-home-"));
+    const projectDir = path.join(tempHome, "project");
+    process.env.HOME = tempHome;
+    await mkdir(projectDir, { recursive: true });
+    const sessionDir = path.join(tempHome, ".codex", "sessions", "2026", "06", "06");
+    await mkdir(sessionDir, { recursive: true });
+    const sessionFile = path.join(
+      sessionDir,
+      "rollout-2026-06-06T00-00-00-history_1.jsonl"
+    );
+    await writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          timestamp: "2026-06-06T00:00:00.000Z",
+          type: "session_meta",
+          payload: {
+            id: "history_1",
+            cwd: projectDir,
+            timestamp: "2026-06-06T00:00:00.000Z",
+            originator: "Codex Desktop"
+          }
+        }),
+        JSON.stringify({
+          timestamp: "2026-06-06T00:00:01.000Z",
+          type: "event_msg",
+          payload: { type: "user_message", message: "继续这个项目" }
+        })
+      ].join("\n")
+    );
+
+    const fake = new FakeCodexClient();
+    const handle = createLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      webOrigin: "http://127.0.0.1:3000",
+      token: "secret",
+      approvalTimeoutMs: 1_000,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+    const address = await listen(handle, "127.0.0.1", 0);
+    const base = `http://${address.address}:${address.port}`;
+
+    try {
+      const response = await fetch(`${base}/api/codex-history/resume?token=secret`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: "history_1",
+          cwd: projectDir,
+          filePath: sessionFile,
+          permissionMode: "request-approval"
+        })
+      });
+      const body = await response.json() as {
+        session: { threadId: string };
+        history: { messages: Array<{ text: string }> };
+      };
+
+      expect(response.status).toBe(201);
+      expect(body.session.threadId).toBe("history_1");
+      expect(body.history.messages[0]?.text).toBe("继续这个项目");
+      expect(fake.threadResumeParams[0]).toMatchObject({
+        threadId: "history_1",
+        cwd: projectDir
+      });
+    } finally {
+      await handle.close();
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("goal-smoke hardening", () => {
@@ -229,6 +465,9 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
   public turnStartCalls = 0;
   public turnSteerCalls = 0;
   public threadStartParams: unknown[] = [];
+  public threadResumeParams: unknown[] = [];
+  public threadUnarchiveParams: unknown[] = [];
+  public failNextResumeAsArchived = false;
 
   public initialize = async () => ({
     userAgent: "fake",
@@ -246,6 +485,31 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
     return {
       thread: { id: "thread_1" }
     };
+  };
+
+  public threadResume = async (
+    params: Parameters<ManagedCodexClient["threadResume"]>[0]
+  ) => {
+    this.threadResumeParams.push(params);
+    if (this.failNextResumeAsArchived) {
+      this.failNextResumeAsArchived = false;
+      throw new Error(
+        `session ${params.threadId} is archived. Run \`codex unarchive ${params.threadId}\` to unarchive it first.`
+      );
+    }
+    return {
+      thread: { id: params.threadId },
+      model: params.model ?? "gpt-5.5",
+      modelProvider: "openai",
+      cwd: params.cwd ?? process.cwd()
+    };
+  };
+
+  public threadUnarchive = async (
+    params: Parameters<ManagedCodexClient["threadUnarchive"]>[0]
+  ) => {
+    this.threadUnarchiveParams.push(params);
+    return {};
   };
 
   public setGoal = async () => ({

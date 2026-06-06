@@ -11,13 +11,16 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import type { AddressInfo } from "node:net";
 import type {
+  LocalCodexHistoryDetailResponse,
   LocalCodexHistoryEntry,
+  LocalCodexHistoryMessage,
   LocalCodexHistoryResponse,
   LocalDirectoryListResponse,
   LocalEvent
 } from "@codexnext/protocol";
 import {
   LocalApprovalDecisionSchema,
+  LocalResumeSessionSchema,
   LocalSendMessageSchema,
   LocalSetGoalSchema,
   LocalStartSessionSchema
@@ -140,6 +143,24 @@ async function handleRequest(
       case "codex-history.list":
         sendJson(response, 200, await listCodexHistory(url));
         return;
+      case "codex-history.detail":
+        sendJson(response, 200, await readCodexHistoryDetail(url));
+        return;
+      case "codex-history.resume": {
+        const body = LocalResumeSessionSchema.parse(await readJson(request));
+        const history = await readCodexHistoryDetailById({
+          id: body.id,
+          cwd: body.cwd,
+          ...(body.filePath ? { filePath: body.filePath } : {})
+        });
+        const session = await services.sessionManager.resumeSession({
+          ...body,
+          threadId: history.entry.id,
+          cwd: history.entry.cwd
+        });
+        sendJson(response, 201, { session, history });
+        return;
+      }
       case "sessions.create": {
         const body = LocalStartSessionSchema.parse(await readJson(request));
         const session = await services.sessionManager.startSession(body);
@@ -234,6 +255,8 @@ type Route =
   | { name: "health"; public: true; params: Record<string, never> }
   | { name: "directories.list"; public: false; params: Record<string, never> }
   | { name: "codex-history.list"; public: false; params: Record<string, never> }
+  | { name: "codex-history.detail"; public: false; params: Record<string, never> }
+  | { name: "codex-history.resume"; public: false; params: Record<string, never> }
   | { name: "sessions.list"; public: false; params: Record<string, never> }
   | { name: "sessions.create"; public: false; params: Record<string, never> }
   | { name: "sessions.message"; public: false; params: { sessionId: string } }
@@ -277,6 +300,12 @@ function matchRoute(method: string, pathname: string): Route | null {
   }
   if (method === "GET" && pathname === "/api/codex-history") {
     return { name: "codex-history.list", public: false, params: {} };
+  }
+  if (method === "GET" && pathname === "/api/codex-history/detail") {
+    return { name: "codex-history.detail", public: false, params: {} };
+  }
+  if (method === "POST" && pathname === "/api/codex-history/resume") {
+    return { name: "codex-history.resume", public: false, params: {} };
   }
   if (method === "POST" && pathname === "/api/sessions") {
     return { name: "sessions.create", public: false, params: {} };
@@ -480,6 +509,65 @@ async function listCodexHistory(url: URL): Promise<LocalCodexHistoryResponse> {
   return { root, entries: dedupeCodexHistoryEntries(entries) };
 }
 
+async function readCodexHistoryDetail(
+  url: URL
+): Promise<LocalCodexHistoryDetailResponse> {
+  const id = url.searchParams.get("id")?.trim();
+  const cwd = url.searchParams.get("cwd")?.trim();
+  const filePath = url.searchParams.get("filePath")?.trim();
+  if (!id || !cwd) {
+    throw new Error("Missing codex history id or cwd");
+  }
+
+  return readCodexHistoryDetailById({
+    id,
+    cwd,
+    ...(filePath ? { filePath } : {})
+  });
+}
+
+async function readCodexHistoryDetailById(input: {
+  id: string;
+  cwd: string;
+  filePath?: string;
+}): Promise<LocalCodexHistoryDetailResponse> {
+  const { filePath, id, cwd } = input;
+
+  const root = path.join(os.homedir(), ".codex", "sessions");
+  if (filePath) {
+    const resolvedFilePath = path.resolve(filePath);
+    if (!isPathInside(root, resolvedFilePath)) {
+      throw new Error("Codex history filePath is outside the sessions store");
+    }
+    const entry = await readCodexHistoryEntry(resolvedFilePath);
+    if (entry?.id === id && entry.cwd === cwd) {
+      return {
+        entry,
+        messages: await readCodexHistoryMessages(resolvedFilePath)
+      };
+    }
+  }
+
+  const files = await collectCodexSessionFiles(root, 800);
+  for (const filePath of files) {
+    const entry = await readCodexHistoryEntry(filePath);
+    if (!entry || entry.id !== id || entry.cwd !== cwd) {
+      continue;
+    }
+    return {
+      entry,
+      messages: await readCodexHistoryMessages(filePath)
+    };
+  }
+
+  throw new Error(`Codex history entry not found: ${id}`);
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 function dedupeCodexHistoryEntries(
   entries: LocalCodexHistoryEntry[]
 ): LocalCodexHistoryEntry[] {
@@ -607,6 +695,130 @@ async function readCodexHistoryEntry(
   };
 }
 
+async function readCodexHistoryMessages(
+  filePath: string
+): Promise<LocalCodexHistoryMessage[]> {
+  const messages: LocalCodexHistoryMessage[] = [];
+  const seen = new Set<string>();
+  let lineCount = 0;
+  const stream = createReadStream(filePath, { encoding: "utf8" });
+  const reader = createInterface({ input: stream, crlfDelay: Infinity });
+
+  try {
+    for await (const line of reader) {
+      lineCount += 1;
+      if (lineCount > 2_500) {
+        break;
+      }
+
+      let record: unknown;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!isPlainRecord(record)) {
+        continue;
+      }
+
+      const ts = readString(record, "timestamp") ?? "";
+      const extracted = extractHistoryMessage(record, ts);
+      if (!extracted) {
+        continue;
+      }
+      const text = compactMessageText(extracted.text);
+      if (!text || !isUsableHistoryMessage(text)) {
+        continue;
+      }
+      const duplicateKey = `${extracted.role}:${text}`;
+      if (seen.has(duplicateKey)) {
+        continue;
+      }
+      seen.add(duplicateKey);
+      messages.push({
+        id: `${path.basename(filePath, ".jsonl")}-${lineCount}`,
+        role: extracted.role,
+        text,
+        ts
+      });
+      if (messages.length >= 160) {
+        break;
+      }
+    }
+  } finally {
+    reader.close();
+    stream.destroy();
+  }
+
+  return messages;
+}
+
+function extractHistoryMessage(
+  record: Record<string, unknown>,
+  ts: string
+): { role: LocalCodexHistoryMessage["role"]; text: string; ts: string } | null {
+  if (record.type === "event_msg" && isPlainRecord(record.payload)) {
+    const eventType = readString(record.payload, "type");
+    if (eventType === "user_message") {
+      return {
+        role: "user",
+        text: readString(record.payload, "message") ?? "",
+        ts
+      };
+    }
+    if (eventType === "agent_message") {
+      return {
+        role: "assistant",
+        text: readString(record.payload, "message") ?? "",
+        ts
+      };
+    }
+    if (eventType === "command_output") {
+      return {
+        role: "command",
+        text: readString(record.payload, "output") ?? "",
+        ts
+      };
+    }
+  }
+
+  if (record.type !== "response_item" || !isPlainRecord(record.payload)) {
+    return null;
+  }
+  if (record.payload.type !== "message") {
+    return null;
+  }
+  const role = record.payload.role;
+  if (role !== "user" && role !== "assistant") {
+    return null;
+  }
+  return {
+    role,
+    text: extractMessageContent(record.payload.content),
+    ts
+  };
+}
+
+function extractMessageContent(content: unknown): string {
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((item) => {
+      if (!isPlainRecord(item)) {
+        return "";
+      }
+      return (
+        readString(item, "text") ??
+        readString(item, "input_text") ??
+        readString(item, "output_text") ??
+        ""
+      );
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 function extractHistoryTitle(record: Record<string, unknown>): string {
   if (record.type === "event_msg" && isPlainRecord(record.payload)) {
     const eventType = readString(record.payload, "type");
@@ -645,6 +857,15 @@ function isUsableHistoryTitle(input: string): boolean {
 
 function compactTitle(input: string): string {
   return input.replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+function compactMessageText(input: string): string {
+  return input.replace(/\n{3,}/g, "\n\n").trim().slice(0, 16_000);
+}
+
+function isUsableHistoryMessage(input: string): boolean {
+  const trimmed = input.trim();
+  return Boolean(trimmed) && !trimmed.startsWith("<");
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

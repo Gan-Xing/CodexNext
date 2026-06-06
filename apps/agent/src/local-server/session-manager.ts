@@ -12,6 +12,7 @@ import type {
   ApprovalsReviewer,
   LocalSendMessageInput,
   LocalPermissionMode,
+  LocalResumeSessionInput,
   LocalReasoningEffort,
   LocalSessionSummary,
   LocalSessionStatus,
@@ -20,6 +21,7 @@ import type {
   SandboxMode,
   ThreadGoal,
   ThreadGoalSetResponse,
+  ThreadResumeResponse,
   ThreadStartResponse,
   TurnStartResponse
 } from "@codexnext/protocol";
@@ -36,6 +38,8 @@ export interface ManagedCodexClient {
   initialize: CodexAppServerClient["initialize"];
   initialized: CodexAppServerClient["initialized"];
   threadStart: CodexAppServerClient["threadStart"];
+  threadResume: CodexAppServerClient["threadResume"];
+  threadUnarchive: CodexAppServerClient["threadUnarchive"];
   setGoal: CodexAppServerClient["setGoal"];
   getGoal: CodexAppServerClient["getGoal"];
   clearGoal: CodexAppServerClient["clearGoal"];
@@ -80,6 +84,18 @@ interface LocalSession {
   client: ManagedCodexClient;
   removeNotificationListener: () => void;
 }
+
+type PermissionInput = Pick<
+  LocalStartSessionInput,
+  | "approvalPolicy"
+  | "approvalsReviewer"
+  | "permissionMode"
+  | "sandbox"
+>;
+
+type ResumeSessionInput = Omit<LocalResumeSessionInput, "id"> & {
+  threadId: string;
+};
 
 export class SessionManager {
   private readonly sessions = new Map<string, LocalSession>();
@@ -193,6 +209,98 @@ export class SessionManager {
       if (initialMessage) {
         await this.startTurn(sessionId, { text: initialMessage });
       }
+
+      return toSummary(session);
+    } catch (error) {
+      removeNotificationListener();
+      await client.close();
+      this.options.eventStore.append({
+        type: LocalEventType.AgentError,
+        sessionId,
+        payload: {
+          message: error instanceof Error ? error.message : String(error)
+        }
+      });
+      throw error;
+    }
+  }
+
+  public async resumeSession(
+    input: ResumeSessionInput
+  ): Promise<LocalSessionSummary> {
+    const cwd = path.resolve(input.cwd);
+    await assertDirectory(cwd);
+    const permissions = resolvePermissions(input);
+
+    const sessionId = randomUUID();
+    const now = Date.now();
+    let session: LocalSession | undefined;
+
+    const client = this.clientFactory({
+      cwd,
+      codexBin: this.options.codexBin,
+      reasoningEffort: input.reasoningEffort ?? null,
+      onApprovalRequest: (request) =>
+        this.options.approvalBridge.requestApproval({
+          sessionId,
+          method: request.method,
+          params: request.params
+        })
+    });
+
+    const removeNotificationListener = client.onNotification((notification) => {
+      if (!session) {
+        return;
+      }
+      this.handleNotification(session, notification);
+    });
+
+    try {
+      await client.initialize();
+      await client.initialized();
+
+      const resumeParams = {
+        threadId: input.threadId,
+        cwd,
+        model: input.model ?? null,
+        ...permissions.threadParams
+      };
+      let thread: ThreadResumeResponse;
+      try {
+        thread = await client.threadResume(resumeParams);
+      } catch (error) {
+        if (!isArchivedThreadError(error)) {
+          throw error;
+        }
+        await client.threadUnarchive({ threadId: input.threadId });
+        thread = await client.threadResume(resumeParams);
+      }
+
+      const threadId = extractThreadId(thread);
+      session = {
+        sessionId,
+        threadId,
+        status: "idle",
+        cwd: extractThreadCwd(thread) ?? cwd,
+        model: thread.model ?? input.model ?? null,
+        reasoningEffort: input.reasoningEffort ?? null,
+        permissionMode: permissions.permissionMode,
+        approvalPolicy: permissions.approvalPolicy,
+        approvalsReviewer: permissions.approvalsReviewer,
+        sandbox: permissions.sandbox,
+        createdAt: now,
+        updatedAt: now,
+        client,
+        removeNotificationListener
+      };
+      this.sessions.set(sessionId, session);
+
+      this.options.eventStore.append({
+        type: LocalEventType.SessionCreated,
+        sessionId,
+        threadId,
+        payload: { ...toSummary(session), resumedFrom: input.threadId }
+      });
 
       return toSummary(session);
     } catch (error) {
@@ -571,11 +679,26 @@ async function assertDirectory(cwd: string): Promise<void> {
   }
 }
 
-function extractThreadId(response: ThreadStartResponse): string {
+function extractThreadId(response: ThreadStartResponse | ThreadResumeResponse): string {
   if (typeof response.thread?.id === "string") {
     return response.thread.id;
   }
-  throw new Error("thread/start response did not include thread.id");
+  throw new Error("thread response did not include thread.id");
+}
+
+function extractThreadCwd(response: ThreadResumeResponse): string | undefined {
+  if (typeof response.cwd === "string") {
+    return response.cwd;
+  }
+  if (typeof response.thread?.cwd === "string") {
+    return response.thread.cwd;
+  }
+  return undefined;
+}
+
+function isArchivedThreadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(" is archived") || message.includes("codex unarchive");
 }
 
 function extractTurnId(response: TurnStartResponse): string {
@@ -663,7 +786,7 @@ function appServerArgs(reasoningEffort?: LocalReasoningEffort | null): string[] 
   return args;
 }
 
-function resolvePermissions(input: LocalStartSessionInput): {
+function resolvePermissions(input: PermissionInput): {
   permissionMode: LocalPermissionMode;
   approvalPolicy: AskForApproval | null;
   approvalsReviewer: ApprovalsReviewer | null;
