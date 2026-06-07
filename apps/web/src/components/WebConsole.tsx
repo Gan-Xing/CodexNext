@@ -9,6 +9,7 @@ import {
   useRef,
   useState
 } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type {
   LocalReasoningEffort,
   ThreadGoal
@@ -49,10 +50,35 @@ interface AttachmentDraft {
 
 interface ProjectThreadGroupData {
   cwd: string;
+  items: ThreadListItem[];
   name: string;
   updatedAt: number;
   sessions: LocalSessionSummary[];
   entries: LocalCodexHistoryEntry[];
+}
+
+interface ThreadSidebarPrefs {
+  archived: string[];
+  pinned: string[];
+}
+
+interface ThreadListItem {
+  entry?: LocalCodexHistoryEntry;
+  id: string;
+  kind: "history" | "session";
+  pinned: boolean;
+  selected: boolean;
+  threadId: string;
+  timeLabel: string;
+  timestamp: number;
+  title: string;
+}
+
+interface ThreadHoverPreview {
+  left: number;
+  maxWidth: number;
+  title: string;
+  top: number;
 }
 
 interface SavedDevice {
@@ -159,6 +185,11 @@ const MESSAGE_OVERSCAN_PX = 420;
 type ResumeState = "history" | "resuming" | "failed" | "missing";
 
 const savedDevicesStorageKey = "codexnext.savedDevices.v1";
+const sidebarWidthStorageKey = "codexnext.sidebarWidth.v1";
+const threadSidebarPrefsStorageKey = "codexnext.threadSidebarPrefs.v1";
+const DEFAULT_SIDEBAR_WIDTH = 292;
+const MIN_SIDEBAR_WIDTH = 272;
+const MAX_SIDEBAR_WIDTH = 620;
 
 export function WebConsole() {
   const [agentUrl, setAgentUrl] = useState("http://127.0.0.1:17361");
@@ -166,6 +197,9 @@ export function WebConsole() {
   const [error, setError] = useState<string | null>(null);
   const [autoConnect, setAutoConnect] = useState<AgentConnection | null>(null);
   const [savedDevices, setSavedDevices] = useState<SavedDevice[]>([]);
+  const [threadSidebarPrefs, setThreadSidebarPrefs] = useState<
+    Record<string, ThreadSidebarPrefs>
+  >({});
   const [devicePresence, setDevicePresence] = useState<
     Record<string, DevicePresenceState>
   >({});
@@ -174,6 +208,10 @@ export function WebConsole() {
   const [activeSheet, setActiveSheet] = useState<ActiveSheet>(null);
   const [activeMenu, setActiveMenu] = useState<ActiveMenu>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [threadHoverPreview, setThreadHoverPreview] =
+    useState<ThreadHoverPreview | null>(null);
   const [deviceWorkspaces, setDeviceWorkspaces] = useState<
     Record<string, DeviceWorkspace>
   >({});
@@ -197,6 +235,9 @@ export function WebConsole() {
   );
   const pendingDeviceStreamIds = useRef(new Set<string>());
   const selectedDeviceIdRef = useRef<string | null>(null);
+  const desktopFrameRef = useRef<HTMLDivElement | null>(null);
+  const sessionSidebarRef = useRef<HTMLElement | null>(null);
+  const sidebarResizeCleanupRef = useRef<(() => void) | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
   const activeWorkspace = selectedDeviceId
@@ -244,6 +285,14 @@ export function WebConsole() {
   const selectedPermission =
     permissionOptions.find((option) => option.mode === permissionMode) ??
     permissionOptions[0]!;
+  const activeThreadPrefs = getThreadSidebarPrefs(threadSidebarPrefs, agentUrl);
+  const desktopFrameStyle = useMemo(
+    () =>
+      ({
+        "--cn-sidebar-width": `${clampSidebarWidth(sidebarWidth)}px`
+      }) as CSSProperties,
+    [sidebarWidth]
+  );
   const deviceDisplayName =
     deviceName ||
     healthStatus?.device?.defaultName ||
@@ -389,7 +438,13 @@ export function WebConsole() {
 
   useEffect(() => {
     const storedDevices = readSavedDevices();
+    const storedSidebarWidth = readSidebarWidth();
+    const storedThreadPrefs = readThreadSidebarPrefs();
     setSavedDevices(storedDevices);
+    if (storedSidebarWidth !== null) {
+      setSidebarWidth(storedSidebarWidth);
+    }
+    setThreadSidebarPrefs(storedThreadPrefs);
     setDeviceWorkspaces((previous) => {
       const next = { ...previous };
       for (const device of storedDevices) {
@@ -442,6 +497,20 @@ export function WebConsole() {
       setAutoConnect({ agentUrl: queryAgent, token: queryToken });
     }
   }, []);
+
+  useEffect(
+    () => () => {
+      sidebarResizeCleanupRef.current?.();
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!sidebarCollapsed && !sidebarResizing) {
+      return;
+    }
+    setThreadHoverPreview(null);
+  }, [sidebarCollapsed, sidebarResizing]);
 
   useEffect(() => {
     selectedDeviceIdRef.current = selectedDeviceId;
@@ -852,6 +921,150 @@ export function WebConsole() {
       JSON.stringify(sortedDevices)
     );
   }
+
+  function persistThreadSidebarPrefs(
+    updater: StateUpdater<Record<string, ThreadSidebarPrefs>>
+  ) {
+    setThreadSidebarPrefs((previous) => {
+      const next = resolveStateUpdater(previous, updater);
+      window.localStorage.setItem(
+        threadSidebarPrefsStorageKey,
+        JSON.stringify(next)
+      );
+      return next;
+    });
+  }
+
+  function updateThreadSidebarPrefs(
+    scopeAgentUrl: string,
+    updater: (prefs: ThreadSidebarPrefs) => ThreadSidebarPrefs
+  ) {
+    const scope = threadPrefsScope(scopeAgentUrl);
+    persistThreadSidebarPrefs((previous) => ({
+      ...previous,
+      [scope]: sanitizeThreadSidebarPrefs(
+        updater(getThreadSidebarPrefs(previous, scopeAgentUrl))
+      )
+    }));
+  }
+
+  function togglePinnedThread(threadId: string) {
+    updateThreadSidebarPrefs(agentUrl, (prefs) => ({
+      ...prefs,
+      pinned: prefs.pinned.includes(threadId)
+        ? prefs.pinned.filter((value) => value !== threadId)
+        : [threadId, ...prefs.pinned.filter((value) => value !== threadId)]
+    }));
+  }
+
+  function archiveThread(item: ThreadListItem) {
+    updateThreadSidebarPrefs(agentUrl, (prefs) => ({
+      pinned: prefs.pinned.filter((value) => value !== item.threadId),
+      archived: [item.threadId, ...prefs.archived.filter((value) => value !== item.threadId)]
+    }));
+
+    if (item.kind === "session") {
+      if (currentSessionId === item.id) {
+        setCurrentSessionId(null);
+      }
+      removeSession(item.id);
+      return;
+    }
+
+    if (selectedHistoryKey === item.id) {
+      clearSelectedHistory();
+      setCurrentSessionId(null);
+    }
+  }
+
+  const clearThreadHoverPreview = useCallback(() => {
+    setThreadHoverPreview(null);
+  }, []);
+
+  const showThreadHoverPreview = useCallback((target: HTMLElement, title: string) => {
+    if (typeof window === "undefined" || window.matchMedia("(hover: none)").matches) {
+      return;
+    }
+    const titleNode = target.querySelector(".cn-thread-title");
+    if (!(titleNode instanceof HTMLElement)) {
+      return;
+    }
+    if (titleNode.scrollWidth <= titleNode.clientWidth + 1) {
+      setThreadHoverPreview(null);
+      return;
+    }
+    const frameRect = desktopFrameRef.current?.getBoundingClientRect();
+    const rowRect = target.getBoundingClientRect();
+    if (!frameRect) {
+      return;
+    }
+    const minWidth = 220;
+    const desiredLeft = rowRect.right - frameRect.left + 14;
+    const desiredTop = rowRect.top - frameRect.top + rowRect.height / 2;
+    const maxWidth = Math.min(
+      420,
+      Math.max(minWidth, frameRect.width - desiredLeft - 20)
+    );
+    const left = Math.min(desiredLeft, frameRect.width - maxWidth - 20);
+    const top = Math.max(18, Math.min(frameRect.height - 18, desiredTop));
+    setThreadHoverPreview({
+      left,
+      maxWidth,
+      title,
+      top
+    });
+  }, []);
+
+  const resetSidebarWidth = useCallback(() => {
+    setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(
+        sidebarWidthStorageKey,
+        String(DEFAULT_SIDEBAR_WIDTH)
+      );
+    }
+  }, []);
+
+  const startSidebarResize = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (typeof window === "undefined") {
+        return;
+      }
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth =
+        sessionSidebarRef.current?.getBoundingClientRect().width ??
+        clampSidebarWidth(sidebarWidth);
+      let nextWidth = startWidth;
+
+      clearThreadHoverPreview();
+      setSidebarResizing(true);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+
+      const finish = () => {
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", finish);
+        window.removeEventListener("pointercancel", finish);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        window.localStorage.setItem(sidebarWidthStorageKey, String(nextWidth));
+        setSidebarResizing(false);
+        sidebarResizeCleanupRef.current = null;
+      };
+
+      const handleMove = (moveEvent: PointerEvent) => {
+        nextWidth = clampSidebarWidth(startWidth + moveEvent.clientX - startX);
+        setSidebarWidth(nextWidth);
+      };
+
+      sidebarResizeCleanupRef.current = finish;
+      window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", finish);
+      window.addEventListener("pointercancel", finish);
+    },
+    [clearThreadHoverPreview, sidebarWidth]
+  );
 
   function upsertConnectedDevice(
     nextConnection: AgentConnection,
@@ -1337,7 +1550,14 @@ export function WebConsole() {
     });
   }
 
-  const projectGroups = groupProjectThreads(sessions, codexHistory);
+  const projectGroups = groupProjectThreads(
+    sessions,
+    codexHistory,
+    chatItems,
+    activeThreadPrefs,
+    currentSessionId,
+    selectedHistoryKey
+  );
   const firstApproval = pendingApprovals[0] ?? null;
 
   function revealMainOnMobile() {
@@ -1383,11 +1603,17 @@ export function WebConsole() {
   return (
     <main className="cn-live-console">
       <div
+        ref={desktopFrameRef}
         className={
           sidebarCollapsed
-            ? "cn-desktop-frame cn-app-frame sidebar-collapsed"
-            : "cn-desktop-frame cn-app-frame"
+            ? sidebarResizing
+              ? "cn-desktop-frame cn-app-frame sidebar-collapsed resizing"
+              : "cn-desktop-frame cn-app-frame sidebar-collapsed"
+            : sidebarResizing
+              ? "cn-desktop-frame cn-app-frame resizing"
+              : "cn-desktop-frame cn-app-frame"
         }
+        style={desktopFrameStyle}
       >
         <nav className="cn-nav-rail" aria-label="CodexNext navigation">
           <div className="cn-mark">CN</div>
@@ -1428,7 +1654,7 @@ export function WebConsole() {
           </button>
         </nav>
 
-        <aside className="cn-session-sidebar cn-live-sidebar">
+        <aside ref={sessionSidebarRef} className="cn-session-sidebar cn-live-sidebar">
           <div className="cn-sidebar-fixed">
             <div className="cn-sidebar-windowbar" aria-label="窗口导航">
               <span className="cn-window-dot red" />
@@ -1461,11 +1687,10 @@ export function WebConsole() {
             >
               <CodexIcon name="terminal" className="cn-device-icon" />
               <span className={connected ? "cn-live-dot" : "cn-live-dot offline"} />
-              <span className="cn-device-copy">
+              <span className="cn-device-copy compact">
                 <strong>{deviceDisplayName}</strong>
                 <small>
-                  {statusLabel(streamStatus)} ·{" "}
-                  {healthStatus?.codex?.version ?? "codex-cli unknown"}
+                  {statusLabel(streamStatus)} · {healthStatus?.codex?.version ?? "codex-cli unknown"}
                 </small>
               </span>
             </button>
@@ -1474,15 +1699,16 @@ export function WebConsole() {
 
           <div className="cn-project-tree">
             <span className="cn-project-tree-title">项目</span>
-            <div className="cn-project-scroll">
+            <div className="cn-project-scroll" onScroll={clearThreadHoverPreview}>
               {projectGroups.map((group) => (
                 <ProjectThreadGroup
                   key={group.cwd}
-                  activeSessionId={currentSessionId}
-                  chatItems={chatItems}
                   group={group}
                   historyLoadingKey={historyLoadingKey}
-                  selectedHistoryKey={selectedHistoryKey}
+                  onArchiveThread={archiveThread}
+                  onHideThreadPreview={clearThreadHoverPreview}
+                  onShowThreadPreview={showThreadHoverPreview}
+                  onTogglePinnedThread={togglePinnedThread}
                   onSelectHistory={(entry) => void selectHistory(entry)}
                   onSelectSession={selectSession}
                 />
@@ -1510,7 +1736,30 @@ export function WebConsole() {
               <CodexIcon name="phone" />
             </button>
           </div>
+          <div
+            className={sidebarResizing ? "cn-sidebar-resize-handle dragging" : "cn-sidebar-resize-handle"}
+            role="separator"
+            aria-label="调整侧栏宽度"
+            aria-orientation="vertical"
+            onDoubleClick={resetSidebarWidth}
+            onPointerDown={startSidebarResize}
+          />
         </aside>
+
+        {threadHoverPreview ? (
+          <div
+            className="cn-thread-hover-card"
+            style={
+              {
+                left: `${threadHoverPreview.left}px`,
+                maxWidth: `${threadHoverPreview.maxWidth}px`,
+                top: `${threadHoverPreview.top}px`
+              } as CSSProperties
+            }
+          >
+            {threadHoverPreview.title}
+          </div>
+        ) : null}
 
         <section className={currentSession ? "cn-main thread cn-live-main" : "cn-main cn-live-main"}>
           <header className="cn-main-header cn-live-header">
@@ -1721,11 +1970,12 @@ export function WebConsole() {
 }
 
 function ProjectThreadGroup(props: {
-  activeSessionId: string | null;
-  chatItems: ChatItem[];
   group: ProjectThreadGroupData;
   historyLoadingKey: string | null;
-  selectedHistoryKey: string | null;
+  onArchiveThread: (item: ThreadListItem) => void;
+  onHideThreadPreview: () => void;
+  onShowThreadPreview: (target: HTMLElement, title: string) => void;
+  onTogglePinnedThread: (threadId: string) => void;
   onSelectHistory: (entry: LocalCodexHistoryEntry) => void;
   onSelectSession: (sessionId: string) => void;
 }) {
@@ -1749,41 +1999,80 @@ function ProjectThreadGroup(props: {
       </button>
       {collapsed ? null : (
         <div className="cn-thread-list">
-          {props.group.sessions.map((session) => (
-            <button
-              key={session.sessionId}
-              className={
-                props.activeSessionId === session.sessionId
-                  ? "cn-thread-row selected"
-                  : "cn-thread-row"
-              }
-              title={sessionTitle(session, props.chatItems)}
-              type="button"
-              onClick={() => props.onSelectSession(session.sessionId)}
-            >
-              <span>{sessionTitle(session, props.chatItems)}</span>
-              <small>{statusLabel(session.status)}</small>
-            </button>
-          ))}
-          {props.group.entries.slice(0, 12).map((entry) => {
-            const key = codexHistoryKey(entry);
+          {props.group.items.map((item) => {
+            const loading =
+              item.kind === "history" && props.historyLoadingKey === item.id;
             return (
-              <button
-                key={key}
+              <article
+                key={item.id}
                 className={
-                  props.selectedHistoryKey === key
-                    ? "cn-thread-row cn-history-row selected"
-                    : "cn-thread-row cn-history-row"
+                  item.selected
+                    ? "cn-thread-row selected"
+                    : item.pinned
+                      ? "cn-thread-row pinned"
+                      : "cn-thread-row"
                 }
-                title={entry.title}
-                type="button"
-                onClick={() => props.onSelectHistory(entry)}
+                title={item.title}
+                onBlur={(event) => {
+                  if (event.relatedTarget instanceof Node) {
+                    if (event.currentTarget.contains(event.relatedTarget)) {
+                      return;
+                    }
+                  }
+                  props.onHideThreadPreview();
+                }}
+                onFocus={(event) =>
+                  props.onShowThreadPreview(event.currentTarget, item.title)
+                }
+                onMouseEnter={(event) =>
+                  props.onShowThreadPreview(event.currentTarget, item.title)
+                }
+                onMouseLeave={props.onHideThreadPreview}
               >
-                <span>{entry.title}</span>
-                <small>
-                  {props.historyLoadingKey === key ? "正在读取..." : historyTime(entry)}
-                </small>
-              </button>
+                <button
+                  className="cn-thread-main"
+                  type="button"
+                  onClick={() => {
+                    props.onHideThreadPreview();
+                    if (item.kind === "session") {
+                      props.onSelectSession(item.id);
+                      return;
+                    }
+                    if (item.entry) {
+                      props.onSelectHistory(item.entry);
+                    }
+                  }}
+                >
+                  <span className="cn-thread-title">{item.title}</span>
+                  <span className="cn-thread-time">
+                    {loading ? "读取中" : item.timeLabel}
+                  </span>
+                </button>
+                <div className="cn-thread-actions">
+                  <button
+                    className={item.pinned ? "cn-thread-action active" : "cn-thread-action"}
+                    type="button"
+                    aria-label={item.pinned ? "取消置顶" : "置顶"}
+                    onClick={() => {
+                      props.onHideThreadPreview();
+                      props.onTogglePinnedThread(item.threadId);
+                    }}
+                  >
+                    <CodexIcon name="pin" />
+                  </button>
+                  <button
+                    className="cn-thread-action"
+                    type="button"
+                    aria-label="归档"
+                    onClick={() => {
+                      props.onHideThreadPreview();
+                      props.onArchiveThread(item);
+                    }}
+                  >
+                    <CodexIcon name="archive" />
+                  </button>
+                </div>
+              </article>
             );
           })}
         </div>
@@ -3181,11 +3470,20 @@ function ApprovalModal(props: {
 
 function groupProjectThreads(
   sessions: LocalSessionSummary[],
-  entries: LocalCodexHistoryEntry[]
+  entries: LocalCodexHistoryEntry[],
+  chatItems: ChatItem[],
+  prefs: ThreadSidebarPrefs,
+  activeSessionId: string | null,
+  selectedHistoryKey: string | null
 ): ProjectThreadGroupData[] {
   const groups = new Map<string, ProjectThreadGroupData>();
+  const pinned = new Set(prefs.pinned);
+  const archived = new Set(prefs.archived);
   for (const session of sessions) {
     if (isHistoryPreviewSessionId(session.sessionId)) {
+      continue;
+    }
+    if (archived.has(threadKeyForSession(session))) {
       continue;
     }
     const existing = groups.get(session.cwd);
@@ -3195,6 +3493,7 @@ function groupProjectThreads(
     } else {
       groups.set(session.cwd, {
         cwd: session.cwd,
+        items: [],
         name: shortPath(session.cwd),
         updatedAt: session.updatedAt,
         sessions: [session],
@@ -3209,6 +3508,9 @@ function groupProjectThreads(
     if (seen.has(uniqueKey)) {
       continue;
     }
+    if (archived.has(threadKeyForHistory(entry))) {
+      continue;
+    }
     seen.add(uniqueKey);
     const existing = groups.get(entry.cwd);
     const updatedAt = Date.parse(entry.updatedAt) || 0;
@@ -3218,6 +3520,7 @@ function groupProjectThreads(
     } else {
       groups.set(entry.cwd, {
         cwd: entry.cwd,
+        items: [],
         name: shortPath(entry.cwd),
         updatedAt,
         sessions: [],
@@ -3226,14 +3529,66 @@ function groupProjectThreads(
     }
   }
   return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      sessions: group.sessions.sort((a, b) => b.updatedAt - a.updatedAt),
-      entries: group.entries.sort(
-        (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
-      )
-    }))
+    .map((group) => {
+      const items: ThreadListItem[] = [
+        ...group.sessions.map((session) => ({
+          id: session.sessionId,
+          kind: "session" as const,
+          pinned: pinned.has(threadKeyForSession(session)),
+          selected: activeSessionId === session.sessionId,
+          threadId: threadKeyForSession(session),
+          timeLabel: formatRelativeThreadTime(session.updatedAt),
+          timestamp: session.updatedAt,
+          title: sessionTitle(session, chatItems)
+        })),
+        ...group.entries.map((entry) => {
+          const timestamp = parseHistoryTimestamp(entry.updatedAt, entry.createdAt);
+          return {
+            entry,
+            id: codexHistoryKey(entry),
+            kind: "history" as const,
+            pinned: pinned.has(threadKeyForHistory(entry)),
+            selected: selectedHistoryKey === codexHistoryKey(entry),
+            threadId: threadKeyForHistory(entry),
+            timeLabel: formatRelativeThreadTime(timestamp),
+            timestamp,
+            title: entry.title
+          };
+        })
+      ]
+        .sort((left, right) => {
+          if (left.pinned !== right.pinned) {
+            return left.pinned ? -1 : 1;
+          }
+          if (left.selected !== right.selected) {
+            return left.selected ? -1 : 1;
+          }
+          return right.timestamp - left.timestamp;
+        })
+        .slice(0, 14);
+
+      return {
+        ...group,
+        items,
+        sessions: group.sessions.sort((a, b) => b.updatedAt - a.updatedAt),
+        entries: group.entries.sort(
+          (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
+        )
+      };
+    })
     .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function parseHistoryTimestamp(updatedAt: string, createdAt?: string): number {
+  const updated = Date.parse(updatedAt);
+  if (Number.isFinite(updated)) {
+    return updated;
+  }
+  const created = createdAt ? Date.parse(createdAt) : Number.NaN;
+  if (Number.isFinite(created)) {
+    return created;
+  }
+  return Date.now();
 }
 
 function codexHistoryKey(entry: LocalCodexHistoryEntry): string {
@@ -3362,6 +3717,59 @@ function readSavedDevices(): SavedDevice[] {
   }
 }
 
+function readSidebarWidth(): number | null {
+  try {
+    const raw = window.localStorage.getItem(sidebarWidthStorageKey);
+    if (!raw) {
+      return null;
+    }
+    const value = Number(raw);
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    return clampSidebarWidth(value);
+  } catch {
+    return null;
+  }
+}
+
+function readThreadSidebarPrefs(): Record<string, ThreadSidebarPrefs> {
+  try {
+    const raw = window.localStorage.getItem(threadSidebarPrefsStorageKey);
+    if (!raw) {
+      return {};
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(parsed).map(([scope, value]) => [
+        scope,
+        sanitizeThreadSidebarPrefs(value)
+      ])
+    );
+  } catch {
+    return {};
+  }
+}
+
+function sanitizeThreadSidebarPrefs(value: unknown): ThreadSidebarPrefs {
+  if (!isRecord(value)) {
+    return { archived: [], pinned: [] };
+  }
+  const pinned = Array.isArray(value.pinned)
+    ? value.pinned.filter((item): item is string => typeof item === "string" && item.length > 0)
+    : [];
+  const archived = Array.isArray(value.archived)
+    ? value.archived.filter((item): item is string => typeof item === "string" && item.length > 0)
+    : [];
+  return {
+    archived: [...new Set(archived)],
+    pinned: [...new Set(pinned)]
+  };
+}
+
 function isSavedDevice(value: unknown): value is SavedDevice {
   if (!isRecord(value)) {
     return false;
@@ -3372,6 +3780,17 @@ function isSavedDevice(value: unknown): value is SavedDevice {
     typeof value.agentUrl === "string" &&
     typeof value.token === "string"
   );
+}
+
+function threadPrefsScope(agentUrl: string): string {
+  return normalizeAgentUrl(agentUrl);
+}
+
+function getThreadSidebarPrefs(
+  prefsByScope: Record<string, ThreadSidebarPrefs>,
+  agentUrl: string
+): ThreadSidebarPrefs {
+  return prefsByScope[threadPrefsScope(agentUrl)] ?? { archived: [], pinned: [] };
 }
 
 function findSavedDevice(
@@ -3417,11 +3836,26 @@ function normalizeAgentUrl(agentUrl: string): string {
   }
 }
 
+function threadKeyForHistory(entry: LocalCodexHistoryEntry): string {
+  return entry.id;
+}
+
+function threadKeyForSession(session: LocalSessionSummary): string {
+  return session.threadId || session.sessionId;
+}
+
 function createSavedDeviceId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
   }
   return `device_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+function clampSidebarWidth(value: number): number {
+  return Math.min(
+    MAX_SIDEBAR_WIDTH,
+    Math.max(MIN_SIDEBAR_WIDTH, Math.round(value))
+  );
 }
 
 function shortAgentUrl(agentUrl: string): string {
@@ -3474,26 +3908,21 @@ function formatRelativeTime(input: string): string {
   if (!Number.isFinite(timestamp)) {
     return "Codex history";
   }
+  return formatRelativeThreadTime(timestamp);
+}
+
+function formatRelativeThreadTime(timestamp: number): string {
   const diffMs = Date.now() - timestamp;
-  const minute = 60_000;
-  const hour = 60 * minute;
+  const hour = 60 * 60_000;
   const day = 24 * hour;
-  if (diffMs < minute) {
-    return "刚刚";
-  }
-  if (diffMs < hour) {
-    return `${Math.max(1, Math.floor(diffMs / minute))} 分`;
-  }
+  const week = 7 * day;
   if (diffMs < day) {
-    return `${Math.max(1, Math.floor(diffMs / hour))} 小时`;
+    return `${Math.max(1, Math.floor(diffMs / hour) || 1)} 小时`;
   }
-  if (diffMs < 14 * day) {
+  if (diffMs < week) {
     return `${Math.max(1, Math.floor(diffMs / day))} 天`;
   }
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "numeric",
-    day: "numeric"
-  }).format(timestamp);
+  return `${Math.max(1, Math.floor(diffMs / week))} 周`;
 }
 
 function reasoningLabel(value: LocalReasoningEffort | null | undefined): string {
