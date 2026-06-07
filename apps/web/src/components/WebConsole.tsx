@@ -985,8 +985,7 @@ export function WebConsole() {
         cachedDetail ??
         (await getCodexHistoryDetail(connection, {
           id: entry.id,
-          cwd: entry.cwd,
-          filePath: entry.filePath
+          cwd: entry.cwd
         }));
       historyDetailCacheRef.current.set(key, detail);
       hydrateSessionFromHistory(previewSessionId, detail.messages);
@@ -1036,7 +1035,6 @@ export function WebConsole() {
       const result = await resumeCodexHistory(connection, {
         id: entry.id,
         cwd: entry.cwd,
-        filePath: entry.filePath,
         model,
         permissionMode,
         reasoningEffort
@@ -3206,7 +3204,7 @@ function groupProjectThreads(
   }
 
   const seen = new Set<string>();
-  for (const entry of entries.filter(isVisibleCodexHistoryEntry)) {
+  for (const entry of entries) {
     const uniqueKey = codexHistoryKey(entry);
     if (seen.has(uniqueKey)) {
       continue;
@@ -3240,25 +3238,6 @@ function groupProjectThreads(
 
 function codexHistoryKey(entry: LocalCodexHistoryEntry): string {
   return `${entry.id}::${entry.cwd}`;
-}
-
-function isVisibleCodexHistoryEntry(entry: LocalCodexHistoryEntry): boolean {
-  const cwdName = shortPath(entry.cwd);
-  return !(
-    entry.cwd.startsWith("/tmp/codex-goal-probe-") ||
-    cwdName.startsWith("codex-goal-probe-") ||
-    isAutomationPromptHistoryTitle(entry.title)
-  );
-}
-
-function isAutomationPromptHistoryTitle(title: string): boolean {
-  const trimmed = title.trim();
-  return (
-    trimmed.startsWith("# Codex Native API Loop Prompt") ||
-    trimmed.startsWith("# Codex Gateway Loop Prompt") ||
-    trimmed.startsWith("# CodexBridge Loop Prompt") ||
-    trimmed.startsWith("你正在执行 CodexBridge 后台 Agent 任务")
-  );
 }
 
 function isPreviewOnlyHistoryEntry(entry: LocalCodexHistoryEntry): boolean {

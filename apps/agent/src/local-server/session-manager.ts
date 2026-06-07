@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -21,6 +22,10 @@ import type {
   SandboxMode,
   ThreadGoal,
   ThreadGoalSetResponse,
+  ThreadListParams,
+  ThreadListResponse,
+  ThreadReadParams,
+  ThreadReadResponse,
   ThreadResumeResponse,
   ThreadStartResponse,
   TurnStartResponse
@@ -40,6 +45,8 @@ export interface ManagedCodexClient {
   threadStart: CodexAppServerClient["threadStart"];
   threadResume: CodexAppServerClient["threadResume"];
   threadUnarchive: CodexAppServerClient["threadUnarchive"];
+  threadList: CodexAppServerClient["threadList"];
+  threadRead: CodexAppServerClient["threadRead"];
   setGoal: CodexAppServerClient["setGoal"];
   getGoal: CodexAppServerClient["getGoal"];
   clearGoal: CodexAppServerClient["clearGoal"];
@@ -93,8 +100,9 @@ type PermissionInput = Pick<
   | "sandbox"
 >;
 
-type ResumeSessionInput = Omit<LocalResumeSessionInput, "id"> & {
+type ResumeSessionInput = Omit<LocalResumeSessionInput, "id" | "cwd"> & {
   threadId: string;
+  cwd: string;
 };
 
 export class SessionManager {
@@ -125,6 +133,18 @@ export class SessionManager {
 
   public get(sessionId: string): LocalSessionSummary {
     return toSummary(this.requireSession(sessionId));
+  }
+
+  public async listThreads(
+    params: ThreadListParams
+  ): Promise<ThreadListResponse> {
+    return this.withTemporaryClient((client) => client.threadList(params));
+  }
+
+  public async readThread(
+    params: ThreadReadParams
+  ): Promise<ThreadReadResponse> {
+    return this.withTemporaryClient((client) => client.threadRead(params));
   }
 
   public async startSession(
@@ -513,6 +533,24 @@ export class SessionManager {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return session;
+  }
+
+  private async withTemporaryClient<T>(
+    operation: (client: ManagedCodexClient) => Promise<T>
+  ): Promise<T> {
+    const client = this.clientFactory({
+      cwd: os.homedir(),
+      codexBin: this.options.codexBin,
+      reasoningEffort: null,
+      onApprovalRequest: async () => ({ decision: "decline" })
+    });
+    try {
+      await client.initialize();
+      await client.initialized();
+      return await operation(client);
+    } finally {
+      await client.close();
+    }
   }
 
   private handleNotification(

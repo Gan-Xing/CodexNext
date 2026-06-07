@@ -53,6 +53,8 @@ export const CodexClientMethod = {
   ThreadStart: "thread/start",
   ThreadResume: "thread/resume",
   ThreadUnarchive: "thread/unarchive",
+  ThreadList: "thread/list",
+  ThreadRead: "thread/read",
   ThreadGoalSet: "thread/goal/set",
   ThreadGoalGet: "thread/goal/get",
   ThreadGoalClear: "thread/goal/clear",
@@ -245,6 +247,84 @@ export interface ThreadUnarchiveParams {
 }
 
 export type ThreadUnarchiveResponse = Record<string, never>;
+
+export type ThreadSortKey = "created_at" | "updated_at";
+export type SortDirection = "asc" | "desc";
+
+export type ThreadSourceKind =
+  | "cli"
+  | "vscode"
+  | "exec"
+  | "appServer"
+  | "mcp"
+  | "custom"
+  | "subAgent"
+  | "unknown";
+
+export interface ThreadListParams {
+  cursor?: string | null;
+  limit?: number | null;
+  sortKey?: ThreadSortKey | null;
+  sortDirection?: SortDirection | null;
+  modelProviders?: string[] | null;
+  sourceKinds?: ThreadSourceKind[] | null;
+  archived?: boolean | null;
+  cwd?: string | string[] | null;
+  useStateDbOnly?: boolean;
+  searchTerm?: string | null;
+}
+
+export interface CodexThread {
+  id: string;
+  sessionId?: string;
+  preview: string;
+  createdAt: number;
+  updatedAt: number;
+  status?: unknown;
+  cwd: string;
+  cliVersion?: string;
+  source?: unknown;
+  name?: string | null;
+  path?: string | null;
+  turns?: CodexThreadTurn[];
+  [key: string]: unknown;
+}
+
+export interface CodexThreadTurn {
+  id: string;
+  items: CodexThreadItem[];
+  status?: unknown;
+  startedAt?: number | null;
+  completedAt?: number | null;
+  [key: string]: unknown;
+}
+
+export type CodexThreadItem = {
+  id?: string;
+  type?: string;
+  content?: unknown;
+  text?: string;
+  summary?: string[];
+  command?: string;
+  aggregatedOutput?: string | null;
+  changes?: unknown[];
+  [key: string]: unknown;
+};
+
+export interface ThreadListResponse {
+  data: CodexThread[];
+  nextCursor: string | null;
+  backwardsCursor: string | null;
+}
+
+export interface ThreadReadParams {
+  threadId: string;
+  includeTurns?: boolean;
+}
+
+export interface ThreadReadResponse {
+  thread: CodexThread;
+}
 
 export type UserInput =
   | {
@@ -457,8 +537,7 @@ export type LocalStartSessionInput = z.infer<typeof LocalStartSessionSchema>;
 
 export const LocalResumeSessionSchema = z.object({
   id: z.string().min(1),
-  cwd: z.string().min(1),
-  filePath: z.string().min(1).optional(),
+  cwd: z.string().min(1).optional(),
   model: z.string().min(1).nullable().optional(),
   permissionMode: z
     .enum(["request-approval", "auto-approve", "full-access", "custom-config"])
@@ -509,7 +588,6 @@ export interface LocalCodexHistoryEntry {
   createdAt: string;
   updatedAt: string;
   source: string;
-  filePath: string;
 }
 
 export type LocalCodexHistoryMessageRole =

@@ -4,13 +4,13 @@ import http, {
   type ServerResponse
 } from "node:http";
 import { spawn } from "node:child_process";
-import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import type { AddressInfo } from "node:net";
 import type {
+  CodexThread,
+  CodexThreadItem,
   LocalCodexHistoryDetailResponse,
   LocalCodexHistoryEntry,
   LocalCodexHistoryMessage,
@@ -50,23 +50,6 @@ export interface LocalServerHandle {
   sessionManager: SessionManager;
   approvalBridge: ApprovalBridge;
   close(): Promise<void>;
-}
-
-interface CodexSessionIndexEntry {
-  id: string;
-  title: string;
-  updatedAt: string;
-}
-
-interface CodexHistoryFileMetadata {
-  id: string;
-  cwd: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  source: string;
-  filePath: string;
-  hasUsefulHistoryContent: boolean;
 }
 
 export function createLocalServer(options: LocalServerOptions): LocalServerHandle {
@@ -158,18 +141,25 @@ async function handleRequest(
         sendJson(response, 200, await listDirectories(url));
         return;
       case "codex-history.list":
-        sendJson(response, 200, await listCodexHistory(url));
+        sendJson(
+          response,
+          200,
+          await listCodexHistory(url, services.sessionManager)
+        );
         return;
       case "codex-history.detail":
-        sendJson(response, 200, await readCodexHistoryDetail(url));
+        sendJson(
+          response,
+          200,
+          await readCodexHistoryDetail(url, services.sessionManager)
+        );
         return;
       case "codex-history.resume": {
         const body = LocalResumeSessionSchema.parse(await readJson(request));
-        const history = await readCodexHistoryDetailById({
-          id: body.id,
-          cwd: body.cwd,
-          ...(body.filePath ? { filePath: body.filePath } : {})
-        });
+        const history = await readCodexHistoryDetailById(
+          body.id,
+          services.sessionManager
+        );
         const session = await services.sessionManager.resumeSession({
           ...body,
           threadId: history.entry.id,
@@ -504,374 +494,161 @@ async function listDirectories(url: URL): Promise<LocalDirectoryListResponse> {
   };
 }
 
-async function listCodexHistory(url: URL): Promise<LocalCodexHistoryResponse> {
-  const root = codexSessionsRoot();
+async function listCodexHistory(
+  url: URL,
+  sessionManager: SessionManager
+): Promise<LocalCodexHistoryResponse> {
   const limit = Math.max(
     1,
     Math.min(200, Number(url.searchParams.get("limit") ?? "80") || 80)
   );
-  const indexEntries = await readCodexSessionIndex();
-  const files = await collectCodexSessionFiles(codexHistoryRoots(), Math.max(800, limit * 8));
-  const metadataById = new Map<string, CodexHistoryFileMetadata>();
-  const entries: LocalCodexHistoryEntry[] = [];
-
-  for (const filePath of files) {
-    const metadata = await readCodexHistoryFileMetadata(filePath);
-    if (!metadata) {
-      continue;
-    }
-    const previous = metadataById.get(metadata.id);
-    if (
-      !previous ||
-      Date.parse(metadata.updatedAt || metadata.createdAt) >
-        Date.parse(previous.updatedAt || previous.createdAt)
-    ) {
-      metadataById.set(metadata.id, metadata);
-    }
-  }
-
-  const seen = new Set<string>();
-  const sortedIndexEntries = [...indexEntries.values()].sort(
-    (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
-  );
-  for (const indexEntry of sortedIndexEntries) {
-    const metadata = metadataById.get(indexEntry.id);
-    if (!metadata) {
-      continue;
-    }
-    const entry = await buildCodexHistoryEntry(metadata, indexEntry);
-    if (!entry || isHiddenCodexHistoryEntry(entry)) {
-      continue;
-    }
-    const key = codexHistoryKey(entry);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    entries.push(entry);
-    if (entries.length >= limit) {
-      break;
-    }
-  }
-
-  if (entries.length < limit) {
-    const fallbackMetadata = [...metadataById.values()].sort(
-      (a, b) =>
-        Date.parse(b.updatedAt || b.createdAt) -
-        Date.parse(a.updatedAt || a.createdAt)
-    );
-    for (const metadata of fallbackMetadata) {
-      const entry = await buildCodexHistoryEntry(
-        metadata,
-        indexEntries.get(metadata.id) ?? null
-      );
-      if (!entry || isHiddenCodexHistoryEntry(entry)) {
-        continue;
-      }
-      const key = codexHistoryKey(entry);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      entries.push(entry);
-      if (entries.length >= limit) {
-        break;
-      }
-    }
-  }
-
-  return { root, entries: dedupeCodexHistoryEntries(entries) };
+  const response = await sessionManager.listThreads({
+    limit,
+    sortKey: "updated_at",
+    sortDirection: "desc",
+    archived: false,
+    useStateDbOnly: true,
+    searchTerm: url.searchParams.get("search")?.trim() || null
+  });
+  const entries = await Promise.all(response.data.map(threadToHistoryEntry));
+  return { root: "codex app-server thread/list", entries };
 }
 
 async function readCodexHistoryDetail(
-  url: URL
+  url: URL,
+  sessionManager: SessionManager
 ): Promise<LocalCodexHistoryDetailResponse> {
   const id = url.searchParams.get("id")?.trim();
-  const cwd = url.searchParams.get("cwd")?.trim();
-  const filePath = url.searchParams.get("filePath")?.trim();
-  if (!id || !cwd) {
-    throw new Error("Missing codex history id or cwd");
-  }
-
-  return readCodexHistoryDetailById({
-    id,
-    cwd,
-    ...(filePath ? { filePath } : {})
-  });
-}
-
-async function readCodexHistoryDetailById(input: {
-  id: string;
-  cwd: string;
-  filePath?: string;
-}): Promise<LocalCodexHistoryDetailResponse> {
-  const { filePath, id, cwd } = input;
-
-  const indexEntries = await readCodexSessionIndex();
-  const indexEntry = indexEntries.get(id) ?? null;
-  if (filePath) {
-    const resolvedFilePath = path.resolve(filePath);
-    if (!isCodexHistoryFilePath(resolvedFilePath)) {
-      throw new Error("Codex history filePath is outside the sessions store");
-    }
-    const entry = await readCodexHistoryEntry(resolvedFilePath, indexEntry);
-    if (entry?.id === id && entry.cwd === cwd) {
-      return {
-        entry,
-        messages: await readCodexHistoryMessages(resolvedFilePath)
-      };
-    }
-  }
-
-  const files = await collectCodexSessionFiles(codexHistoryRoots(), 2_000);
-  for (const filePath of files) {
-    const entry = await readCodexHistoryEntry(filePath, indexEntry);
-    if (!entry || entry.id !== id || entry.cwd !== cwd) {
-      continue;
-    }
-    return {
-      entry,
-      messages: await readCodexHistoryMessages(filePath)
-    };
-  }
-
-  throw new Error(`Codex history entry not found: ${id}`);
-}
-
-function isPathInside(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function codexSessionsRoot(): string {
-  return path.join(os.homedir(), ".codex", "sessions");
-}
-
-function codexArchivedSessionsRoot(): string {
-  return path.join(os.homedir(), ".codex", "archived_sessions");
-}
-
-function codexSessionIndexPath(): string {
-  return path.join(os.homedir(), ".codex", "session_index.jsonl");
-}
-
-function codexHistoryRoots(): string[] {
-  return [codexSessionsRoot(), codexArchivedSessionsRoot()];
-}
-
-function isCodexHistoryFilePath(candidate: string): boolean {
-  return codexHistoryRoots().some((root) => isPathInside(root, candidate));
-}
-
-function dedupeCodexHistoryEntries(
-  entries: LocalCodexHistoryEntry[]
-): LocalCodexHistoryEntry[] {
-  const seen = new Set<string>();
-  const unique: LocalCodexHistoryEntry[] = [];
-  for (const entry of entries) {
-    const key = codexHistoryKey(entry);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    unique.push(entry);
-  }
-  return unique;
-}
-
-function codexHistoryKey(entry: LocalCodexHistoryEntry): string {
-  return `${entry.id}::${entry.cwd}`;
-}
-
-async function readCodexSessionIndex(): Promise<Map<string, CodexSessionIndexEntry>> {
-  const index = new Map<string, CodexSessionIndexEntry>();
-  const filePath = codexSessionIndexPath();
-  const stream = createReadStream(filePath, { encoding: "utf8" });
-  const reader = createInterface({ input: stream, crlfDelay: Infinity });
-
-  try {
-    for await (const line of reader) {
-      let record: unknown;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (!isPlainRecord(record)) {
-        continue;
-      }
-      const id = readString(record, "id");
-      const title = readString(record, "thread_name");
-      const updatedAt = readString(record, "updated_at");
-      if (!id || !title || !updatedAt) {
-        continue;
-      }
-      const existing = index.get(id);
-      if (existing && Date.parse(existing.updatedAt) >= Date.parse(updatedAt)) {
-        continue;
-      }
-      index.set(id, { id, title, updatedAt });
-    }
-  } catch {
-    return index;
-  } finally {
-    reader.close();
-    stream.destroy();
-  }
-
-  return index;
-}
-
-async function collectCodexSessionFiles(
-  roots: string | string[],
-  limit: number
-): Promise<string[]> {
-  const files: string[] = [];
-  const rootList = Array.isArray(roots) ? roots : [roots];
-
-  async function walk(currentPath: string, depth: number): Promise<void> {
-    if (files.length >= limit || depth > 4) {
-      return;
-    }
-
-    let entries;
-    try {
-      entries = await readdir(currentPath, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    entries.sort((a, b) => b.name.localeCompare(a.name));
-
-    for (const entry of entries) {
-      if (files.length >= limit) {
-        return;
-      }
-      const entryPath = path.join(currentPath, entry.name);
-      if (entry.isDirectory()) {
-        await walk(entryPath, depth + 1);
-      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-        files.push(entryPath);
-      }
-    }
-  }
-
-  for (const root of rootList) {
-    if (files.length >= limit) {
-      break;
-    }
-    await walk(root, 0);
-  }
-  return files;
-}
-
-async function readCodexHistoryEntry(
-  filePath: string,
-  indexEntry: CodexSessionIndexEntry | null = null
-): Promise<LocalCodexHistoryEntry | null> {
-  const metadata = await readCodexHistoryFileMetadata(filePath);
-  return metadata ? buildCodexHistoryEntry(metadata, indexEntry) : null;
-}
-
-async function readCodexHistoryFileMetadata(
-  filePath: string
-): Promise<CodexHistoryFileMetadata | null> {
-  let id = "";
-  let cwd = "";
-  let title = "";
-  let createdAt = "";
-  let updatedAt = "";
-  let source = "Codex";
-  let lineCount = 0;
-  let hasUsefulHistoryContent = false;
-  const stream = createReadStream(filePath, { encoding: "utf8" });
-  const reader = createInterface({ input: stream, crlfDelay: Infinity });
-
-  try {
-    for await (const line of reader) {
-      lineCount += 1;
-      if (lineCount > 300) {
-        break;
-      }
-
-      let record: unknown;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (!isPlainRecord(record)) {
-        continue;
-      }
-
-      const timestamp = readString(record, "timestamp");
-      if (timestamp) {
-        updatedAt = timestamp;
-      }
-
-      if (record.type === "session_meta" && isPlainRecord(record.payload)) {
-        id = readString(record.payload, "id") ?? id;
-        cwd = readString(record.payload, "cwd") ?? cwd;
-        createdAt = readString(record.payload, "timestamp") ?? createdAt;
-        source =
-          readString(record.payload, "originator") ??
-          readString(record.payload, "source") ??
-          source;
-      }
-
-      title = title || extractHistoryTitle(record);
-      if (!hasUsefulHistoryContent && hasUsefulHistoryMessage(record, timestamp ?? "")) {
-        hasUsefulHistoryContent = true;
-      }
-
-      if (id && cwd && title) {
-        break;
-      }
-    }
-  } finally {
-    reader.close();
-    stream.destroy();
-  }
-
   if (!id) {
-    id = path.basename(filePath, ".jsonl").replace(/^rollout-[^-]+-/, "");
+    throw new Error("Missing codex thread id");
   }
-  if (!cwd) {
-    return null;
-  }
+  return readCodexHistoryDetailById(id, sessionManager);
+}
 
+async function readCodexHistoryDetailById(
+  id: string,
+  sessionManager: SessionManager
+): Promise<LocalCodexHistoryDetailResponse> {
+  const response = await sessionManager.readThread({
+    threadId: id,
+    includeTurns: true
+  });
   return {
-    id,
-    cwd,
-    title,
-    createdAt: createdAt || updatedAt || new Date().toISOString(),
-    updatedAt: updatedAt || createdAt || new Date().toISOString(),
-    source,
-    filePath,
-    hasUsefulHistoryContent
+    entry: await threadToHistoryEntry(response.thread),
+    messages: threadToHistoryMessages(response.thread)
   };
 }
 
-async function buildCodexHistoryEntry(
-  metadata: CodexHistoryFileMetadata,
-  indexEntry: CodexSessionIndexEntry | null
-): Promise<LocalCodexHistoryEntry | null> {
-  const title = chooseHistoryTitle(indexEntry?.title ?? "", metadata.title);
-  if (!title || (!metadata.hasUsefulHistoryContent && !indexEntry?.title)) {
+async function threadToHistoryEntry(
+  thread: CodexThread
+): Promise<LocalCodexHistoryEntry> {
+  const title = compactThreadTitle(thread.name ?? thread.preview ?? "");
+  return {
+    id: thread.id,
+    cwd: thread.cwd,
+    cwdExists: await directoryExists(thread.cwd),
+    title: title || "Untitled Codex thread",
+    createdAt: timestampToIso(thread.createdAt),
+    updatedAt: timestampToIso(thread.updatedAt),
+    source: formatThreadSource(thread.source)
+  };
+}
+
+function threadToHistoryMessages(
+  thread: CodexThread
+): LocalCodexHistoryMessage[] {
+  const messages: LocalCodexHistoryMessage[] = [];
+  for (const turn of thread.turns ?? []) {
+    const ts = timestampToIso(
+      turn.completedAt ?? turn.startedAt ?? thread.updatedAt ?? thread.createdAt
+    );
+    turn.items.forEach((item, index) => {
+      const message = threadItemToHistoryMessage(item, ts, `${turn.id}-${index}`);
+      if (message) {
+        messages.push(message);
+      }
+    });
+  }
+  return messages;
+}
+
+function threadItemToHistoryMessage(
+  item: CodexThreadItem,
+  ts: string,
+  generatedId: string
+): LocalCodexHistoryMessage | null {
+  const id = typeof item.id === "string" ? item.id : generatedId;
+  switch (item.type) {
+    case "userMessage":
+      return historyMessage(id, "user", extractUserMessageText(item.content), ts);
+    case "agentMessage":
+      return historyMessage(id, "assistant", item.text ?? "", ts);
+    case "commandExecution": {
+      const output = item.aggregatedOutput ? `\n\n${item.aggregatedOutput}` : "";
+      return historyMessage(id, "command", `$ ${item.command ?? ""}${output}`, ts);
+    }
+    case "fileChange":
+      return historyMessage(
+        id,
+        "diff",
+        JSON.stringify(item.changes ?? [], null, 2),
+        ts
+      );
+    case "plan":
+      return historyMessage(id, "system", item.text ?? "", ts);
+    case "reasoning":
+      return historyMessage(id, "system", (item.summary ?? []).join("\n"), ts);
+    default:
+      return null;
+  }
+}
+
+function historyMessage(
+  id: string,
+  role: LocalCodexHistoryMessage["role"],
+  text: string,
+  ts: string
+): LocalCodexHistoryMessage | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
     return null;
   }
-  const cwdExists = await directoryExists(metadata.cwd);
+  return { id, role, text: trimmed.slice(0, 16_000), ts };
+}
 
-  return {
-    id: metadata.id,
-    cwd: metadata.cwd,
-    cwdExists,
-    title,
-    createdAt: metadata.createdAt,
-    updatedAt: indexEntry?.updatedAt || metadata.updatedAt,
-    source: metadata.source,
-    filePath: metadata.filePath
-  };
+function extractUserMessageText(content: unknown): string {
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((item) => {
+      if (!isPlainObject(item)) {
+        return "";
+      }
+      if (typeof item.text === "string") {
+        return item.text;
+      }
+      if (typeof item.path === "string") {
+        return `[image] ${item.path}`;
+      }
+      if (typeof item.url === "string") {
+        return `[image] ${item.url}`;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function compactThreadTitle(input: string): string {
+  return input.replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+function timestampToIso(timestampSeconds: number | null | undefined): string {
+  if (typeof timestampSeconds !== "number" || !Number.isFinite(timestampSeconds)) {
+    return new Date().toISOString();
+  }
+  return new Date(timestampSeconds * 1000).toISOString();
 }
 
 async function directoryExists(candidatePath: string): Promise<boolean> {
@@ -882,294 +659,18 @@ async function directoryExists(candidatePath: string): Promise<boolean> {
   }
 }
 
-function isHiddenCodexHistoryEntry(entry: LocalCodexHistoryEntry): boolean {
-  const basename = path.basename(entry.cwd);
-  return entry.cwd.startsWith("/tmp/codex-goal-probe-") ||
-    basename.startsWith("codex-goal-probe-") ||
-    isAutomationPromptTitle(entry.title);
+function formatThreadSource(source: unknown): string {
+  if (typeof source === "string") {
+    return source;
+  }
+  if (isPlainObject(source)) {
+    return Object.keys(source)[0] ?? "unknown";
+  }
+  return "unknown";
 }
 
-async function readCodexHistoryMessages(
-  filePath: string
-): Promise<LocalCodexHistoryMessage[]> {
-  const messages: LocalCodexHistoryMessage[] = [];
-  let lineCount = 0;
-  const stream = createReadStream(filePath, { encoding: "utf8" });
-  const reader = createInterface({ input: stream, crlfDelay: Infinity });
-
-  try {
-    for await (const line of reader) {
-      lineCount += 1;
-
-      let record: unknown;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (!isPlainRecord(record)) {
-        continue;
-      }
-
-      const ts = readString(record, "timestamp") ?? "";
-      const extracted = extractHistoryMessage(record, ts);
-      if (!extracted) {
-        continue;
-      }
-      const historyText = normalizeHistoryUserText(extracted.text);
-      const text = compactMessageText(historyText);
-      if (!text || !isUsableHistoryMessage(text)) {
-        continue;
-      }
-      messages.push({
-        id: `${path.basename(filePath, ".jsonl")}-${lineCount}`,
-        role: extracted.role,
-        text,
-        ts
-      });
-      if (messages.length > 240) {
-        messages.shift();
-      }
-    }
-  } finally {
-    reader.close();
-    stream.destroy();
-  }
-
-  return messages;
-}
-
-function extractHistoryMessage(
-  record: Record<string, unknown>,
-  ts: string
-): { role: LocalCodexHistoryMessage["role"]; text: string; ts: string } | null {
-  if (record.type === "event_msg" && isPlainRecord(record.payload)) {
-    const eventType = readString(record.payload, "type");
-    if (eventType === "user_message") {
-      return {
-        role: "user",
-        text: readString(record.payload, "message") ?? "",
-        ts
-      };
-    }
-    if (eventType === "agent_message") {
-      return {
-        role: "assistant",
-        text: readString(record.payload, "message") ?? "",
-        ts
-      };
-    }
-    if (eventType === "command_output") {
-      return {
-        role: "command",
-        text: readString(record.payload, "output") ?? "",
-        ts
-      };
-    }
-  }
-
-  if (record.type !== "response_item" || !isPlainRecord(record.payload)) {
-    return null;
-  }
-  if (record.payload.type !== "message") {
-    return null;
-  }
-  const role = record.payload.role;
-  if (role !== "user" && role !== "assistant") {
-    return null;
-  }
-  return {
-    role,
-    text: extractMessageContent(record.payload.content),
-    ts
-  };
-}
-
-function extractMessageContent(content: unknown): string {
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .map((item) => {
-      if (!isPlainRecord(item)) {
-        return "";
-      }
-      return (
-        readString(item, "text") ??
-        readString(item, "input_text") ??
-        readString(item, "output_text") ??
-        ""
-      );
-    })
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function extractHistoryTitle(record: Record<string, unknown>): string {
-  if (record.type === "event_msg" && isPlainRecord(record.payload)) {
-    const eventType = readString(record.payload, "type");
-    if (eventType === "user_message") {
-      const message = readString(record.payload, "message") ?? "";
-      const title = normalizeHistoryUserText(message);
-      return isUsableHistoryTitle(title) ? title : "";
-    }
-  }
-
-  if (record.type !== "response_item" || !isPlainRecord(record.payload)) {
-    return "";
-  }
-  if (record.payload.type !== "message" || record.payload.role !== "user") {
-    return "";
-  }
-  const content = record.payload.content;
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  for (const item of content) {
-    if (!isPlainRecord(item)) {
-      continue;
-    }
-    const text = readString(item, "text") ?? readString(item, "input_text");
-    const title = normalizeHistoryUserText(text ?? "");
-    if (title && isUsableHistoryTitle(title)) {
-      return title;
-    }
-  }
-  return "";
-}
-
-function normalizeHistoryUserText(input: string): string {
-  const trimmed = stripSyntheticTitleInstruction(input).trim();
-  if (!trimmed) {
-    return "";
-  }
-  const missionTitle = extractMissionTitle(trimmed);
-  if (missionTitle) {
-    return missionTitle;
-  }
-  const explicitRequest = extractMarkedUserRequest(trimmed);
-  if (explicitRequest) {
-    return explicitRequest;
-  }
-  if (isCodexInjectedContext(trimmed)) {
-    return "";
-  }
-  return trimmed;
-}
-
-function chooseHistoryTitle(primary: string, fallback: string): string {
-  for (const candidate of [primary, fallback]) {
-    const normalized = normalizeHistoryUserText(candidate);
-    if (
-      normalized &&
-      isUsableHistoryTitle(normalized) &&
-      !isAutomationPromptTitle(normalized)
-    ) {
-      return compactTitle(normalized);
-    }
-  }
-  return "";
-}
-
-function stripSyntheticTitleInstruction(input: string): string {
-  const markers = [
-    "\n\nBased on this message, call functions.happy__change_title",
-    "Based on this message, call functions.happy__change_title"
-  ];
-  for (const marker of markers) {
-    const index = input.indexOf(marker);
-    if (index !== -1) {
-      return input.slice(0, index);
-    }
-  }
-  return input;
-}
-
-function extractMissionTitle(input: string): string {
-  const match = input.match(/^Mission title:\s*(.+)$/im);
-  return match ? match[1]?.trim() ?? "" : "";
-}
-
-function extractMarkedUserRequest(input: string): string {
-  const markers = [
-    "## My request for Codex:",
-    "# My request for Codex:",
-    "My request for Codex:",
-    "## 用户请求:",
-    "用户请求:"
-  ];
-  for (const marker of markers) {
-    const index = input.indexOf(marker);
-    if (index === -1) {
-      continue;
-    }
-    return input.slice(index + marker.length).trim();
-  }
-  return "";
-}
-
-function isCodexInjectedContext(input: string): boolean {
-  const normalized = input.replace(/\r\n/g, "\n").trim();
-  const lower = normalized.toLowerCase();
-  return (
-    normalized.startsWith("# AGENTS.md instructions for ") ||
-    normalized.startsWith("<environment_context>") ||
-    normalized.startsWith("<INSTRUCTIONS>") ||
-    lower.includes("codexbridge global instructions") ||
-    lower.includes("<environment_context>") ||
-    lower.includes("</instructions>")
-  );
-}
-
-function isUsableHistoryTitle(input: string): boolean {
-  const trimmed = input.trim();
-  return Boolean(trimmed) && !trimmed.startsWith("<");
-}
-
-function isAutomationPromptTitle(title: string): boolean {
-  const trimmed = title.trim();
-  return (
-    trimmed.startsWith("# Codex Native API Loop Prompt") ||
-    trimmed.startsWith("# Codex Gateway Loop Prompt") ||
-    trimmed.startsWith("# CodexBridge Loop Prompt") ||
-    trimmed.startsWith("你正在执行 CodexBridge 后台 Agent 任务")
-  );
-}
-
-function compactTitle(input: string): string {
-  return input.replace(/\s+/g, " ").trim().slice(0, 120);
-}
-
-function compactMessageText(input: string): string {
-  return input.replace(/\n{3,}/g, "\n\n").trim().slice(0, 16_000);
-}
-
-function hasUsefulHistoryMessage(
-  record: Record<string, unknown>,
-  ts: string
-): boolean {
-  const extracted = extractHistoryMessage(record, ts);
-  if (!extracted) {
-    return false;
-  }
-  const text =
-    extracted.role === "user"
-      ? normalizeHistoryUserText(extracted.text)
-      : extracted.text;
-  return Boolean(compactMessageText(text)) && isUsableHistoryMessage(text);
-}
-
-function isUsableHistoryMessage(input: string): boolean {
-  const trimmed = input.trim();
-  return Boolean(trimmed) && !trimmed.startsWith("<") && !isCodexInjectedContext(trimmed);
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readString(record: Record<string, unknown>, key: string): string | null {
-  return typeof record[key] === "string" ? record[key] : null;
 }
 
 async function health(options: LocalServerOptions): Promise<{

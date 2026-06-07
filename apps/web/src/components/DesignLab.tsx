@@ -1216,7 +1216,7 @@ function ProjectSheet(props: {
 
         <div className="cn-path-label">/Users/ganxing/Dev</div>
         <div className="cn-folder-list cn-real-folder-list">
-          {["CodexNext", "CodexBridge", "dailywork", "CLIProxyAPI", "agent-social-publisher"].map((folder) => (
+          {["CodexNext", "dailywork", "CLIProxyAPI", "agent-social-publisher", "local-tools"].map((folder) => (
             <button
               key={folder}
               className={

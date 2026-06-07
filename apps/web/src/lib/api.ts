@@ -65,14 +65,13 @@ export function listCodexHistory(
 
 export function getCodexHistoryDetail(
   connection: AgentConnection,
-  input: { id: string; cwd: string; filePath?: string }
+  input: { id: string; cwd?: string }
 ): Promise<LocalCodexHistoryDetailResponse> {
   const query = new URLSearchParams({
-    id: input.id,
-    cwd: input.cwd
+    id: input.id
   });
-  if (input.filePath) {
-    query.set("filePath", input.filePath);
+  if (input.cwd) {
+    query.set("cwd", input.cwd);
   }
   return agentFetch(connection, `/api/codex-history/detail?${query.toString()}`);
 }
@@ -81,8 +80,7 @@ export function resumeCodexHistory(
   connection: AgentConnection,
   input: {
     id: string;
-    cwd: string;
-    filePath?: string;
+    cwd?: string;
     model?: string | null;
     permissionMode: LocalPermissionMode;
     reasoningEffort?: LocalReasoningEffort | null;

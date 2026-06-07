@@ -1,7 +1,4 @@
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AppServerNotification,
@@ -268,300 +265,26 @@ describe("local HTTP server guards", () => {
     await handle.close();
   });
 
-  it("returns Codex history details from the local sessions store", async () => {
-    const originalHome = process.env.HOME;
-    const tempHome = await mkdtemp(path.join(os.tmpdir(), "codexnext-home-"));
-    process.env.HOME = tempHome;
-    const missingProjectPath = path.join(tempHome, "missing-project");
-    const sessionDir = path.join(tempHome, ".codex", "sessions", "2026", "06", "06");
-    await mkdir(sessionDir, { recursive: true });
-    await writeFile(
-      path.join(tempHome, ".codex", "session_index.jsonl"),
-      [
-        JSON.stringify({
-          id: "history_1",
-          thread_name: "官方 Codex 标题",
-          updated_at: "2026-06-06T00:10:00.000Z"
-        }),
-        JSON.stringify({
-          id: "mission_1",
-          thread_name: "# AGENTS.md instructions for /tmp/CodexBridge",
-          updated_at: "2026-06-06T03:10:00.000Z"
-        })
-      ].join("\n")
-    );
-    const sessionFile = path.join(
-      sessionDir,
-      "rollout-2026-06-06T00-00-00-history_1.jsonl"
-    );
-    await writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          timestamp: "2026-06-06T00:00:00.000Z",
-          type: "session_meta",
-          payload: {
-            id: "history_1",
-            cwd: missingProjectPath,
-            timestamp: "2026-06-06T00:00:00.000Z",
-            originator: "Codex Desktop"
-          }
-        }),
-        JSON.stringify({
-          timestamp: "2026-06-06T00:00:00.500Z",
-          type: "event_msg",
-          payload: {
-            type: "user_message",
-            message: [
-              `# AGENTS.md instructions for ${missingProjectPath}`,
-              "",
-              "<INSTRUCTIONS>",
-              "# CodexBridge Global Instructions",
-              "These are injected instructions and should not become a title.",
-              "</INSTRUCTIONS>",
-              "",
-              "<environment_context>",
-              `<cwd>${missingProjectPath}</cwd>`,
-              "</environment_context>"
-            ].join("\n")
-          }
-        }),
-        JSON.stringify({
-          timestamp: "2026-06-06T00:00:01.000Z",
-          type: "event_msg",
-          payload: {
-            type: "user_message",
-            message: [
-              "检查这个项目",
-              "",
-              "Based on this message, call functions.happy__change_title to change chat session title that would represent the current task."
-            ].join("\n")
-          }
-        }),
-        JSON.stringify({
-          timestamp: "2026-06-06T00:00:02.000Z",
-          type: "event_msg",
-          payload: { type: "agent_message", message: "我会先查看文件结构。" }
-        })
-      ].join("\n")
-    );
-    await writeFile(
-      path.join(sessionDir, "rollout-2026-06-06T01-00-00-probe_1.jsonl"),
-      [
-        JSON.stringify({
-          timestamp: "2026-06-06T01:00:00.000Z",
-          type: "session_meta",
-          payload: {
-            id: "probe_1",
-            cwd: "/tmp/codex-goal-probe-hidden",
-            timestamp: "2026-06-06T01:00:00.000Z",
-            originator: "Codex Desktop"
-          }
-        }),
-        JSON.stringify({
-          timestamp: "2026-06-06T01:00:01.000Z",
-          type: "event_msg",
-          payload: { type: "user_message", message: "Goal A" }
-        })
-      ].join("\n")
-    );
-    await writeFile(
-      path.join(sessionDir, "rollout-2026-06-06T02-00-00-empty_1.jsonl"),
-      [
-        JSON.stringify({
-          timestamp: "2026-06-06T02:00:00.000Z",
-          type: "session_meta",
-          payload: {
-            id: "empty_1",
-            cwd: "/tmp/CodexBridge",
-            timestamp: "2026-06-06T02:00:00.000Z",
-            originator: "codexbridge"
-          }
-        }),
-        JSON.stringify({
-          timestamp: "2026-06-06T02:00:01.000Z",
-          type: "event_msg",
-          payload: { type: "task_complete" }
-        })
-      ].join("\n")
-    );
-    await writeFile(
-      path.join(sessionDir, "rollout-2026-06-06T03-00-00-mission_1.jsonl"),
-      [
-        JSON.stringify({
-          timestamp: "2026-06-06T03:00:00.000Z",
-          type: "session_meta",
-          payload: {
-            id: "mission_1",
-            cwd: "/tmp/CodexBridge",
-            timestamp: "2026-06-06T03:00:00.000Z",
-            originator: "codexbridge"
-          }
-        }),
-        JSON.stringify({
-          timestamp: "2026-06-06T03:00:01.000Z",
-          type: "event_msg",
-          payload: {
-            type: "user_message",
-            message: [
-              "你正在执行 CodexBridge 后台 Agent 任务。",
-              "Mission ID: 123",
-              "Mission title: 实现稳定的 package API",
-              "Workspace: /tmp/CodexBridge"
-            ].join("\n")
-          }
-        })
-      ].join("\n")
-    );
-    await writeFile(
-      path.join(sessionDir, "rollout-2026-06-06T04-00-00-loop_1.jsonl"),
-      [
-        JSON.stringify({
-          timestamp: "2026-06-06T04:00:00.000Z",
-          type: "session_meta",
-          payload: {
-            id: "loop_1",
-            cwd: "/tmp/CodexBridge",
-            timestamp: "2026-06-06T04:00:00.000Z",
-            originator: "codex_exec"
-          }
-        }),
-        JSON.stringify({
-          timestamp: "2026-06-06T04:00:01.000Z",
-          type: "event_msg",
-          payload: {
-            type: "user_message",
-            message: "# Codex Native API Loop Prompt\n请继续推进自动化循环。"
-          }
-        })
-      ].join("\n")
-    );
-
-    const handle = createLocalServer({
-      host: "127.0.0.1",
-      port: 0,
-      webOrigin: "http://127.0.0.1:3000",
-      token: "secret",
-      approvalTimeoutMs: 1_000,
-      codexBin: "codex",
-      clientFactory: () => new FakeCodexClient()
-    });
-    const address = await listen(handle, "127.0.0.1", 0);
-    const base = `http://${address.address}:${address.port}`;
-
-    try {
-      const list = await fetch(`${base}/api/codex-history?token=secret`);
-      const listBody = await list.json() as {
-        entries: Array<{
-          cwdExists?: boolean;
-          filePath: string;
-          id: string;
-          cwd: string;
-          title: string;
-        }>;
-      };
-      expect(listBody.entries.find((entry) => entry.id === "history_1")).toMatchObject({
-        id: "history_1",
-        cwd: missingProjectPath,
-        cwdExists: false,
-        title: "官方 Codex 标题",
-        filePath: sessionFile
-      });
-      expect(listBody.entries).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ id: "probe_1" })])
-      );
-      expect(listBody.entries).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ id: "empty_1" })])
-      );
-      expect(listBody.entries).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ id: "loop_1" })])
-      );
-      expect(listBody.entries).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "mission_1",
-            title: "实现稳定的 package API"
-          })
-        ])
-      );
-
-      const detailQuery = new URLSearchParams({
-        token: "secret",
-        id: "history_1",
-        cwd: missingProjectPath,
-        filePath: sessionFile
-      });
-      const detail = await fetch(
-        `${base}/api/codex-history/detail?${detailQuery.toString()}`
-      );
-      const detailBody = await detail.json() as {
-        messages: Array<{ role: string; text: string }>;
-      };
-      expect(detail.status).toBe(200);
-      expect(detailBody.messages).toMatchObject([
-        { role: "user", text: "检查这个项目" },
-        { role: "assistant", text: "我会先查看文件结构。" }
-      ]);
-
-      const outsideFile = path.join(tempHome, "outside.jsonl");
-      await writeFile(outsideFile, "");
-      const outsideQuery = new URLSearchParams({
-        token: "secret",
-        id: "history_1",
-        cwd: missingProjectPath,
-        filePath: outsideFile
-      });
-      const outside = await fetch(
-        `${base}/api/codex-history/detail?${outsideQuery.toString()}`
-      );
-      const outsideBody = await outside.json() as { error?: string };
-      expect(outside.status).toBe(400);
-      expect(outsideBody.error).toContain("outside the sessions store");
-    } finally {
-      await handle.close();
-      if (originalHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = originalHome;
-      }
-      await rm(tempHome, { recursive: true, force: true });
-    }
-  });
-
-  it("resumes Codex history records through the local HTTP API", async () => {
-    const originalHome = process.env.HOME;
-    const tempHome = await mkdtemp(path.join(os.tmpdir(), "codexnext-home-"));
-    const projectDir = path.join(tempHome, "project");
-    process.env.HOME = tempHome;
-    await mkdir(projectDir, { recursive: true });
-    const sessionDir = path.join(tempHome, ".codex", "sessions", "2026", "06", "06");
-    await mkdir(sessionDir, { recursive: true });
-    const sessionFile = path.join(
-      sessionDir,
-      "rollout-2026-06-06T00-00-00-history_1.jsonl"
-    );
-    await writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          timestamp: "2026-06-06T00:00:00.000Z",
-          type: "session_meta",
-          payload: {
-            id: "history_1",
-            cwd: projectDir,
-            timestamp: "2026-06-06T00:00:00.000Z",
-            originator: "Codex Desktop"
-          }
-        }),
-        JSON.stringify({
-          timestamp: "2026-06-06T00:00:01.000Z",
-          type: "event_msg",
-          payload: { type: "user_message", message: "继续这个项目" }
-        })
-      ].join("\n")
-    );
-
+  it("lists Codex threads through app-server thread/list", async () => {
     const fake = new FakeCodexClient();
+    fake.threadListResponse = {
+      data: [
+        {
+          id: "thread_1",
+          sessionId: "session_1",
+          preview: "检查这个项目",
+          createdAt: 1_786_000_000,
+          updatedAt: 1_786_000_060,
+          cwd: process.cwd(),
+          source: "cli",
+          name: "官方 Codex 标题",
+          turns: []
+        }
+      ],
+      nextCursor: null,
+      backwardsCursor: null
+    };
+
     const handle = createLocalServer({
       host: "127.0.0.1",
       port: 0,
@@ -575,13 +298,105 @@ describe("local HTTP server guards", () => {
     const base = `http://${address.address}:${address.port}`;
 
     try {
+      const list = await fetch(`${base}/api/codex-history?token=secret`);
+      const listBody = await list.json() as {
+        entries: Array<{
+          cwdExists?: boolean;
+          id: string;
+          cwd: string;
+          title: string;
+        }>;
+      };
+      expect(fake.threadListParams[0]).toMatchObject({
+        archived: false,
+        sortDirection: "desc",
+        sortKey: "updated_at",
+        useStateDbOnly: true
+      });
+      expect(listBody.entries).toEqual([
+        expect.objectContaining({
+          id: "thread_1",
+          cwd: process.cwd(),
+          cwdExists: true,
+          title: "官方 Codex 标题"
+        })
+      ]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("reads and resumes Codex threads through app-server thread APIs", async () => {
+    const fake = new FakeCodexClient();
+    fake.threadReadResponse = {
+      thread: {
+        id: "thread_1",
+        sessionId: "session_1",
+        preview: "继续这个项目",
+        createdAt: 1_786_000_000,
+        updatedAt: 1_786_000_060,
+        cwd: process.cwd(),
+        source: "cli",
+        name: "官方 Codex 标题",
+        turns: [
+          {
+            id: "turn_1",
+            startedAt: 1_786_000_010,
+            completedAt: 1_786_000_020,
+            items: [
+              {
+                id: "item_user",
+                type: "userMessage",
+                content: [{ type: "text", text: "继续这个项目" }]
+              },
+              {
+                id: "item_agent",
+                type: "agentMessage",
+                text: "我会先查看文件结构。"
+              }
+            ]
+          }
+        ]
+      }
+    };
+    const handle = createLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      webOrigin: "http://127.0.0.1:3000",
+      token: "secret",
+      approvalTimeoutMs: 1_000,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+    const address = await listen(handle, "127.0.0.1", 0);
+    const base = `http://${address.address}:${address.port}`;
+
+    try {
+      const detailQuery = new URLSearchParams({
+        token: "secret",
+        id: "thread_1"
+      });
+      const detail = await fetch(
+        `${base}/api/codex-history/detail?${detailQuery.toString()}`
+      );
+      const detailBody = await detail.json() as {
+        messages: Array<{ role: string; text: string }>;
+      };
+      expect(detail.status).toBe(200);
+      expect(fake.threadReadParams[0]).toEqual({
+        threadId: "thread_1",
+        includeTurns: true
+      });
+      expect(detailBody.messages).toMatchObject([
+        { role: "user", text: "继续这个项目" },
+        { role: "assistant", text: "我会先查看文件结构。" }
+      ]);
+
       const response = await fetch(`${base}/api/codex-history/resume?token=secret`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          id: "history_1",
-          cwd: projectDir,
-          filePath: sessionFile,
+          id: "thread_1",
           permissionMode: "request-approval"
         })
       });
@@ -591,20 +406,14 @@ describe("local HTTP server guards", () => {
       };
 
       expect(response.status).toBe(201);
-      expect(body.session.threadId).toBe("history_1");
+      expect(body.session.threadId).toBe("thread_1");
       expect(body.history.messages[0]?.text).toBe("继续这个项目");
       expect(fake.threadResumeParams[0]).toMatchObject({
-        threadId: "history_1",
-        cwd: projectDir
+        threadId: "thread_1",
+        cwd: process.cwd()
       });
     } finally {
       await handle.close();
-      if (originalHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = originalHome;
-      }
-      await rm(tempHome, { recursive: true, force: true });
     }
   });
 });
@@ -624,7 +433,25 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
   public threadStartParams: unknown[] = [];
   public threadResumeParams: unknown[] = [];
   public threadUnarchiveParams: unknown[] = [];
+  public threadListParams: unknown[] = [];
+  public threadReadParams: unknown[] = [];
   public failNextResumeAsArchived = false;
+  public threadListResponse: Awaited<ReturnType<ManagedCodexClient["threadList"]>> = {
+    data: [],
+    nextCursor: null,
+    backwardsCursor: null
+  };
+  public threadReadResponse: Awaited<ReturnType<ManagedCodexClient["threadRead"]>> = {
+    thread: {
+      id: "thread_1",
+      sessionId: "session_1",
+      preview: "",
+      createdAt: 1,
+      updatedAt: 1,
+      cwd: process.cwd(),
+      turns: []
+    }
+  };
 
   public initialize = async () => ({
     userAgent: "fake",
@@ -667,6 +494,20 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
   ) => {
     this.threadUnarchiveParams.push(params);
     return {};
+  };
+
+  public threadList = async (
+    params: Parameters<ManagedCodexClient["threadList"]>[0]
+  ) => {
+    this.threadListParams.push(params);
+    return this.threadListResponse;
+  };
+
+  public threadRead = async (
+    params: Parameters<ManagedCodexClient["threadRead"]>[0]
+  ) => {
+    this.threadReadParams.push(params);
+    return this.threadReadResponse;
   };
 
   public setGoal = async () => ({
