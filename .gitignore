@@ -4,6 +4,8 @@ dist/
 coverage/
 .turbo/
 .DS_Store
+.telegram-inbox/
+tmp/
 *.log
 .env
 .env.*

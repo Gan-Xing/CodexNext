@@ -39,12 +39,8 @@ export function GoalPanel(props: {
       </div>
 
       <div className={props.goal ? "goal-summary active" : "goal-summary"}>
-        <strong>{props.goal?.objective ?? "No active goal"}</strong>
-        <div className="meta">
-          {props.goal
-            ? `${props.goal.status} · ${props.goal.tokensUsed} tokens used`
-            : "Start one from New Session or set it here."}
-        </div>
+        <strong>{props.goal?.objective ?? "暂无 Goal"}</strong>
+        {props.goal ? <div className="meta">{props.goal.status}</div> : null}
       </div>
 
       <div className="stack">
@@ -53,7 +49,7 @@ export function GoalPanel(props: {
           <textarea
             value={objective}
             onChange={(event) => setObjective(event.target.value)}
-            placeholder="Keep this thread pointed at a durable outcome."
+            placeholder="目标"
             disabled={props.disabled}
           />
         </label>
@@ -63,7 +59,7 @@ export function GoalPanel(props: {
             inputMode="numeric"
             value={tokenBudget}
             onChange={(event) => setTokenBudget(event.target.value)}
-            placeholder="optional"
+            placeholder="可选"
             disabled={props.disabled}
           />
         </label>

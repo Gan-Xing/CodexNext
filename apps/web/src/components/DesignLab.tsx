@@ -1092,7 +1092,6 @@ function ProjectSheet(props: {
         </div>
 
         <div className="cn-permission-list-real">
-          <p>权限模式：请求批准</p>
           {[
             ["hand", "请求批准", "编辑外部文件和使用互联网时始终询问"],
             ["shield", "替我审批", "仅对检测到的风险操作请求批准"],
@@ -1107,7 +1106,6 @@ function ProjectSheet(props: {
               <CodexIcon name={icon as CodexIconName} />
               <span>
                 <strong>{label}</strong>
-                <small>{description}</small>
               </span>
               {label === "请求批准" ? (
                 <em>
@@ -1119,17 +1117,14 @@ function ProjectSheet(props: {
         </div>
 
         <details className="cn-goal-advanced">
-          <summary>Goal（可选，高级）</summary>
+          <summary>Goal（可选）</summary>
           <label>
             Objective
-            <textarea
-              readOnly
-              placeholder="如果这次新会话需要 Goal，再在这里设置。普通聊天不用填。"
-            />
+            <textarea readOnly placeholder="目标" />
           </label>
           <label>
             Token Budget
-            <input inputMode="numeric" placeholder="optional" readOnly />
+            <input inputMode="numeric" placeholder="可选" readOnly />
           </label>
         </details>
       </div>
@@ -1244,12 +1239,11 @@ function ApprovalModal() {
   return (
     <div className="cn-approval-backdrop">
       <div className="cn-inline-approval">
-        <strong>Codex 请求批准</strong>
+        <strong>需要批准</strong>
         <span>pnpm test</span>
       </div>
       <section className="cn-approval-modal">
-        <h2>Codex 请求批准</h2>
-        <p>命令将读取并运行本地项目测试。</p>
+        <h2>需要批准</h2>
         <pre>{`cwd: /Users/ganxing/Dev/CodexNext\n$ pnpm test`}</pre>
         <div className="cn-approval-actions">
           <button className="cn-primary-button" type="button">

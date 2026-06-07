@@ -530,7 +530,8 @@ export const LocalStartSessionSchema = z.object({
     .optional(),
   tokenBudget: z.number().int().positive().nullable().optional(),
   initialGoal: z.string().nullable().optional(),
-  initialMessage: z.string().nullable().optional()
+  initialMessage: z.string().nullable().optional(),
+  clientMessageId: z.string().min(1).optional()
 });
 
 export type LocalStartSessionInput = z.infer<typeof LocalStartSessionSchema>;
@@ -563,7 +564,8 @@ export const LocalResumeSessionSchema = z.object({
 export type LocalResumeSessionInput = z.infer<typeof LocalResumeSessionSchema>;
 
 export const LocalSendMessageSchema = z.object({
-  text: z.string().min(1)
+  text: z.string().min(1),
+  clientMessageId: z.string().min(1).optional()
 });
 
 export type LocalSendMessageInput = z.infer<typeof LocalSendMessageSchema>;

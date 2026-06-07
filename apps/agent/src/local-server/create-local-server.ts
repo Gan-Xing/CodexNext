@@ -594,10 +594,6 @@ function threadItemToHistoryMessage(
         JSON.stringify(item.changes ?? [], null, 2),
         ts
       );
-    case "plan":
-      return historyMessage(id, "system", item.text ?? "", ts);
-    case "reasoning":
-      return historyMessage(id, "system", (item.summary ?? []).join("\n"), ts);
     default:
       return null;
   }

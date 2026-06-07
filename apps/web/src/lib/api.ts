@@ -1,11 +1,15 @@
 import type {
+  LocalApprovalDecision,
   LocalCodexHistoryDetailResponse,
   LocalCodexHistoryResponse,
   LocalDirectoryListResponse,
+  LocalEvent,
   LocalHealthResponse,
   LocalPermissionMode,
   LocalReasoningEffort,
   LocalResumeSessionResponse,
+  LocalSendMessageInput,
+  LocalStartSessionInput,
   LocalSessionSummary
 } from "./types";
 
@@ -40,6 +44,13 @@ export async function agentFetch<T>(
 
 export function health(connection: AgentConnection): Promise<LocalHealthResponse> {
   return agentFetch<LocalHealthResponse>(connection, "/api/health");
+}
+
+export function replayEvents(
+  connection: AgentConnection,
+  after = 0
+): Promise<{ events: LocalEvent[] }> {
+  return agentFetch(connection, `/api/events?after=${after}`);
 }
 
 export function listSessions(
@@ -89,5 +100,48 @@ export function resumeCodexHistory(
   return agentFetch(connection, "/api/codex-history/resume", {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+export function createSession(
+  connection: AgentConnection,
+  input: LocalStartSessionInput
+): Promise<{ session: LocalSessionSummary }> {
+  return agentFetch(connection, "/api/sessions", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function sendSessionMessage(
+  connection: AgentConnection,
+  sessionId: string,
+  input: LocalSendMessageInput
+): Promise<{ mode: "turn-start" | "steer"; turnId: string }> {
+  return agentFetch(connection, `/api/sessions/${sessionId}/messages`, {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function interruptSessionTurn(
+  connection: AgentConnection,
+  sessionId: string,
+  turnId: string
+): Promise<{ turnId: string }> {
+  return agentFetch(connection, `/api/sessions/${sessionId}/turns/${turnId}/interrupt`, {
+    method: "POST",
+    body: "{}"
+  });
+}
+
+export function resolveApproval(
+  connection: AgentConnection,
+  approvalId: string,
+  decision: LocalApprovalDecision
+): Promise<unknown> {
+  return agentFetch(connection, `/api/approvals/${approvalId}/decision`, {
+    method: "POST",
+    body: JSON.stringify({ decision })
   });
 }

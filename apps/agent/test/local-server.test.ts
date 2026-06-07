@@ -4,11 +4,14 @@ import type {
   AppServerNotification,
   ApprovalResponse,
   JsonRpcRequest,
-  LocalApprovalDecision
+  LocalApprovalDecision,
+  LocalEvent,
+  LocalSendMessageInput
 } from "@codexnext/protocol";
 import {
   CodexServerRequestMethod,
-  LocalEventType
+  LocalEventType,
+  LocalSendMessageSchema
 } from "@codexnext/protocol";
 import { isAllowedOrigin, isAuthorized } from "../src/local-server/auth.js";
 import { ApprovalBridge } from "../src/local-server/approval-bridge.js";
@@ -135,6 +138,102 @@ describe("SessionManager messages", () => {
     expect(second.mode).toBe("steer");
     expect(fake.turnStartCalls).toBe(1);
     expect(fake.turnSteerCalls).toBe(1);
+  });
+
+  it("accepts clientMessageId in the local send schema", () => {
+    const parsed = LocalSendMessageSchema.parse({
+      text: "hello",
+      clientMessageId: "client_123"
+    });
+
+    expect(parsed).toEqual({
+      text: "hello",
+      clientMessageId: "client_123"
+    });
+  });
+
+  it("echoes clientMessageId on chat.user and steer accepted events", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    const session = await manager.startSession({
+      cwd: process.cwd(),
+      permissionMode: "request-approval"
+    });
+
+    await manager.startTurn(session.sessionId, {
+      text: "first",
+      clientMessageId: "msg_turn_start"
+    });
+    await manager.steerTurn(session.sessionId, "turn_1", {
+      text: "second",
+      clientMessageId: "msg_steer"
+    });
+
+    const chatUserEvents = store
+      .all()
+      .filter((event) => event.type === LocalEventType.ChatUser);
+    const steerAccepted = store
+      .all()
+      .find((event) => event.type === LocalEventType.TurnSteerAccepted);
+
+    expect(eventPayload(chatUserEvents[0])).toMatchObject({
+      text: "first",
+      clientMessageId: "msg_turn_start"
+    });
+    expect(eventPayload(chatUserEvents[1])).toMatchObject({
+      text: "second",
+      clientMessageId: "msg_steer"
+    });
+    expect(eventPayload(steerAccepted)).toMatchObject({
+      text: "second",
+      clientMessageId: "msg_steer"
+    });
+  });
+
+  it("emits agent.error with clientMessageId when turn/steer fails", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    fake.failNextTurnSteer = new Error("steer failed");
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    const session = await manager.startSession({
+      cwd: process.cwd(),
+      permissionMode: "request-approval"
+    });
+    await manager.startTurn(session.sessionId, {
+      text: "first",
+      clientMessageId: "msg_first"
+    });
+
+    await expect(
+      manager.steerTurn(session.sessionId, "turn_1", {
+        text: "broken",
+        clientMessageId: "msg_failed"
+      })
+    ).rejects.toThrow("steer failed");
+
+    const errorEvent = store
+      .all()
+      .find((event) => event.type === LocalEventType.AgentError);
+
+    expect(eventPayload(errorEvent)).toMatchObject({
+      message: "steer failed",
+      clientMessageId: "msg_failed"
+    });
   });
 
   it("maps Codex permission modes to thread/start params", async () => {
@@ -430,12 +529,15 @@ describe("goal-smoke hardening", () => {
 class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
   public turnStartCalls = 0;
   public turnSteerCalls = 0;
+  public lastTurnStartInput: LocalSendMessageInput | null = null;
   public threadStartParams: unknown[] = [];
   public threadResumeParams: unknown[] = [];
   public threadUnarchiveParams: unknown[] = [];
   public threadListParams: unknown[] = [];
   public threadReadParams: unknown[] = [];
   public failNextResumeAsArchived = false;
+  public failNextTurnStart: Error | null = null;
+  public failNextTurnSteer: Error | null = null;
   public threadListResponse: Awaited<ReturnType<ManagedCodexClient["threadList"]>> = {
     data: [],
     nextCursor: null,
@@ -529,11 +631,21 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
 
   public turnStart = async () => {
     this.turnStartCalls += 1;
+    if (this.failNextTurnStart) {
+      const error = this.failNextTurnStart;
+      this.failNextTurnStart = null;
+      throw error;
+    }
     return { turn: { id: "turn_1", status: "inProgress" as const } };
   };
 
   public turnSteer = async () => {
     this.turnSteerCalls += 1;
+    if (this.failNextTurnSteer) {
+      const error = this.failNextTurnSteer;
+      this.failNextTurnSteer = null;
+      throw error;
+    }
     return {};
   };
 
@@ -551,4 +663,9 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
 
 function mockRequest(headers: Record<string, string> = {}) {
   return { headers } as unknown as Parameters<typeof isAuthorized>[1];
+}
+
+function eventPayload(event: LocalEvent | undefined): Record<string, unknown> {
+  expect(event?.payload).toBeTruthy();
+  return event?.payload as Record<string, unknown>;
 }

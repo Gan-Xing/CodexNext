@@ -29,13 +29,13 @@ export function ChatPanel(props: {
           <h1>{shortPath(props.session.cwd)}</h1>
         </div>
         <div className="header-chips">
-          {props.goal ? (
-            <span className={`goal-chip ${props.goal.status}`}>
-              Goal {props.goal.status}
-            </span>
-          ) : (
-            <span className="goal-chip muted">No Goal</span>
-          )}
+        {props.goal ? (
+          <span className={`goal-chip ${props.goal.status}`}>
+            Goal {props.goal.status}
+          </span>
+        ) : (
+          <span className="goal-chip muted">Goal</span>
+        )}
           <span className={active ? "run-chip running" : "run-chip"}>
             {active ? "Running" : props.session.status}
           </span>
@@ -44,10 +44,7 @@ export function ChatPanel(props: {
 
       <div className="chat-log">
         {props.items.length === 0 ? (
-          <div className="empty-chat">
-            <h2>会话已准备好</h2>
-            <p>发送第一条消息会调用 turn/start；运行中发送会调用 turn/steer。</p>
-          </div>
+          <div className="empty-chat" />
         ) : (
           props.items.map((item) => (
             <article key={item.id} className={`chat-item ${item.role}`}>
@@ -60,7 +57,7 @@ export function ChatPanel(props: {
 
       <footer className="composer-dock">
         <textarea
-          placeholder={active ? "补充方向，steer 当前 turn..." : "问 CodexNext 一件具体的事..."}
+          placeholder={active ? "继续输入..." : "发消息..."}
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
@@ -70,9 +67,6 @@ export function ChatPanel(props: {
           }}
         />
         <div className="composer-footer">
-          <div className="meta">
-            {active ? "Active turn will receive turn/steer." : "Idle thread will start a new turn."}
-          </div>
           <div className="row compact">
             <button
               className="secondary"

@@ -216,31 +216,49 @@ export class SessionManager {
         payload: toSummary(session)
       });
 
-      const initialGoal = input.initialGoal?.trim();
-      if (initialGoal) {
-        await this.setGoal(sessionId, {
-          objective: initialGoal,
-          status: "active",
-          tokenBudget: input.tokenBudget ?? null
-        });
-      }
+      try {
+        const initialGoal = input.initialGoal?.trim();
+        if (initialGoal) {
+          await this.setGoal(sessionId, {
+            objective: initialGoal,
+            status: "active",
+            tokenBudget: input.tokenBudget ?? null
+          });
+        }
 
-      const initialMessage = input.initialMessage?.trim();
-      if (initialMessage) {
-        await this.startTurn(sessionId, { text: initialMessage });
+        const initialMessage = input.initialMessage?.trim();
+        if (initialMessage) {
+          await this.startTurn(sessionId, {
+            text: initialMessage,
+            clientMessageId: input.clientMessageId
+          });
+        }
+      } catch (error) {
+        this.emitAgentError(session, {
+          message: error instanceof Error ? error.message : String(error),
+          ...(input.clientMessageId
+            ? { clientMessageId: input.clientMessageId }
+            : {})
+        });
+        throw error;
       }
 
       return toSummary(session);
     } catch (error) {
-      removeNotificationListener();
-      await client.close();
-      this.options.eventStore.append({
-        type: LocalEventType.AgentError,
-        sessionId,
-        payload: {
-          message: error instanceof Error ? error.message : String(error)
-        }
-      });
+      if (!session) {
+        removeNotificationListener();
+        await client.close();
+        this.options.eventStore.append({
+          type: LocalEventType.AgentError,
+          sessionId,
+          payload: {
+            message: error instanceof Error ? error.message : String(error),
+            ...(input.clientMessageId
+              ? { clientMessageId: input.clientMessageId }
+              : {})
+          }
+        });
+      }
       throw error;
     }
   }
@@ -344,27 +362,7 @@ export class SessionManager {
     const session = this.requireSession(sessionId);
 
     if (session.activeTurnId) {
-      await session.client.turnSteer({
-        threadId: session.threadId,
-        expectedTurnId: session.activeTurnId,
-        input: [makeTextInput(input.text)]
-      });
-      touch(session, "running");
-      this.options.eventStore.append({
-        type: LocalEventType.ChatUser,
-        sessionId,
-        threadId: session.threadId,
-        turnId: session.activeTurnId,
-        payload: { text: input.text, mode: "steer" }
-      });
-      this.options.eventStore.append({
-        type: LocalEventType.TurnSteerAccepted,
-        sessionId,
-        threadId: session.threadId,
-        turnId: session.activeTurnId,
-        payload: { text: input.text }
-      });
-      return { mode: "steer", turnId: session.activeTurnId };
+      return this.steerTurn(sessionId, session.activeTurnId, input);
     }
 
     const turnId = await this.startTurn(sessionId, input);
@@ -380,33 +378,44 @@ export class SessionManager {
       throw new Error(`Session ${sessionId} already has an active turn`);
     }
 
-    this.options.eventStore.append({
-      type: LocalEventType.ChatUser,
-      sessionId,
-      threadId: session.threadId,
-      payload: { text: input.text, mode: "turn-start" }
-    });
-
-    const response = await session.client.turnStart({
-      threadId: session.threadId,
-      input: [makeTextInput(input.text)],
-      cwd: session.cwd,
-      runtimeWorkspaceRoots: [session.cwd],
-      model: session.model ?? null,
-      ...(session.approvalPolicy ? { approvalPolicy: session.approvalPolicy } : {}),
-      ...(session.approvalsReviewer
-        ? { approvalsReviewer: session.approvalsReviewer }
+    this.emitChatUser(session, {
+      text: input.text,
+      mode: "turn-start",
+      ...(input.clientMessageId
+        ? { clientMessageId: input.clientMessageId }
         : {})
     });
 
-    const responseTurnId = extractTurnId(response);
-    if (!session.activeTurnId) {
-      session.activeTurnId = responseTurnId;
-      session.currentTurnId = responseTurnId;
-      touch(session, "running");
+    try {
+      const response = await session.client.turnStart({
+        threadId: session.threadId,
+        input: [makeTextInput(input.text)],
+        cwd: session.cwd,
+        runtimeWorkspaceRoots: [session.cwd],
+        model: session.model ?? null,
+        ...(session.approvalPolicy ? { approvalPolicy: session.approvalPolicy } : {}),
+        ...(session.approvalsReviewer
+          ? { approvalsReviewer: session.approvalsReviewer }
+          : {})
+      });
+
+      const responseTurnId = extractTurnId(response);
+      if (!session.activeTurnId) {
+        session.activeTurnId = responseTurnId;
+        session.currentTurnId = responseTurnId;
+        touch(session, "running");
+      }
+      this.emitSessionUpdated(session);
+      return session.activeTurnId;
+    } catch (error) {
+      this.emitAgentError(session, {
+        message: error instanceof Error ? error.message : String(error),
+        ...(input.clientMessageId
+          ? { clientMessageId: input.clientMessageId }
+          : {})
+      });
+      throw error;
     }
-    this.emitSessionUpdated(session);
-    return session.activeTurnId;
   }
 
   public async steerTurn(
@@ -418,26 +427,47 @@ export class SessionManager {
     if (!session.activeTurnId || session.activeTurnId !== turnId) {
       throw new Error(`Turn ${turnId} is not active`);
     }
-    await session.client.turnSteer({
-      threadId: session.threadId,
-      expectedTurnId: turnId,
-      input: [makeTextInput(input.text)]
+
+    this.emitChatUser(session, {
+      text: input.text,
+      mode: "steer",
+      ...(input.clientMessageId
+        ? { clientMessageId: input.clientMessageId }
+        : {}),
+      turnId
     });
-    this.options.eventStore.append({
-      type: LocalEventType.ChatUser,
-      sessionId,
-      threadId: session.threadId,
-      turnId,
-      payload: { text: input.text, mode: "steer" }
-    });
-    this.options.eventStore.append({
-      type: LocalEventType.TurnSteerAccepted,
-      sessionId,
-      threadId: session.threadId,
-      turnId,
-      payload: { text: input.text }
-    });
-    return { mode: "steer", turnId };
+
+    try {
+      await session.client.turnSteer({
+        threadId: session.threadId,
+        expectedTurnId: turnId,
+        input: [makeTextInput(input.text)]
+      });
+      touch(session, "running");
+      this.options.eventStore.append({
+        type: LocalEventType.TurnSteerAccepted,
+        sessionId,
+        threadId: session.threadId,
+        turnId,
+        payload: {
+          text: input.text,
+          ...(input.clientMessageId
+            ? { clientMessageId: input.clientMessageId }
+            : {})
+        }
+      });
+      this.emitSessionUpdated(session);
+      return { mode: "steer", turnId };
+    } catch (error) {
+      this.emitAgentError(session, {
+        message: error instanceof Error ? error.message : String(error),
+        ...(input.clientMessageId
+          ? { clientMessageId: input.clientMessageId }
+          : {}),
+        turnId
+      });
+      throw error;
+    }
   }
 
   public async interruptTurn(
@@ -700,6 +730,52 @@ export class SessionManager {
       threadId: session.threadId,
       turnId: session.currentTurnId,
       payload: toSummary(session)
+    });
+  }
+
+  private emitChatUser(
+    session: LocalSession,
+    input: {
+      text: string;
+      mode: "turn-start" | "steer";
+      clientMessageId?: string;
+      turnId?: string;
+    }
+  ): void {
+    this.options.eventStore.append({
+      type: LocalEventType.ChatUser,
+      sessionId: session.sessionId,
+      threadId: session.threadId,
+      ...(input.turnId ? { turnId: input.turnId } : {}),
+      payload: {
+        text: input.text,
+        mode: input.mode,
+        ...(input.clientMessageId
+          ? { clientMessageId: input.clientMessageId }
+          : {})
+      }
+    });
+  }
+
+  private emitAgentError(
+    session: LocalSession,
+    input: {
+      message: string;
+      clientMessageId?: string;
+      turnId?: string;
+    }
+  ): void {
+    this.options.eventStore.append({
+      type: LocalEventType.AgentError,
+      sessionId: session.sessionId,
+      threadId: session.threadId,
+      ...(input.turnId ? { turnId: input.turnId } : {}),
+      payload: {
+        message: input.message,
+        ...(input.clientMessageId
+          ? { clientMessageId: input.clientMessageId }
+          : {})
+      }
     });
   }
 }

@@ -13,12 +13,12 @@ export function ApprovalPanel(props: {
       }
     >
       <div className="section-heading">
-        <span>Approval</span>
+        <span>批准</span>
         <span className="count-badge">{props.approvals.length}</span>
       </div>
 
       {props.approvals.length === 0 ? (
-        <div className="empty-small">No pending approvals.</div>
+        <div className="empty-small">暂无请求</div>
       ) : (
         <div className="stack">
           {props.approvals.map((approval) => (
@@ -29,7 +29,7 @@ export function ApprovalPanel(props: {
                 <div className="meta">{approvalCwd(approval.params) ?? "cwd unknown"}</div>
               </div>
               <details>
-                <summary>Raw request</summary>
+                <summary>详情</summary>
                 <pre>{JSON.stringify(approval.params, null, 2)}</pre>
               </details>
               <div className="approval-actions">
@@ -37,7 +37,7 @@ export function ApprovalPanel(props: {
                   type="button"
                   onClick={() => props.onDecision(approval.approvalId, "accept")}
                 >
-                  Accept once
+                  允许一次
                 </button>
                 <button
                   className="secondary"
@@ -46,21 +46,21 @@ export function ApprovalPanel(props: {
                     props.onDecision(approval.approvalId, "acceptForSession")
                   }
                 >
-                  For session
+                  本会话允许
                 </button>
                 <button
                   className="secondary"
                   type="button"
                   onClick={() => props.onDecision(approval.approvalId, "decline")}
                 >
-                  Decline
+                  拒绝
                 </button>
                 <button
                   className="danger"
                   type="button"
                   onClick={() => props.onDecision(approval.approvalId, "cancel")}
                 >
-                  Cancel
+                  取消
                 </button>
               </div>
             </article>
@@ -74,7 +74,7 @@ export function ApprovalPanel(props: {
 function approvalTitle(params: unknown): string {
   const record = asRecord(params);
   if (!record) {
-    return "Codex requests approval";
+    return "需要批准";
   }
   const command = readString(record, "command") ?? readString(record, "cmd");
   if (command) {
@@ -84,7 +84,7 @@ function approvalTitle(params: unknown): string {
   if (path) {
     return path;
   }
-  return "Codex requests approval";
+  return "需要批准";
 }
 
 function approvalCwd(params: unknown): string | null {
