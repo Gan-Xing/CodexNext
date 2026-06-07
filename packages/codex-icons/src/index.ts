@@ -1,4 +1,4 @@
-import { codexAssetSvgByName, type CodexAssetName } from "./generated.js";
+import { codexAssetSvgByName, type CodexAssetName } from "./generated.ts";
 
 export type CodexUiIconName =
   | "arrowUp"

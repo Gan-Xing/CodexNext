@@ -1857,113 +1857,114 @@ export function WebConsole() {
             onSubmit={() => void submitComposer().catch((err) => setError(formatError(err)))}
           />
 
-          {activeSheet === "device" ? (
-            <DeviceSheet
-              agentUrl={agentUrl}
-              connected={connected}
-              devicePresence={devicePresence}
-              deviceName={deviceName}
-              healthStatus={healthStatus}
-              savedDevices={savedDevices}
-              selectedDeviceId={selectedDeviceId}
-              streamStatus={streamStatus}
-              token={token}
-              onClose={() => setActiveSheet(null)}
-              onConnect={async (nextConnection, nextDeviceName, nextDeviceId) => {
-                try {
-                  await connect(nextConnection, {
-                    deviceId: nextDeviceId,
-                    deviceName: nextDeviceName
-                  });
-                  setActiveSheet(null);
-                } catch (err) {
-                  setError(formatConnectionError(err, nextConnection.agentUrl));
-                }
-              }}
-              onDeleteDevice={deleteSavedDevice}
-            />
-          ) : null}
-
-          {activeSheet === "session" ? (
-            <SessionSetupSheet
-              connected={connected}
-              cwd={cwd}
-              deviceName={deviceDisplayName}
-              directoryError={directoryError}
-              directoryList={directoryList}
-              directoryLoading={directoryLoading}
-              initialGoal={initialGoal}
-              initialTokenBudget={initialTokenBudget}
-              model={model}
-              permissionMode={permissionMode}
-              reasoningEffort={reasoningEffort}
-              streamStatus={streamStatus}
-              onClose={() => setActiveSheet(null)}
-              onInitialGoalChange={setInitialGoal}
-              onInitialTokenBudgetChange={setInitialTokenBudget}
-              onLoadDirectories={(path) =>
-                void loadDirectories(path).catch((err) => setError(formatError(err)))
-              }
-              onOpenDevice={() => setActiveSheet("device")}
-              onSelectCwd={(nextCwd) => {
-                setCwd(nextCwd);
-                setActiveSheet(null);
-                revealMainOnMobile();
-              }}
-              onSelectModel={setModel}
-              onSelectPermission={setPermissionMode}
-              onSelectReasoning={setReasoningEffort}
-            />
-          ) : null}
-
-          {activeSheet === "goal" ? (
-            <GoalSheet
-              currentSession={currentSession}
-              objective={goalObjective}
-              tokenBudget={goalTokenBudget}
-              onClear={() => void clearGoal().catch((err) => setError(formatError(err)))}
-              onClose={() => setActiveSheet(null)}
-              onObjectiveChange={setGoalObjective}
-              onRefresh={() => void refreshGoal().catch((err) => setError(formatError(err)))}
-              onResume={() =>
-                void setGoal({ status: "active" }).catch((err) => setError(formatError(err)))
-              }
-              onPause={() =>
-                void setGoal({ status: "paused" }).catch((err) => setError(formatError(err)))
-              }
-              onSet={() =>
-                void setGoal({
-                  objective: goalObjective.trim(),
-                  status: "active",
-                  tokenBudget: goalTokenBudget ? Number(goalTokenBudget) : null
-                }).catch((err) => setError(formatError(err)))
-              }
-              onTokenBudgetChange={setGoalTokenBudget}
-            />
-          ) : null}
-
-          {activeSheet === "events" ? (
-            <EventsSheet
-              events={events}
-              pendingApprovals={pendingApprovals}
-              onClose={() => setActiveSheet(null)}
-              onDecision={(approvalId, decision) =>
-                void decideApproval(approvalId, decision).catch((err) => setError(formatError(err)))
-              }
-            />
-          ) : null}
-
-          {firstApproval ? (
-            <ApprovalModal
-              approval={firstApproval}
-              onDecision={(decision) =>
-                void decideApproval(firstApproval.approvalId, decision).catch((err) =>
-                  setError(formatError(err))
-                )
-              }
-            />
-          ) : null}
         </section>
+
+        {activeSheet === "device" ? (
+          <DeviceSheet
+            agentUrl={agentUrl}
+            connected={connected}
+            devicePresence={devicePresence}
+            deviceName={deviceName}
+            healthStatus={healthStatus}
+            savedDevices={savedDevices}
+            selectedDeviceId={selectedDeviceId}
+            streamStatus={streamStatus}
+            token={token}
+            onClose={() => setActiveSheet(null)}
+            onConnect={async (nextConnection, nextDeviceName, nextDeviceId) => {
+              try {
+                await connect(nextConnection, {
+                  deviceId: nextDeviceId,
+                  deviceName: nextDeviceName
+                });
+                setActiveSheet(null);
+              } catch (err) {
+                setError(formatConnectionError(err, nextConnection.agentUrl));
+              }
+            }}
+            onDeleteDevice={deleteSavedDevice}
+          />
+        ) : null}
+
+        {activeSheet === "session" ? (
+          <SessionSetupSheet
+            connected={connected}
+            cwd={cwd}
+            deviceName={deviceDisplayName}
+            directoryError={directoryError}
+            directoryList={directoryList}
+            directoryLoading={directoryLoading}
+            initialGoal={initialGoal}
+            initialTokenBudget={initialTokenBudget}
+            model={model}
+            permissionMode={permissionMode}
+            reasoningEffort={reasoningEffort}
+            streamStatus={streamStatus}
+            onClose={() => setActiveSheet(null)}
+            onInitialGoalChange={setInitialGoal}
+            onInitialTokenBudgetChange={setInitialTokenBudget}
+            onLoadDirectories={(path) =>
+              void loadDirectories(path).catch((err) => setError(formatError(err)))
+            }
+            onOpenDevice={() => setActiveSheet("device")}
+            onSelectCwd={(nextCwd) => {
+              setCwd(nextCwd);
+              setActiveSheet(null);
+              revealMainOnMobile();
+            }}
+            onSelectModel={setModel}
+            onSelectPermission={setPermissionMode}
+            onSelectReasoning={setReasoningEffort}
+          />
+        ) : null}
+
+        {activeSheet === "goal" ? (
+          <GoalSheet
+            currentSession={currentSession}
+            objective={goalObjective}
+            tokenBudget={goalTokenBudget}
+            onClear={() => void clearGoal().catch((err) => setError(formatError(err)))}
+            onClose={() => setActiveSheet(null)}
+            onObjectiveChange={setGoalObjective}
+            onRefresh={() => void refreshGoal().catch((err) => setError(formatError(err)))}
+            onResume={() =>
+              void setGoal({ status: "active" }).catch((err) => setError(formatError(err)))
+            }
+            onPause={() =>
+              void setGoal({ status: "paused" }).catch((err) => setError(formatError(err)))
+            }
+            onSet={() =>
+              void setGoal({
+                objective: goalObjective.trim(),
+                status: "active",
+                tokenBudget: goalTokenBudget ? Number(goalTokenBudget) : null
+              }).catch((err) => setError(formatError(err)))
+            }
+            onTokenBudgetChange={setGoalTokenBudget}
+          />
+        ) : null}
+
+        {activeSheet === "events" ? (
+          <EventsSheet
+            events={events}
+            pendingApprovals={pendingApprovals}
+            onClose={() => setActiveSheet(null)}
+            onDecision={(approvalId, decision) =>
+              void decideApproval(approvalId, decision).catch((err) => setError(formatError(err)))
+            }
+          />
+        ) : null}
+
+        {firstApproval ? (
+          <ApprovalModal
+            approval={firstApproval}
+            onDecision={(decision) =>
+              void decideApproval(firstApproval.approvalId, decision).catch((err) =>
+                setError(formatError(err))
+              )
+            }
+          />
+        ) : null}
       </div>
     </main>
   );
@@ -2400,6 +2401,10 @@ const ChatMessageRow = memo(function ChatMessageRow(props: {
   onMeasure: (id: string, height: number) => void;
 }) {
   const rowRef = useRef<HTMLElement | null>(null);
+  const label =
+    props.item.role === "command" || props.item.role === "diff" || props.item.role === "system"
+      ? roleLabel(props.item.role)
+      : null;
 
   useLayoutEffect(() => {
     const node = rowRef.current;
@@ -2423,7 +2428,7 @@ const ChatMessageRow = memo(function ChatMessageRow(props: {
       ref={rowRef}
       className={`cn-message ${messageClass(props.item.role)}`}
     >
-      <span className="cn-message-label">{roleLabel(props.item.role)}</span>
+      {label ? <span className="cn-message-label">{label}</span> : null}
       <div className="cn-message-text">{props.item.text}</div>
     </article>
   );
@@ -2674,14 +2679,6 @@ function DeviceSheet(props: {
   );
   const draftOnline =
     draftConnected || draftPresence?.status === "online";
-  const draftStatus = draftConnected
-    ? props.streamStatus
-    : draftPresence?.status === "online"
-      ? "connected"
-      : draftPresence?.status ?? "disconnected";
-  const draftCodexVersion = draftConnected
-    ? props.healthStatus?.codex?.version
-    : draftPresence?.codexVersion ?? draftSavedDevice?.codexVersion;
   const draftDisplayName =
     draft.name.trim() || draftSavedDevice?.name || "新设备";
 
@@ -2697,11 +2694,15 @@ function DeviceSheet(props: {
   return (
     <div className="cn-overlay-panel device cn-live-overlay">
       <div className="cn-sheet-card cn-live-sheet cn-device-sheet">
-        <button className="cn-close-button" type="button" onClick={props.onClose}>
-          <CodexIcon name="x" />
-        </button>
-        <h2>连接设备</h2>
-        <p>保存多个 Codex Agent endpoint，然后选择其中一台 Mac 或服务器连接。</p>
+        <div className="cn-device-sheet-header">
+          <div className="cn-device-sheet-copy">
+            <h2>连接设备</h2>
+            <p>保存多个 Agent，然后连接其中一台设备。</p>
+          </div>
+          <button className="cn-close-button" type="button" onClick={props.onClose}>
+            <CodexIcon name="x" />
+          </button>
+        </div>
 
         <div className="cn-device-manager">
           <section className="cn-device-library" aria-label="已保存设备">
@@ -2754,14 +2755,7 @@ function DeviceSheet(props: {
                     >
                       <span className={online ? "online" : ""} />
                       <strong>{device.name}</strong>
-                      <small>
-                        {shortAgentUrl(device.agentUrl)}
-                        {presence?.codexVersion
-                          ? ` · ${presence.codexVersion}`
-                          : device.codexVersion
-                            ? ` · ${device.codexVersion}`
-                            : ""}
-                      </small>
+                      <small>{shortAgentUrl(device.agentUrl)}</small>
                     </button>
                     <button
                       className="cn-device-delete-button"
@@ -2783,64 +2777,66 @@ function DeviceSheet(props: {
           </section>
 
           <section className="cn-device-editor" aria-label="设备连接设置">
-            <div
-              className={
-                draftOnline ? "cn-real-device-row online" : "cn-real-device-row"
-              }
-            >
-              <CodexIcon name="terminal" />
-              <span className={draftOnline ? "cn-live-dot" : "cn-live-dot offline"} />
-              <div>
-                <strong>{draftDisplayName}</strong>
-                <small>
-                  {statusLabel(draftStatus)} · {draftCodexVersion ?? "codex-cli unknown"}
-                </small>
+            <div className="cn-device-editor-top">
+              <div
+                className={
+                  draftOnline ? "cn-real-device-row online" : "cn-real-device-row"
+                }
+              >
+                <CodexIcon name="terminal" />
+                <span className={draftOnline ? "cn-live-dot" : "cn-live-dot offline"} />
+                <div>
+                  <strong>{draftDisplayName}</strong>
+                  <small>{shortAgentUrl(draft.agentUrl)}</small>
+                </div>
               </div>
             </div>
 
-            <label>
-              设备名称
-              <input
-                value={draft.name}
-                onChange={(event) =>
-                  setDraft((previous) => ({
-                    ...previous,
-                    name: event.target.value
-                  }))
-                }
-                placeholder="MacBookAir / Office Mac mini / Build server"
-              />
-            </label>
-            <label>
-              Agent URL
-              <input
-                value={draft.agentUrl}
-                onChange={(event) =>
-                  setDraft((previous) => ({
-                    ...previous,
-                    agentUrl: event.target.value,
-                    selectedDeviceId: null
-                  }))
-                }
-                placeholder="http://127.0.0.1:17361"
-              />
-            </label>
-            <label>
-              Access Token
-              <input
-                value={draft.token}
-                onChange={(event) =>
-                  setDraft((previous) => ({
-                    ...previous,
-                    selectedDeviceId: null,
-                    token: event.target.value
-                  }))
-                }
-                placeholder="test-token"
-              />
-            </label>
+            <div className="cn-device-form-fields">
+              <label className="cn-device-field cn-device-field-name">
+                设备名称
+                <input
+                  value={draft.name}
+                  onChange={(event) =>
+                    setDraft((previous) => ({
+                      ...previous,
+                      name: event.target.value
+                    }))
+                  }
+                  placeholder="MacBookAir / Office Mac mini / Build server"
+                />
+              </label>
+              <label className="cn-device-field cn-device-field-url">
+                Agent URL
+                <input
+                  value={draft.agentUrl}
+                  onChange={(event) =>
+                    setDraft((previous) => ({
+                      ...previous,
+                      agentUrl: event.target.value,
+                      selectedDeviceId: null
+                    }))
+                  }
+                  placeholder="http://127.0.0.1:17361"
+                />
+              </label>
+              <label className="cn-device-field cn-device-field-token">
+                Access Token
+                <input
+                  value={draft.token}
+                  onChange={(event) =>
+                    setDraft((previous) => ({
+                      ...previous,
+                      selectedDeviceId: null,
+                      token: event.target.value
+                    }))
+                  }
+                  placeholder="test-token"
+                />
+              </label>
+            </div>
 
-            <div className="cn-sheet-actions">
+            <div className="cn-sheet-actions cn-device-sheet-actions">
               <button className="cn-soft-button" type="button" onClick={props.onClose}>
                 取消
               </button>

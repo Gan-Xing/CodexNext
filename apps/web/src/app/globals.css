@@ -1896,11 +1896,11 @@ summary {
 
 /* CodexNext Live Web Console */
 .cn-live-console {
-  --cn-bg: #f4f4f1;
+  --cn-bg: #ffffff;
   --cn-surface: #ffffff;
-  --cn-soft: #f7f7f5;
-  --cn-soft-2: #eeeeeb;
-  --cn-rail: #f1f1ef;
+  --cn-soft: #f5f6f7;
+  --cn-soft-2: #eaf2f9;
+  --cn-rail: #f3f8fc;
   --cn-ink: #202124;
   --cn-muted: #7c8087;
   --cn-faint: #b4b6ba;
@@ -1909,12 +1909,9 @@ summary {
   --cn-black: #1c1e21;
   --cn-green: #13795b;
   --cn-red: #b42318;
-  --cn-blue-soft: #eef1f3;
+  --cn-blue-soft: #f3f6f9;
   align-items: center;
-  background:
-    radial-gradient(circle at 10% 10%, rgba(206, 225, 231, 0.6), transparent 28rem),
-    radial-gradient(circle at 0% 80%, rgba(216, 226, 213, 0.75), transparent 34rem),
-    var(--cn-bg);
+  background: var(--cn-bg);
   color: var(--cn-ink);
   display: flex;
   justify-content: center;
@@ -2072,9 +2069,8 @@ summary {
 
 .cn-message.system {
   align-self: flex-start;
-  background: var(--cn-blue-soft);
   color: var(--cn-muted);
-  max-width: 660px;
+  max-width: 720px;
 }
 
 .cn-message-label {
@@ -2193,13 +2189,39 @@ summary {
 }
 
 .cn-device-sheet {
+  display: grid;
+  gap: 1rem;
+  grid-template-rows: auto minmax(0, 1fr);
   width: min(840px, calc(100vw - 8rem));
+}
+
+.cn-device-sheet-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.cn-device-sheet-copy {
+  display: grid;
+  gap: 0.52rem;
+  min-width: 0;
+}
+
+.cn-device-sheet-copy p {
+  max-width: 34rem;
+}
+
+.cn-device-sheet-header .cn-close-button {
+  flex: 0 0 auto;
+  position: static;
 }
 
 .cn-device-manager {
   display: grid;
   gap: 1rem;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  grid-template-columns: minmax(236px, 292px) minmax(0, 1fr);
+  min-height: 0;
   min-width: 0;
 }
 
@@ -2207,32 +2229,49 @@ summary {
 .cn-device-editor {
   background: var(--cn-soft);
   border: 1px solid var(--cn-line);
-  border-radius: 22px;
+  border-radius: 24px;
   min-width: 0;
-  padding: 0.9rem;
+  padding: 1rem;
 }
 
 .cn-device-editor {
   background: var(--cn-surface);
   display: grid;
-  gap: 0.85rem;
+  gap: 1rem;
+}
+
+.cn-device-editor-top {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.cn-device-form-fields {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.cn-device-field {
+  min-width: 0;
 }
 
 .cn-device-editor label {
   color: var(--cn-muted);
   display: grid;
-  gap: 0.42rem;
-  font-size: 0.78rem;
-  font-weight: 780;
+  gap: 0.45rem;
+  font-size: 0.76rem;
+  font-weight: 760;
+  letter-spacing: -0.01em;
 }
 
 .cn-device-editor input {
-  background: var(--cn-soft);
+  background: #fff;
   border: 1px solid var(--cn-line);
-  border-radius: 14px;
+  border-radius: 16px;
   color: var(--cn-ink);
-  min-height: 42px;
-  padding: 0.72rem 0.85rem;
+  font-size: 0.95rem;
+  font-weight: 650;
+  min-height: 46px;
+  padding: 0.8rem 0.9rem;
 }
 
 .cn-device-library-header {
@@ -2240,11 +2279,11 @@ summary {
   display: flex;
   gap: 0.7rem;
   justify-content: space-between;
-  margin-bottom: 0.72rem;
+  margin-bottom: 0.84rem;
 }
 
 .cn-device-library-header strong {
-  font-size: 0.95rem;
+  font-size: 0.98rem;
   letter-spacing: -0.01em;
 }
 
@@ -2269,7 +2308,7 @@ summary {
 
 .cn-saved-device-list {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.45rem;
   max-height: min(410px, 52vh);
   overflow: auto;
   padding-right: 0.1rem;
@@ -2284,20 +2323,20 @@ summary {
 }
 
 .cn-saved-device-card {
-  align-items: stretch;
-  background: var(--cn-surface);
+  align-items: center;
+  background: rgba(255, 255, 255, 0.92);
   border: 1px solid var(--cn-line);
-  border-radius: 18px;
+  border-radius: 16px;
   display: grid;
-  gap: 0.35rem;
+  gap: 0.55rem;
   grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
   overflow: hidden;
-  padding: 0.72rem;
+  padding: 0.62rem 0.68rem;
 }
 
 .cn-saved-device-card.selected {
-  background: var(--cn-surface);
+  background: #fff;
   border-color: var(--cn-line-strong);
   box-shadow: inset 0 0 0 1px var(--cn-line-strong);
 }
@@ -2322,9 +2361,9 @@ summary {
   background: var(--cn-faint);
   border-radius: 999px;
   grid-row: 1 / 3;
-  height: 9px;
-  margin-top: 0.36rem;
-  width: 9px;
+  height: 8px;
+  margin-top: 0.28rem;
+  width: 8px;
 }
 
 .cn-saved-device-main > span.online {
@@ -2341,8 +2380,8 @@ summary {
 }
 
 .cn-saved-device-main strong {
-  font-size: 0.93rem;
-  font-weight: 790;
+  font-size: 0.95rem;
+  font-weight: 760;
 }
 
 .cn-saved-device-main small {
@@ -2352,18 +2391,26 @@ summary {
 }
 
 .cn-device-delete-button {
-  align-self: start;
+  align-self: center;
   background: transparent;
-  border: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
   color: var(--cn-muted);
   font-size: 0.74rem;
   font-weight: 720;
-  min-height: 0;
-  padding: 0.15rem 0;
+  min-height: 30px;
+  padding: 0 0.55rem;
 }
 
 .cn-device-delete-button:hover {
+  background: rgba(160, 32, 40, 0.05);
   color: var(--cn-red);
+}
+
+.cn-device-sheet-actions {
+  border-top: 1px solid rgba(103, 107, 112, 0.12);
+  margin-top: 0.15rem;
+  padding-top: 0.88rem;
 }
 
 .cn-live-session-sheet {
@@ -2792,21 +2839,27 @@ summary {
   }
 
   .cn-live-console .cn-message {
-    border-radius: 18px;
     font-size: 0.94rem;
     max-width: 100%;
-    padding: 0.82rem 0.92rem;
+    padding: 0;
   }
 
   .cn-live-console .cn-message.user {
-    max-width: 86%;
+    border-radius: 18px;
+    max-width: 82%;
+    padding: 0.72rem 0.92rem;
   }
 
   .cn-live-console .cn-message.assistant,
-  .cn-live-console .cn-message.command,
   .cn-live-console .cn-message.diff,
   .cn-live-console .cn-message.system {
     max-width: 100%;
+  }
+
+  .cn-live-console .cn-message.command {
+    border-radius: 16px;
+    max-width: 100%;
+    padding: 0.82rem 0.92rem;
   }
 
   .cn-live-console .cn-live-composer {
@@ -2910,7 +2963,11 @@ summary {
   .cn-live-console .cn-live-overlay {
     align-items: flex-end;
     justify-content: center;
+    position: fixed;
     padding: 0;
+    inset: 0;
+    width: 100dvw;
+    height: 100dvh;
   }
 
   .cn-live-console .cn-sheet-card,
@@ -2945,15 +3002,146 @@ summary {
   }
 
   .cn-live-console .cn-device-sheet {
+    border: 0;
+    border-radius: 0;
+    gap: 0;
+    height: 100dvh;
+    max-height: 100dvh;
+    max-width: none;
+    min-height: 100dvh;
+    padding: 0;
     width: 100%;
   }
 
   .cn-live-console .cn-device-manager {
+    align-content: start;
     grid-template-columns: 1fr;
+    gap: 0.72rem;
+    overflow: hidden;
+    padding: 0.72rem 0.85rem calc(env(safe-area-inset-bottom) + 0.72rem);
   }
 
   .cn-live-console .cn-saved-device-list {
-    max-height: 28dvh;
+    gap: 0.35rem;
+    max-height: none;
+    overflow: hidden;
+    padding-right: 0;
+  }
+
+  .cn-live-console .cn-device-sheet-header {
+    backdrop-filter: blur(18px);
+    background: rgba(255, 255, 255, 0.96);
+    border-bottom: 1px solid rgba(103, 107, 112, 0.12);
+    padding: calc(env(safe-area-inset-top) + 0.74rem) 0.9rem 0.76rem;
+    position: sticky;
+    top: 0;
+    z-index: 3;
+  }
+
+  .cn-live-console .cn-device-sheet-copy {
+    gap: 0.26rem;
+  }
+
+  .cn-live-console .cn-device-sheet-copy h2 {
+    font-size: 1.72rem;
+    letter-spacing: -0.05em;
+    line-height: 0.98;
+  }
+
+  .cn-live-console .cn-device-sheet-copy p {
+    font-size: 0.86rem;
+    line-height: 1.42;
+    max-width: 18rem;
+  }
+
+  .cn-live-console .cn-device-sheet-header .cn-close-button {
+    margin-top: 0.08rem;
+    min-height: 36px;
+    width: 36px;
+  }
+
+  .cn-live-console .cn-device-library,
+  .cn-live-console .cn-device-editor {
+    border-radius: 20px;
+    padding: 0.8rem;
+  }
+
+  .cn-live-console .cn-device-library-header {
+    margin-bottom: 0.58rem;
+  }
+
+  .cn-live-console .cn-device-library-header strong {
+    font-size: 0.92rem;
+  }
+
+  .cn-live-console .cn-add-mini-button {
+    font-size: 0.76rem;
+    min-height: 30px;
+    padding: 0 0.6rem;
+  }
+
+  .cn-live-console .cn-saved-device-card {
+    border-radius: 14px;
+    gap: 0.4rem;
+    padding: 0.52rem 0.6rem;
+  }
+
+  .cn-live-console .cn-saved-device-main {
+    gap: 0.12rem 0.5rem;
+  }
+
+  .cn-live-console .cn-saved-device-main strong {
+    font-size: 0.9rem;
+  }
+
+  .cn-live-console .cn-saved-device-main small {
+    font-size: 0.74rem;
+  }
+
+  .cn-live-console .cn-device-delete-button {
+    font-size: 0.72rem;
+    min-height: 28px;
+    padding: 0 0.45rem;
+  }
+
+  .cn-live-console .cn-device-editor {
+    gap: 0.78rem;
+  }
+
+  .cn-live-console .cn-device-editor-top {
+    display: none;
+  }
+
+  .cn-live-console .cn-device-form-fields {
+    gap: 0.68rem;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .cn-live-console .cn-device-field-url {
+    grid-column: 1 / -1;
+  }
+
+  .cn-live-console .cn-device-editor label {
+    gap: 0.34rem;
+    font-size: 0.72rem;
+  }
+
+  .cn-live-console .cn-device-editor input {
+    font-size: 0.94rem;
+    min-height: 44px;
+    padding: 0.72rem 0.78rem;
+  }
+
+  .cn-live-console .cn-sheet-actions.cn-device-sheet-actions {
+    background: transparent;
+    margin: 0;
+    padding: 0.72rem 0 0;
+    position: static;
+  }
+
+  .cn-live-console .cn-sheet-actions.cn-device-sheet-actions button {
+    flex: 1 1 0;
+    min-height: 44px;
   }
 
   .cn-live-console .cn-use-folder-button {
@@ -3723,6 +3911,7 @@ summary {
   min-width: 0;
   overflow: hidden;
   padding: 0 0.14rem 0 1.9rem;
+  position: relative;
   width: 100%;
 }
 
@@ -3751,6 +3940,7 @@ summary {
   overflow: hidden;
   padding: 0.36rem 0.14rem;
   text-align: left;
+  width: 100%;
 }
 
 .cn-thread-title {
@@ -3767,24 +3957,34 @@ summary {
   flex: 0 0 auto;
   font-size: 0.78rem;
   font-weight: 620;
+  justify-self: end;
+  opacity: 1;
+  transition: opacity 120ms ease;
   white-space: nowrap;
 }
 
 .cn-thread-actions {
   align-items: center;
   display: flex;
-  flex: 0 0 auto;
   gap: 0.08rem;
   opacity: 0;
   pointer-events: none;
+  position: absolute;
+  right: 0.28rem;
+  top: 50%;
+  transform: translateY(-50%);
   transition: opacity 120ms ease;
 }
 
-.cn-thread-row:hover .cn-thread-actions,
-.cn-thread-row.selected .cn-thread-actions,
-.cn-thread-row:focus-within .cn-thread-actions {
+.cn-thread-row:hover:not(.selected) .cn-thread-actions,
+.cn-thread-row:focus-within:not(.selected) .cn-thread-actions {
   opacity: 1;
   pointer-events: auto;
+}
+
+.cn-thread-row:hover:not(.selected) .cn-thread-time,
+.cn-thread-row:focus-within:not(.selected) .cn-thread-time {
+  opacity: 0;
 }
 
 .cn-thread-action {
@@ -4193,11 +4393,10 @@ summary {
 }
 
 .cn-message {
-  border: 1px solid var(--cn-line);
-  border-radius: 20px;
   font-size: 0.96rem;
   line-height: 1.6;
-  padding: 1rem 1.15rem;
+  max-width: 760px;
+  padding: 0;
 }
 
 .cn-message-virtual-list {
@@ -4271,19 +4470,42 @@ summary {
 .cn-message.user {
   align-self: flex-end;
   background: var(--cn-soft);
-  max-width: 420px;
+  border-radius: 18px;
+  max-width: min(460px, 78%);
+  padding: 0.8rem 1rem;
 }
 
 .cn-message.assistant {
-  background: var(--cn-surface);
-  max-width: 560px;
+  background: transparent;
+  max-width: 760px;
 }
 
 .cn-message.command {
   background: #f5f5f2;
+  border: 1px solid var(--cn-line);
+  border-radius: 18px;
   color: var(--cn-ink);
   font-family: var(--mono);
-  max-width: 560px;
+  max-width: 720px;
+  padding: 0.9rem 1rem;
+}
+
+.cn-message.diff,
+.cn-message.system {
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+.cn-message.diff {
+  color: var(--cn-ink);
+  max-width: 720px;
+}
+
+.cn-message.command .cn-message-label,
+.cn-message.diff .cn-message-label,
+.cn-message.system .cn-message-label {
+  margin-bottom: 0.35rem;
 }
 
 .cn-running-note {
@@ -4347,10 +4569,6 @@ summary {
 
 .cn-sheet-card {
   width: 540px;
-}
-
-.cn-sheet-card.cn-device-sheet {
-  width: min(840px, calc(100vw - 8rem));
 }
 
 .cn-project-card {
