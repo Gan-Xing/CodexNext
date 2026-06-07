@@ -3367,7 +3367,14 @@ summary {
   display: block;
   flex: 0 0 auto;
   height: 20px;
+  transform-origin: 50% 50%;
   width: 20px;
+}
+
+.cn-codex-icon > svg {
+  display: block;
+  height: 100%;
+  width: 100%;
 }
 
 .cn-nav-rail {

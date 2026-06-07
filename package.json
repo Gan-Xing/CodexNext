@@ -8,6 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "sync:codex-icons": "node packages/codex-icons/scripts/extract-codex-icons.mjs",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "vitest run"
   },
@@ -18,4 +19,3 @@
     "vitest": "^4.0.15"
   }
 }
-

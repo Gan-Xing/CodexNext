@@ -16,8 +16,8 @@
     "baseUrl": ".",
     "paths": {
       "@codexnext/protocol": ["packages/protocol/src/index.ts"],
-      "@codexnext/codex-client": ["packages/codex-client/src/index.ts"]
+      "@codexnext/codex-client": ["packages/codex-client/src/index.ts"],
+      "@codexnext/codex-icons": ["packages/codex-icons/src/index.ts"]
     }
   }
 }
-

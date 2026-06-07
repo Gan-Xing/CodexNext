@@ -19,29 +19,16 @@ The sidebar collapse icon controls the whole conversation sidebar layout. Projec
 
 ## Current Registry
 
-Implemented in `apps/web/src/components/DesignLab.tsx` as `CodexIcon` for the current design prototype:
+The canonical icon source now lives in `packages/codex-icons`:
 
-- `folder`
-- `compose`
-- `search`
-- `arrowUp`
-- `settings`
-- `shield`
-- `shieldAlert`
-- `terminal`
-- `collapse`
-- `back`
-- `forward`
-- `chevronDown`
-- `chevronRight`
-- `check`
-- `plus`
-- `more`
-- `phone`
-- `edit`
-- `x`
+- `packages/codex-icons/src/index.ts`: semantic icon registry for app code
+- `packages/codex-icons/src/generated.ts`: generated asset map
+- `packages/codex-icons/svg/`: vendored SVG source files
+- `packages/codex-icons/manifest.json`: source tracing metadata
 
-The live component gallery is available at `/design/components`. New icons should be added there first so spacing, stroke/fill weight, names, and hover usage stay consistent before they are used in production UI.
+`apps/web/src/components/DesignLab.tsx` still exports `CodexIcon`, but it is now only a thin renderer over `@codexnext/codex-icons`. It must not contain icon path definitions anymore.
+
+The live component gallery remains available at `/design/components`.
 
 ## Source Notes
 
@@ -61,4 +48,14 @@ Relevant bundled module names observed during design work include:
 - `shield-exclamation-kf9mYNtx.js`
 - `terminal-BhTF7d-4.js`
 
-Not every Codex icon is exposed as a plain standalone SVG asset, so CodexNext should expand this registry incrementally as each UI surface needs icons.
+Not every Codex icon is exposed as a plain standalone SVG asset, so CodexNext should expand the semantic registry incrementally as each UI surface needs icons.
+
+## Working Rule
+
+From this point on:
+
+- App code must use semantic names from `@codexnext/codex-icons`.
+- App code must not inline raw SVG markup.
+- App code must not import from `packages/codex-icons/svg` directly.
+- Missing icons should be added in `packages/codex-icons/src/index.ts`.
+- Upstream Codex asset refreshes should run through `pnpm sync:codex-icons`.
