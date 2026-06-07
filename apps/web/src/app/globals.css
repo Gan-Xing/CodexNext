@@ -2088,7 +2088,7 @@ summary {
 }
 
 .cn-live-composer {
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
   position: relative;
 }
 
@@ -2704,7 +2704,7 @@ summary {
   }
 
   .cn-live-console .cn-sidebar-brand strong {
-    font-size: 1.28rem;
+    font-size: 1.18rem;
   }
 
   .cn-live-console .cn-sidebar-brand span {
@@ -2712,9 +2712,9 @@ summary {
   }
 
   .cn-live-console .cn-device-summary {
-    border-radius: 18px;
-    min-height: 54px;
-    padding: 0.58rem 0.68rem;
+    border-radius: 12px;
+    min-height: 46px;
+    padding: 0.42rem 0.54rem;
   }
 
   .cn-live-console .cn-new-chat-button {
@@ -2815,18 +2815,22 @@ summary {
 
   .cn-live-console .cn-live-empty {
     align-content: center;
-    gap: 0.95rem;
-    padding: 1.2rem 1rem 7rem;
+    gap: 0.68rem;
+    padding: 1rem 0.95rem 7rem;
   }
 
   .cn-live-console .cn-empty-copy h2 {
-    font-size: clamp(1.78rem, 8.4vw, 2.45rem);
-    line-height: 1.12;
+    font-size: clamp(1.42rem, 7.6vw, 2rem);
+    line-height: 1.08;
     text-wrap: balance;
   }
 
   .cn-live-console .cn-empty-copy p {
-    display: none;
+    display: block;
+    font-size: 0.84rem;
+    line-height: 1.5;
+    margin-top: 0.48rem;
+    max-width: 18rem;
   }
 
   .cn-live-console .cn-thread-canvas {
@@ -2863,19 +2867,19 @@ summary {
   }
 
   .cn-live-console .cn-live-composer {
-    border-radius: 28px;
+    border-radius: 24px;
     box-shadow: 0 16px 46px rgba(17, 19, 21, 0.13);
-    gap: 0.4rem;
-    margin: 0 0.72rem max(0.72rem, env(safe-area-inset-bottom));
-    padding: 0.74rem;
+    gap: 0.3rem;
+    margin: 0 0.62rem max(0.62rem, env(safe-area-inset-bottom));
+    padding: 0.62rem;
   }
 
   .cn-live-console .cn-live-composer textarea {
-    font-size: 0.98rem;
-    line-height: 1.45;
-    max-height: 8rem;
-    min-height: 3.1rem;
-    padding: 0.38rem 0.48rem;
+    font-size: 0.94rem;
+    line-height: 1.4;
+    max-height: 6.8rem;
+    min-height: 2.7rem;
+    padding: 0.26rem 0.38rem;
   }
 
   .cn-live-console .cn-composer-toolbar {
@@ -2889,29 +2893,29 @@ summary {
     border: 1px solid var(--cn-line);
     border-radius: 999px;
     color: var(--cn-ink);
-    flex: 0 0 36px;
-    height: 36px;
-    min-height: 36px;
-    width: 36px;
+    flex: 0 0 34px;
+    height: 34px;
+    min-height: 34px;
+    width: 34px;
   }
 
   .cn-live-console .cn-composer-pill {
     flex: 0 1 auto;
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     max-width: 31vw;
-    min-height: 34px;
+    min-height: 32px;
     min-width: 0;
     overflow: hidden;
-    padding: 0.38rem 0.55rem;
+    padding: 0.32rem 0.5rem;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .cn-live-console .cn-send-button {
-    flex: 0 0 42px;
-    height: 42px;
-    min-height: 42px;
-    width: 42px;
+    flex: 0 0 38px;
+    height: 38px;
+    min-height: 38px;
+    width: 38px;
   }
 
   .cn-live-console .cn-attachment-row {
@@ -3527,8 +3531,8 @@ summary {
 .cn-desktop-frame {
   background: var(--cn-surface);
   border: 1px solid var(--cn-line);
-  border-radius: 28px;
-  box-shadow: 0 28px 90px rgba(17, 19, 21, 0.1);
+  border-radius: 24px;
+  box-shadow: 0 14px 44px rgba(17, 19, 21, 0.08);
   display: grid;
   grid-template-columns:
     64px
@@ -3570,8 +3574,8 @@ summary {
   border-right: 1px solid var(--cn-line);
   display: flex;
   flex-direction: column;
-  gap: 0.7rem;
-  padding: 1rem 0.6rem;
+  gap: 0.56rem;
+  padding: 0.9rem 0.56rem;
 }
 
 .cn-mark {
@@ -3624,13 +3628,13 @@ summary {
 }
 
 .cn-session-sidebar {
-  background: #fafaf8;
+  background: var(--cn-surface);
   border-right: 1px solid var(--cn-line);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
   overflow: hidden;
-  padding: 1rem 1.25rem 1.05rem;
+  padding: 0.92rem 1.15rem 0.98rem;
   position: relative;
   transition:
     opacity 160ms ease,
@@ -3651,9 +3655,9 @@ summary {
 
 .cn-sidebar-fixed {
   display: grid;
-  gap: 0.78rem;
+  gap: 0.56rem;
   min-width: 0;
-  padding-bottom: 0.72rem;
+  padding-bottom: 0.62rem;
 }
 
 .cn-sidebar-windowbar {
@@ -3711,37 +3715,40 @@ summary {
 
 .cn-sidebar-brand {
   display: grid;
-  gap: 0.25rem;
+  gap: 0.08rem;
 }
 
 .cn-sidebar-brand strong {
-  font-size: 1.28rem;
+  font-size: 1.16rem;
+  font-weight: 680;
   letter-spacing: -0.03em;
 }
 
 .cn-sidebar-brand span {
   color: var(--cn-muted);
-  font-size: 0.74rem;
-  font-weight: 650;
+  font-size: 0.68rem;
+  font-weight: 720;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .cn-device-summary {
   align-items: center;
-  background: transparent;
+  background: var(--cn-soft);
   border: 1px solid rgba(108, 112, 117, 0.18);
-  border-radius: 12px;
+  border-radius: 10px;
   color: var(--cn-ink);
   display: grid;
   gap: 0.42rem;
-  grid-template-columns: 20px 8px minmax(0, 1fr);
+  grid-template-columns: 18px 8px minmax(0, 1fr);
   justify-items: start;
-  min-height: 40px;
-  padding: 0.36rem 0.56rem;
+  min-height: 38px;
+  padding: 0.28rem 0.48rem;
   text-align: left;
 }
 
 .cn-device-summary:hover {
-  background: rgba(31, 35, 40, 0.04);
+  background: var(--cn-soft-2);
   transform: none;
 }
 
@@ -3763,7 +3770,7 @@ summary {
 .cn-device-copy.compact {
   align-items: baseline;
   display: flex;
-  gap: 0.48rem;
+  gap: 0.4rem;
 }
 
 .cn-device-copy strong,
@@ -3782,11 +3789,13 @@ summary {
 
 .cn-device-copy.compact strong {
   flex: 0 0 auto;
-  font-size: 1.02rem;
+  font-size: 0.94rem;
+  font-weight: 700;
 }
 
 .cn-device-copy.compact small {
   flex: 1 1 auto;
+  font-size: 0.71rem;
   min-width: 0;
 }
 
@@ -3824,6 +3833,29 @@ summary {
 .cn-project-scroll::-webkit-scrollbar-thumb {
   background: rgba(32, 33, 36, 0.16);
   border-radius: 999px;
+}
+
+.cn-project-scroll,
+.cn-thread-canvas,
+.cn-live-sheet,
+.cn-saved-device-list,
+.cn-real-folder-list,
+.cn-live-popover,
+.cn-attachment-row {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.cn-project-scroll::-webkit-scrollbar,
+.cn-thread-canvas::-webkit-scrollbar,
+.cn-live-sheet::-webkit-scrollbar,
+.cn-saved-device-list::-webkit-scrollbar,
+.cn-real-folder-list::-webkit-scrollbar,
+.cn-live-popover::-webkit-scrollbar,
+.cn-attachment-row::-webkit-scrollbar {
+  display: none;
+  height: 0;
+  width: 0;
 }
 
 .cn-project-tree-title {
@@ -4117,9 +4149,9 @@ summary {
 .cn-main-header {
   align-items: center;
   display: flex;
-  gap: 0.85rem;
+  gap: 0.7rem;
   justify-content: space-between;
-  padding: 1.85rem 3.2rem 1.2rem;
+  padding: 1.08rem 2.1rem 0.95rem;
 }
 
 .cn-mobile-menu-button {
@@ -4131,7 +4163,8 @@ summary {
 }
 
 .cn-main-header h1 {
-  font-size: 1.35rem;
+  font-size: 1.18rem;
+  font-weight: 680;
   letter-spacing: -0.02em;
   margin: 0;
   max-width: min(720px, 54vw);
@@ -4142,37 +4175,37 @@ summary {
 
 .cn-main-header p {
   color: var(--cn-muted);
-  font-size: 0.82rem;
+  font-size: 0.76rem;
   font-weight: 650;
-  margin: 0.35rem 0 0;
+  margin: 0.18rem 0 0;
 }
 
 .cn-empty-canvas {
   align-items: start;
   display: grid;
-  gap: 1.2rem;
-  padding: 5rem 3.2rem 0;
+  gap: 0.8rem;
+  padding: 3.2rem 2.1rem 0;
 }
 
 .cn-empty-copy {
-  max-width: 680px;
+  max-width: 560px;
 }
 
 .cn-empty-copy h2 {
-  font-size: clamp(2.1rem, 3.3vw, 3.2rem);
-  font-weight: 650;
+  font-size: clamp(1.7rem, 2.35vw, 2.3rem);
+  font-weight: 640;
   letter-spacing: -0.045em;
-  line-height: 1.1;
+  line-height: 1.08;
   margin: 0;
 }
 
 .cn-empty-copy p {
   color: var(--cn-muted);
-  font-size: 1.05rem;
+  font-size: 0.92rem;
   font-weight: 560;
-  line-height: 1.65;
-  margin: 1rem 0 0;
-  max-width: 640px;
+  line-height: 1.58;
+  margin: 0.72rem 0 0;
+  max-width: 480px;
 }
 
 .cn-flow-card,
@@ -4247,10 +4280,10 @@ summary {
   border-radius: 18px;
   box-shadow: none;
   color: var(--cn-ink);
-  font-size: 1rem;
-  line-height: 1.55;
-  min-height: 4.4rem;
-  padding: 0.5rem 0.6rem;
+  font-size: 0.96rem;
+  line-height: 1.48;
+  min-height: 3.65rem;
+  padding: 0.34rem 0.48rem;
   resize: none;
 }
 
@@ -4265,7 +4298,7 @@ summary {
 .cn-composer-toolbar {
   align-items: center;
   display: flex;
-  gap: 0.5rem;
+  gap: 0.42rem;
 }
 
 .cn-icon-button,
@@ -4282,12 +4315,12 @@ summary {
   background: transparent;
   color: var(--cn-ink);
   display: inline-flex;
-  font-size: 1.55rem;
+  font-size: 1.38rem;
   font-weight: 450;
   justify-content: center;
-  min-height: 38px;
+  min-height: 34px;
   padding: 0;
-  width: 38px;
+  width: 34px;
 }
 
 .cn-icon-button:hover {
@@ -4300,10 +4333,10 @@ summary {
   border: 1px solid var(--cn-line);
   color: var(--cn-ink);
   display: inline-flex;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   gap: 0.36rem;
-  min-height: 34px;
-  padding: 0.42rem 0.78rem;
+  min-height: 32px;
+  padding: 0.34rem 0.68rem;
 }
 
 .cn-composer-pill .cn-codex-icon {
@@ -4320,13 +4353,13 @@ summary {
   background: var(--cn-black);
   color: #fff;
   display: inline-flex;
-  font-size: 1.35rem;
-  height: 46px;
+  font-size: 1.12rem;
+  height: 40px;
   justify-content: center;
   margin-left: auto;
-  min-height: 46px;
+  min-height: 40px;
   padding: 0;
-  width: 46px;
+  width: 40px;
 }
 
 .cn-thread-canvas {

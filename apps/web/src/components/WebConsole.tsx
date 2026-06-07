@@ -1677,7 +1677,7 @@ export function WebConsole() {
 
             <div className="cn-sidebar-brand">
               <strong>CodexNext</strong>
-              <span>Your personal Codex control plane</span>
+              <span>Local threads</span>
             </div>
 
             <button
@@ -1689,9 +1689,7 @@ export function WebConsole() {
               <span className={connected ? "cn-live-dot" : "cn-live-dot offline"} />
               <span className="cn-device-copy compact">
                 <strong>{deviceDisplayName}</strong>
-                <small>
-                  {statusLabel(streamStatus)} · {healthStatus?.codex?.version ?? "codex-cli unknown"}
-                </small>
+                <small>{connected ? shortAgentUrl(agentUrl) : "未连接"}</small>
               </span>
             </button>
 
@@ -2086,10 +2084,9 @@ function NewSessionCanvas() {
   return (
     <section className="cn-empty-canvas cn-live-empty">
       <div className="cn-empty-copy">
-        <h2>要在 CodexNext 中构建什么？</h2>
+        <h2>开始新对话</h2>
         <p>
-          像 Codex 一样从底部输入开始。新会话设置只在弹窗里完成：
-          选择设备、项目文件夹、权限、模型和推理深度。
+          从底部输入开始。设备、项目、权限和模型都在弹层里切换。
         </p>
       </div>
     </section>
