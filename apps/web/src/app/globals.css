@@ -2258,11 +2258,13 @@ summary {
   margin-top: 0.15rem;
 }
 
-.cn-device-sheet {
+.cn-sheet-card.cn-device-sheet {
   display: grid;
   gap: 1rem;
   grid-template-rows: auto minmax(0, 1fr);
-  width: min(840px, calc(100vw - 8rem));
+  max-height: min(760px, calc(100vh - 3rem));
+  overflow: hidden;
+  width: min(920px, calc(100vw - 3rem));
 }
 
 .cn-device-sheet-header {
@@ -2288,11 +2290,13 @@ summary {
 }
 
 .cn-device-manager {
+  align-items: stretch;
   display: grid;
   gap: 1rem;
-  grid-template-columns: minmax(236px, 292px) minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .cn-device-library,
@@ -2300,7 +2304,9 @@ summary {
   background: var(--cn-soft);
   border: 1px solid var(--cn-line);
   border-radius: 24px;
+  min-height: 0;
   min-width: 0;
+  overflow: auto;
   padding: 1rem;
 }
 
@@ -2308,6 +2314,7 @@ summary {
   background: var(--cn-surface);
   display: grid;
   gap: 1rem;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 .cn-device-editor-top {
@@ -2316,8 +2323,10 @@ summary {
 }
 
 .cn-device-form-fields {
+  align-content: start;
   display: grid;
   gap: 0.8rem;
+  min-height: 0;
 }
 
 .cn-device-field {
@@ -2481,6 +2490,32 @@ summary {
   border-top: 1px solid rgba(103, 107, 112, 0.12);
   margin-top: 0.15rem;
   padding-top: 0.88rem;
+}
+
+@media (max-width: 1040px) {
+  .cn-sheet-card.cn-device-sheet {
+    max-height: min(780px, calc(100vh - 2rem));
+    width: min(880px, calc(100vw - 2rem));
+  }
+
+  .cn-device-manager {
+    grid-template-columns: minmax(236px, 284px) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 860px) {
+  .cn-sheet-card.cn-device-sheet {
+    max-height: min(840px, calc(100vh - 1.5rem));
+    width: min(720px, calc(100vw - 1.5rem));
+  }
+
+  .cn-device-manager {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cn-saved-device-list {
+    max-height: 14rem;
+  }
 }
 
 .cn-live-session-sheet {
