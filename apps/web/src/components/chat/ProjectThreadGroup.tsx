@@ -69,10 +69,6 @@ export function ProjectThreadGroup(props: {
             <CodexIcon name="folder" className="cn-project-icon" />
             <strong>{props.group.name}</strong>
           </span>
-          <CodexIcon
-            name={collapsed ? "chevronRight" : "chevronDown"}
-            className="cn-project-collapse-icon"
-          />
         </button>
         <div className="cn-project-header-actions">
           <button
@@ -141,7 +137,7 @@ export function ProjectThreadGroup(props: {
               <span>归档对话</span>
             </button>
             <button
-              className="cn-project-menu-item danger"
+              className="cn-project-menu-item"
               type="button"
               role="menuitem"
               onClick={() => {

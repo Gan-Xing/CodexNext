@@ -4278,17 +4278,6 @@ summary {
   white-space: nowrap;
 }
 
-.cn-project-collapse-icon {
-  color: #8b9096;
-  height: 16px;
-  opacity: 0.62;
-  width: 16px;
-}
-
-.cn-project-name:hover .cn-project-collapse-icon {
-  opacity: 1;
-}
-
 .cn-project-header-actions {
   align-items: center;
   display: inline-flex;
@@ -4307,12 +4296,6 @@ summary {
 .cn-project-header.menu-open .cn-project-header-actions {
   opacity: 1;
   pointer-events: auto;
-}
-
-.cn-project-header:hover .cn-project-collapse-icon,
-.cn-project-header:focus-within .cn-project-collapse-icon,
-.cn-project-header.menu-open .cn-project-collapse-icon {
-  opacity: 0;
 }
 
 .cn-project-header-action {
@@ -4370,10 +4353,6 @@ summary {
 .cn-project-menu-item:hover {
   background: rgba(31, 35, 40, 0.05);
   transform: none;
-}
-
-.cn-project-menu-item.danger {
-  color: #7d3131;
 }
 
 .cn-project-menu-item .cn-codex-icon {
@@ -4479,12 +4458,18 @@ summary {
   top: 50%;
   transform: translateY(-50%);
   transition: opacity 120ms ease;
+  width: 48px;
 }
 
 .cn-thread-row:hover .cn-thread-actions,
 .cn-thread-row:focus-within .cn-thread-actions {
   opacity: 1;
   pointer-events: auto;
+}
+
+.cn-thread-row:hover .cn-thread-main,
+.cn-thread-row:focus-within .cn-thread-main {
+  grid-template-columns: minmax(0, 1fr) 48px;
 }
 
 .cn-thread-row:hover .cn-thread-time,
@@ -6473,6 +6458,11 @@ summary {
   .cn-thread-main {
     gap: 0.56rem;
     padding: 0.24rem 0.12rem;
+  }
+
+  .cn-thread-row:hover .cn-thread-main,
+  .cn-thread-row:focus-within .cn-thread-main {
+    grid-template-columns: minmax(0, 1fr) 48px;
   }
 
   .cn-thread-title {
