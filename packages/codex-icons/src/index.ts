@@ -4,6 +4,7 @@ export type CodexUiIconName =
   | "arrowUp"
   | "archive"
   | "back"
+  | "browserUse"
   | "check"
   | "chevronDown"
   | "chevronLeft"
@@ -11,15 +12,21 @@ export type CodexUiIconName =
   | "clock"
   | "collapse"
   | "compose"
+  | "document"
   | "edit"
   | "forward"
   | "folder"
+  | "folderPlus"
   | "goal"
+  | "github"
+  | "gmail"
+  | "googleDrive"
   | "hand"
   | "imageSquare"
   | "phone"
   | "pin"
   | "more"
+  | "notion"
   | "plug"
   | "plus"
   | "search"
@@ -27,8 +34,10 @@ export type CodexUiIconName =
   | "shield"
   | "shieldAlert"
   | "stop"
+  | "summary"
   | "tasks"
   | "terminal"
+  | "trash"
   | "x";
 
 type AssetIconSpec = {
@@ -58,6 +67,7 @@ const codexUiIconSpecs = {
   arrowUp: { asset: "arrow-up-coa6jjxn" },
   archive: { asset: "archive-d1deq-zz" },
   back: { asset: "arrow-left-cy8p3y0c" },
+  browserUse: { asset: "browser-use-b5flzyg6" },
   check: { asset: "check-md-bzlzxdm7" },
   chevronDown: { asset: "chevron-aeenlp4g" },
   chevronLeft: { asset: "chevron-right-cqaqxhbx", rotateDegrees: 180 },
@@ -65,13 +75,19 @@ const codexUiIconSpecs = {
   clock: { asset: "clock-bjqums8u" },
   collapse: { svg: inlineSvgByName.collapse },
   compose: { asset: "compose-bhtlanqm" },
+  document: { asset: "document-search-c-kua6rp" },
   edit: { asset: "edit-b9jltkkg" },
   folder: { asset: "folder-bpwd3kcz" },
+  folderPlus: { asset: "add-project-menu-items-cy9ai-pb" },
   forward: { asset: "arrow-left-cy8p3y0c", rotateDegrees: 180 },
   goal: { svg: inlineSvgByName.goal },
+  github: { asset: "github-mark-dzuhu9c1" },
+  gmail: { asset: "known-app-icon-bei7oxdu--09" },
+  googleDrive: { asset: "google-drive-cc-egn92" },
   hand: { svg: inlineSvgByName.hand },
   imageSquare: { asset: "image-square-cpvm9cik" },
   more: { asset: "three-dots-c-3fbqw8" },
+  notion: { asset: "notion-cpbap5le--02" },
   phone: { asset: "phone-dfkyobyn" },
   pin: { asset: "local-conversation-background-terminals-model-cpnrd5q0" },
   plug: { asset: "apps-dbd5dyzg" },
@@ -81,8 +97,10 @@ const codexUiIconSpecs = {
   shield: { svg: inlineSvgByName.shield },
   shieldAlert: { asset: "shield-exclamation-kf9myntx" },
   stop: { asset: "stop-d3wuyj06" },
+  summary: { asset: "thread-side-panel-tabs-qmoazjz--04" },
   tasks: { asset: "tasks-bdbup9t4" },
   terminal: { asset: "terminal-bhtf7d-4" },
+  trash: { asset: "trash-clrlrkdw" },
   x: { asset: "x-dypucsqe" }
 } satisfies Record<CodexUiIconName, CodexUiIconSpec>;
 

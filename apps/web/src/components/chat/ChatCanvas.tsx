@@ -16,7 +16,7 @@ export function ChatCanvas(props: {
   pendingApprovals: number;
   resumeState: ResumeState | null;
   session: LocalSessionSummary;
-  onOpenApproval: () => void;
+  onOpenSummary: () => void;
 }) {
   const viewportRef = useRef<HTMLElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -86,7 +86,7 @@ export function ChatCanvas(props: {
             </span>
           ) : null}
           {props.pendingApprovals > 0 ? (
-            <button className="cn-soft-button danger" type="button" onClick={props.onOpenApproval}>
+            <button className="cn-soft-button danger" type="button" onClick={props.onOpenSummary}>
               {props.pendingApprovals} 个审批请求
             </button>
           ) : null}

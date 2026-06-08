@@ -15,7 +15,7 @@ import { ProjectThreadGroup } from "./chat/ProjectThreadGroup";
 import { CodexIcon } from "./DesignLab";
 import { ApprovalModal } from "./sheets/ApprovalModal";
 import { DeviceSheet } from "./sheets/DeviceSheet";
-import { EventsSheet } from "./sheets/EventsSheet";
+import { SummarySheet } from "./sheets/SummarySheet";
 import { SessionSetupSheet } from "./sheets/SessionSetupSheet";
 
 export function WebConsole() {
@@ -64,7 +64,7 @@ export function WebConsole() {
     initialTokenBudget,
     model,
     openDeviceSheet,
-    openEventsSheet,
+    openSummarySheet,
     openNewSessionSetup,
     pendingApprovals,
     permissionMode,
@@ -73,6 +73,7 @@ export function WebConsole() {
     reasoningEffort,
     resetSidebarWidth,
     savedDevices,
+    startProjectSession,
     selectCwd,
     selectHistory,
     selectSession,
@@ -98,7 +99,11 @@ export function WebConsole() {
     submitComposer,
     threadHoverPreview,
     token,
+    togglePinnedProject,
     togglePinnedThread,
+    renameProject,
+    archiveProject,
+    removeProject,
     archiveThread,
     deleteSavedDevice,
     visibleChatItems
@@ -157,10 +162,10 @@ export function WebConsole() {
           <button
             className="cn-rail-button muted"
             type="button"
-            onClick={openEventsSheet}
-            aria-label="事件"
+            onClick={openSummarySheet}
+            aria-label="打开摘要"
           >
-            <CodexIcon name="more" />
+            <CodexIcon name="summary" />
           </button>
         </nav>
 
@@ -204,8 +209,13 @@ export function WebConsole() {
                   group={group}
                   historyLoadingKey={historyLoadingKey}
                   onArchiveThread={archiveThread}
+                  onArchiveProject={archiveProject}
                   onHideThreadPreview={clearThreadHoverPreview}
+                  onRemoveProject={removeProject}
+                  onRenameProject={renameProject}
                   onShowThreadPreview={showThreadHoverPreview}
+                  onStartProjectSession={startProjectSession}
+                  onTogglePinnedProject={togglePinnedProject}
                   onTogglePinnedThread={togglePinnedThread}
                   onSelectHistory={(entry) => void selectHistory(entry)}
                   onSelectSession={selectSession}
@@ -273,8 +283,13 @@ export function WebConsole() {
               <h1>{headerTitle}</h1>
             </div>
             <div className="cn-live-header-actions">
-              <button className="cn-soft-button" type="button" onClick={openEventsSheet}>
-                活动
+              <button
+                className="cn-summary-button"
+                type="button"
+                aria-label="打开摘要"
+                onClick={openSummarySheet}
+              >
+                <CodexIcon name="summary" />
               </button>
             </div>
           </header>
@@ -293,7 +308,7 @@ export function WebConsole() {
               pendingApprovals={pendingApprovals.length}
               resumeState={currentResumeState}
               session={currentSession}
-              onOpenApproval={openEventsSheet}
+              onOpenSummary={openSummarySheet}
             />
           ) : (
             <NewSessionCanvas />
@@ -379,10 +394,21 @@ export function WebConsole() {
           />
         ) : null}
 
-        {activeSheet === "events" ? (
-          <EventsSheet
-            events={events}
-            pendingApprovals={pendingApprovals}
+        {activeSheet === "summary" ? (
+          <SummarySheet
+            chatItems={visibleChatItems}
+            events={
+              currentSession
+                ? events.filter((event) => event.sessionId === currentSession.sessionId)
+                : []
+            }
+            pendingApprovals={
+              currentSession
+                ? pendingApprovals.filter(
+                    (approval) => approval.sessionId === currentSession.sessionId
+                  )
+                : pendingApprovals
+            }
             onClose={closeActiveSheet}
             onDecision={(approvalId, decision) => void handleApprovalDecision(approvalId, decision)}
           />

@@ -63,6 +63,7 @@ import {
 } from "../devices/device-utils";
 import {
   codexHistoryKey,
+  getProjectSidebarPrefs,
   getThreadSidebarPrefs,
   groupProjectThreads,
   historyPreviewSessionId,
@@ -73,18 +74,24 @@ import {
   makeHistoryPreviewSession,
   makePendingSession,
   pendingSessionId,
+  projectSidebarPrefsStorageKey,
   readThreadSidebarPrefs,
+  readProjectSidebarPrefs,
+  sanitizeProjectSidebarPrefs,
   sanitizeThreadSidebarPrefs,
   sessionSubtitle,
   sessionTitle,
+  shortPath,
   threadPrefsScope,
   threadSidebarPrefsStorageKey,
+  type ProjectSidebarPrefs,
+  type ProjectThreadGroupData,
   type ThreadListItem,
   type ThreadSidebarPrefs
 } from "../sessions/session-utils";
 import type { CodexIconName } from "../../components/DesignLab";
 
-export type ActiveSheet = "device" | "session" | "goal" | "events" | null;
+export type ActiveSheet = "device" | "session" | "goal" | "summary" | null;
 export type ActiveMenu = "plus" | "model" | "permission" | null;
 
 export interface ThreadHoverPreview {
@@ -151,6 +158,7 @@ export function useWebConsoleController() {
   const [autoConnect, setAutoConnect] = useState<AgentConnection | null>(null);
   const [savedDevices, setSavedDevices] = useState<SavedDevice[]>([]);
   const [threadSidebarPrefs, setThreadSidebarPrefs] = useState<Record<string, ThreadSidebarPrefs>>({});
+  const [projectSidebarPrefs, setProjectSidebarPrefs] = useState<Record<string, ProjectSidebarPrefs>>({});
   const [devicePresence, setDevicePresence] = useState<Record<string, DevicePresenceState>>({});
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [deviceName, setDeviceName] = useState("");
@@ -229,6 +237,7 @@ export function useWebConsoleController() {
   const selectedPermission =
     permissionOptions.find((option) => option.mode === permissionMode) ?? permissionOptions[0]!;
   const activeThreadPrefs = getThreadSidebarPrefs(threadSidebarPrefs, agentUrl);
+  const activeProjectPrefs = getProjectSidebarPrefs(projectSidebarPrefs, agentUrl);
   const desktopFrameStyle = useMemo(
     () => ({ "--cn-sidebar-width": `${clampSidebarWidth(sidebarWidth)}px` }) as CSSProperties,
     [sidebarWidth]
@@ -240,6 +249,7 @@ export function useWebConsoleController() {
     codexHistory,
     chatItems,
     activeThreadPrefs,
+    activeProjectPrefs,
     currentSessionId,
     selectedHistoryKey
   );
@@ -357,11 +367,13 @@ export function useWebConsoleController() {
     const storedDevices = readSavedDevices();
     const storedSidebarWidth = readSidebarWidth(clampSidebarWidth);
     const storedThreadPrefs = readThreadSidebarPrefs();
+    const storedProjectPrefs = readProjectSidebarPrefs();
     setSavedDevices(storedDevices);
     if (storedSidebarWidth !== null) {
       setSidebarWidth(storedSidebarWidth);
     }
     setThreadSidebarPrefs(storedThreadPrefs);
+    setProjectSidebarPrefs(storedProjectPrefs);
     setDeviceWorkspaces((previous) => {
       const next = { ...previous };
       for (const device of storedDevices) {
@@ -572,6 +584,18 @@ export function useWebConsoleController() {
     });
   }
 
+  function persistProjectSidebarPrefs(
+    updater:
+      | Record<string, ProjectSidebarPrefs>
+      | ((previous: Record<string, ProjectSidebarPrefs>) => Record<string, ProjectSidebarPrefs>)
+  ) {
+    setProjectSidebarPrefs((previous) => {
+      const next = resolveStateUpdater(previous, updater);
+      window.localStorage.setItem(projectSidebarPrefsStorageKey, JSON.stringify(next));
+      return next;
+    });
+  }
+
   function updateThreadSidebarPrefs(
     scopeAgentUrl: string,
     updater: (prefs: ThreadSidebarPrefs) => ThreadSidebarPrefs
@@ -580,6 +604,17 @@ export function useWebConsoleController() {
     persistThreadSidebarPrefs((previous) => ({
       ...previous,
       [scope]: sanitizeThreadSidebarPrefs(updater(getThreadSidebarPrefs(previous, scopeAgentUrl)))
+    }));
+  }
+
+  function updateProjectSidebarPrefs(
+    scopeAgentUrl: string,
+    updater: (prefs: ProjectSidebarPrefs) => ProjectSidebarPrefs
+  ) {
+    const scope = threadPrefsScope(scopeAgentUrl);
+    persistProjectSidebarPrefs((previous) => ({
+      ...previous,
+      [scope]: sanitizeProjectSidebarPrefs(updater(getProjectSidebarPrefs(previous, scopeAgentUrl)))
     }));
   }
 
@@ -614,6 +649,116 @@ export function useWebConsoleController() {
         selectedHistoryKey: null
       }));
     }
+  }
+
+  function startProjectSession(projectCwd: string) {
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      cwd: projectCwd,
+      currentSessionId: null,
+      selectedHistoryKey: null,
+      sessions: workspace.sessions.filter((session) => !isHistoryPreviewSessionId(session.sessionId))
+    }));
+    setDraft("");
+    setAttachments([]);
+    setActiveSheet(null);
+    setActiveMenu(null);
+    revealMainOnMobile();
+  }
+
+  function togglePinnedProject(projectCwd: string) {
+    updateProjectSidebarPrefs(agentUrl, (prefs) => ({
+      ...prefs,
+      pinned: prefs.pinned.includes(projectCwd)
+        ? prefs.pinned.filter((value) => value !== projectCwd)
+        : [projectCwd, ...prefs.pinned.filter((value) => value !== projectCwd)]
+    }));
+  }
+
+  function renameProject(group: ProjectThreadGroupData) {
+    const nextName = window.prompt("重命名项目", group.name);
+    if (nextName === null) {
+      return;
+    }
+    const trimmed = nextName.trim();
+    updateProjectSidebarPrefs(agentUrl, (prefs) => {
+      const renamed = { ...prefs.renamed };
+      if (!trimmed || trimmed === shortPath(group.cwd)) {
+        delete renamed[group.cwd];
+      } else {
+        renamed[group.cwd] = trimmed;
+      }
+      return {
+        ...prefs,
+        renamed
+      };
+    });
+  }
+
+  function archiveProject(group: ProjectThreadGroupData) {
+    const threadIds = group.items.map((item) => item.threadId);
+    const sessionIds = new Set(group.sessions.map((session) => session.sessionId));
+    const historyPreviewIds = new Set(group.entries.map(historyPreviewSessionId));
+    const clearsSelection = group.items.some((item) => item.selected);
+
+    updateThreadSidebarPrefs(agentUrl, (prefs) => ({
+      pinned: prefs.pinned.filter((value) => !threadIds.includes(value)),
+      archived: [...new Set([...threadIds, ...prefs.archived])]
+    }));
+
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      currentSessionId:
+        clearsSelection && workspace.currentSessionId && sessionIds.has(workspace.currentSessionId)
+          ? null
+          : workspace.currentSessionId && historyPreviewIds.has(workspace.currentSessionId)
+            ? null
+            : workspace.currentSessionId,
+      selectedHistoryKey:
+        clearsSelection && group.entries.some((entry) => codexHistoryKey(entry) === workspace.selectedHistoryKey)
+          ? null
+          : workspace.selectedHistoryKey,
+      sessions: workspace.sessions.filter(
+        (session) =>
+          !sessionIds.has(session.sessionId) && !historyPreviewIds.has(session.sessionId)
+      )
+    }));
+  }
+
+  function removeProject(group: ProjectThreadGroupData) {
+    const sessionIds = new Set(group.sessions.map((session) => session.sessionId));
+    const historyPreviewIds = new Set(group.entries.map(historyPreviewSessionId));
+    const containsSelectedHistory = group.entries.some(
+      (entry) => codexHistoryKey(entry) === selectedHistoryKey
+    );
+    const containsSelectedSession = group.sessions.some(
+      (session) => session.sessionId === currentSessionId
+    );
+
+    updateProjectSidebarPrefs(agentUrl, (prefs) => {
+      const renamed = { ...prefs.renamed };
+      delete renamed[group.cwd];
+      return {
+        hidden: [group.cwd, ...prefs.hidden.filter((value) => value !== group.cwd)],
+        pinned: prefs.pinned.filter((value) => value !== group.cwd),
+        renamed
+      };
+    });
+
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      cwd: workspace.cwd === group.cwd ? "" : workspace.cwd,
+      currentSessionId:
+        containsSelectedSession ||
+        (workspace.currentSessionId ? historyPreviewIds.has(workspace.currentSessionId) : false)
+          ? null
+          : workspace.currentSessionId,
+      selectedHistoryKey: containsSelectedHistory ? null : workspace.selectedHistoryKey,
+      sessions: workspace.sessions.filter(
+        (session) =>
+          !sessionIds.has(session.sessionId) && !historyPreviewIds.has(session.sessionId)
+      )
+    }));
   }
 
   const clearThreadHoverPreview = useCallback(() => setThreadHoverPreview(null), []);
@@ -1488,9 +1633,9 @@ export function useWebConsoleController() {
     setActiveSheet("device");
   }
 
-  function openEventsSheet() {
+  function openSummarySheet() {
     revealMainOnMobile();
-    setActiveSheet("events");
+    setActiveSheet("summary");
   }
 
   function openGoalSheet() {
@@ -1696,7 +1841,7 @@ export function useWebConsoleController() {
     initialTokenBudget,
     model,
     openDeviceSheet,
-    openEventsSheet,
+    openSummarySheet,
     openGoalSheet,
     openNewSessionSetup,
     pendingApprovals,
@@ -1708,6 +1853,7 @@ export function useWebConsoleController() {
     reasoningOptions,
     resetSidebarWidth,
     savedDevices,
+    startProjectSession,
     selectCwd,
     selectHistory,
     selectSession,
@@ -1735,7 +1881,11 @@ export function useWebConsoleController() {
     submitComposer,
     threadHoverPreview,
     token,
+    togglePinnedProject,
     togglePinnedThread,
+    renameProject,
+    archiveProject,
+    removeProject,
     archiveThread,
     deleteSavedDevice,
     visibleChatItems
