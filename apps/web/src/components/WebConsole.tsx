@@ -73,6 +73,9 @@ export function WebConsole() {
     projectGroups,
     reasoningEffort,
     resetSidebarWidth,
+    relayEnabled,
+    relayConnectionInfo,
+    refreshRelayDevices,
     savedDevices,
     startProjectSession,
     selectCwd,
@@ -362,12 +365,15 @@ export function WebConsole() {
             devicePresence={devicePresence}
             deviceName={deviceName}
             healthStatus={healthStatus}
+            relayEnabled={relayEnabled}
+            relayConnectionInfo={relayConnectionInfo}
             savedDevices={savedDevices}
             selectedDeviceId={selectedDeviceId}
             streamStatus={streamStatus}
             onClose={closeActiveSheet}
             onConnect={handleConnect}
             onDeleteDevice={deleteSavedDevice}
+            onRefreshRelayDevices={refreshRelayDevices}
           />
         ) : null}
 

@@ -160,6 +160,7 @@ export const permissionOptions: Array<{
 const DEFAULT_SIDEBAR_WIDTH = 292;
 const MIN_SIDEBAR_WIDTH = 272;
 const MAX_SIDEBAR_WIDTH = 620;
+const RELAY_CONFIGURED = Boolean(process.env.NEXT_PUBLIC_CODEXNEXT_RELAY_URL);
 
 interface RelayBootstrapConfig {
   accessToken: string;
@@ -262,12 +263,30 @@ export function useWebConsoleController() {
     permissionOptions.find((option) => option.mode === permissionMode) ?? permissionOptions[0]!;
   const activeThreadPrefs = getThreadSidebarPrefs(threadSidebarPrefs, agentUrl);
   const activeProjectPrefs = getProjectSidebarPrefs(projectSidebarPrefs, agentUrl);
+  const relayEnabled =
+    RELAY_CONFIGURED ||
+    Boolean(relayBootstrap) ||
+    connection.mode === "relay" ||
+    savedDevices.some((device) => device.mode === "relay");
+  const relayConnectionInfo = relayBootstrap
+    ? {
+        accessToken: relayBootstrap.accessToken,
+        relayUrl: relayBootstrap.relayUrl
+      }
+    : connection.mode === "relay"
+      ? {
+          accessToken: connection.ownerToken,
+          relayUrl: connection.relayUrl
+        }
+      : null;
   const desktopFrameStyle = useMemo(
     () => ({ "--cn-sidebar-width": `${clampSidebarWidth(sidebarWidth)}px` }) as CSSProperties,
     [sidebarWidth]
   );
   const deviceDisplayName =
-    deviceName || healthStatus?.device?.defaultName || defaultDeviceName(agentUrl);
+    deviceName ||
+    healthStatus?.device?.defaultName ||
+    (relayEnabled && !selectedSavedDevice ? "CodexNext relay" : defaultDeviceName(agentUrl));
   const projectGroups = groupProjectThreads(
     sessions,
     codexHistory,
@@ -527,6 +546,47 @@ export function useWebConsoleController() {
     void connect(autoConnect).catch((err) => setError(formatConnectionError(err, label)));
   }, [autoConnect]);
 
+  const refreshRelayDevices = useCallback(async () => {
+    if (!relayBootstrap) {
+      return [] as SavedDevice[];
+    }
+    const devices = await listRelayDevices(
+      relayBootstrap.relayUrl,
+      relayBootstrap.accessToken
+    );
+    const relaySavedDevices = devices.map((device) => ({
+      id: device.deviceId,
+      name: device.deviceName,
+      mode: "relay" as const,
+      relayUrl: relayBootstrap.relayUrl,
+      ownerToken: relayBootstrap.accessToken,
+      deviceId: device.deviceId,
+      hostname: device.hostname,
+      online: device.online,
+      codexVersion: device.codexVersion ?? null,
+      lastConnectedAt: device.lastSeenAt
+    }));
+
+    const directDevices = readSavedDevices().filter((device) => device.mode === "direct");
+    persistDevices([...relaySavedDevices, ...directDevices]);
+    setDeviceWorkspaces((previous) => {
+      const next = { ...previous };
+      for (const device of relaySavedDevices) {
+        next[device.id] =
+          next[device.id] ?? createDeviceWorkspace(connectionFromSavedDevice(device));
+      }
+      return next;
+    });
+    if (!selectedDeviceIdRef.current) {
+      const preferred = relaySavedDevices.find((device) => device.online) ?? relaySavedDevices[0];
+      if (preferred) {
+        setSelectedDeviceId(preferred.id);
+        setDeviceName(preferred.name);
+      }
+    }
+    return relaySavedDevices;
+  }, [relayBootstrap]);
+
   useEffect(() => {
     if (!relayBootstrap) {
       return;
@@ -535,43 +595,7 @@ export function useWebConsoleController() {
 
     const syncRelayDevices = async () => {
       try {
-        const devices = await listRelayDevices(
-          relayBootstrap.relayUrl,
-          relayBootstrap.accessToken
-        );
-        if (cancelled) {
-          return;
-        }
-        const relaySavedDevices = devices.map((device) => ({
-          id: device.deviceId,
-          name: device.deviceName,
-          mode: "relay" as const,
-          relayUrl: relayBootstrap.relayUrl,
-          ownerToken: relayBootstrap.accessToken,
-          deviceId: device.deviceId,
-          hostname: device.hostname,
-          online: device.online,
-          codexVersion: device.codexVersion ?? null,
-          lastConnectedAt: device.lastSeenAt
-        }));
-
-        const directDevices = readSavedDevices().filter((device) => device.mode === "direct");
-        persistDevices([...relaySavedDevices, ...directDevices]);
-        setDeviceWorkspaces((previous) => {
-          const next = { ...previous };
-          for (const device of relaySavedDevices) {
-            next[device.id] =
-              next[device.id] ?? createDeviceWorkspace(connectionFromSavedDevice(device));
-          }
-          return next;
-        });
-        if (!selectedDeviceIdRef.current) {
-          const preferred = relaySavedDevices.find((device) => device.online) ?? relaySavedDevices[0];
-          if (preferred) {
-            setSelectedDeviceId(preferred.id);
-            setDeviceName(preferred.name);
-          }
-        }
+        await refreshRelayDevices();
       } catch (error) {
         if (!cancelled) {
           setError(formatError(error));
@@ -585,7 +609,7 @@ export function useWebConsoleController() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [relayBootstrap]);
+  }, [refreshRelayDevices, relayBootstrap]);
 
   useEffect(() => {
     if (currentSession?.goal?.objective) {
@@ -2051,8 +2075,11 @@ export function useWebConsoleController() {
     projectGroups,
     reasoningEffort,
     reasoningOptions,
+    relayEnabled,
+    relayConnectionInfo,
     resetSidebarWidth,
     savedDevices,
+    refreshRelayDevices,
     startProjectSession,
     selectCwd,
     selectHistory,

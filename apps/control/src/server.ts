@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import cors from "@fastify/cors";
 import Fastify, {
   type FastifyInstance,
   type FastifyReply,
@@ -75,6 +76,12 @@ export function createControlServer(
 ): ControlServerHandle {
   const app = Fastify({
     logger: false
+  });
+  void app.register(cors, {
+    origin: true,
+    credentials: false,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Authorization", "Content-Type"]
   });
   const io = new SocketIoServer(app.server as HttpServer, {
     path: RelaySocketPath,
