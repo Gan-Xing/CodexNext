@@ -12,6 +12,7 @@ import {
 
 function makeWorkspace() {
   return createDeviceWorkspace({
+    mode: "direct",
     agentUrl: "http://127.0.0.1:17361",
     token: "secret"
   });

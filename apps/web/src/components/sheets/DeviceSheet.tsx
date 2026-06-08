@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import type { AgentConnection } from "../../lib/api";
 import type { LocalHealthResponse } from "../../lib/types";
 import {
+  connectionFromSavedDevice,
   defaultDeviceName,
   findSavedDevice,
-  isSameDeviceEndpoint,
-  shortAgentUrl,
+  isSameAgentConnection,
+  savedDeviceAddressLabel,
   type DeviceDraftState,
   type DevicePresenceState,
   type SavedDevice
@@ -15,15 +16,14 @@ import {
 import { CodexIcon } from "../DesignLab";
 
 export function DeviceSheet(props: {
-  agentUrl: string;
   connected: boolean;
+  connection: AgentConnection;
   devicePresence: Record<string, DevicePresenceState>;
   deviceName: string;
   healthStatus: LocalHealthResponse | null;
   savedDevices: SavedDevice[];
   selectedDeviceId: string | null;
   streamStatus: string;
-  token: string;
   onClose: () => void;
   onConnect: (
     connection: AgentConnection,
@@ -34,11 +34,10 @@ export function DeviceSheet(props: {
 }) {
   const [draft, setDraft] = useState<DeviceDraftState>(() =>
     createActiveDeviceDraft({
-      agentUrl: props.agentUrl,
+      connection: props.connection,
       deviceName: props.deviceName,
       savedDevices: props.savedDevices,
       selectedDeviceId: props.selectedDeviceId,
-      token: props.token
     })
   );
 
@@ -51,19 +50,12 @@ export function DeviceSheet(props: {
   const draftConnected = Boolean(
     draft.selectedDeviceId &&
       props.connected &&
-      isSameDeviceEndpoint(
-        {
-          id: draft.selectedDeviceId,
-          name: draft.name,
-          agentUrl: draft.agentUrl,
-          token: draft.token
-        },
-        props.agentUrl,
-        props.token
-      )
+      draftSavedDevice &&
+      isSameAgentConnection(connectionFromSavedDevice(draftSavedDevice), props.connection)
   );
   const draftOnline = draftConnected || draftPresence?.status === "online";
   const draftDisplayName = draft.name.trim() || draftSavedDevice?.name || "新设备";
+  const relayDevices = props.savedDevices.filter((device) => device.mode === "relay");
 
   useEffect(() => {
     if (
@@ -110,7 +102,7 @@ export function DeviceSheet(props: {
                 const online =
                   presence?.status === "online" ||
                   (props.connected &&
-                    isSameDeviceEndpoint(device, props.agentUrl, props.token));
+                    isSameAgentConnection(connectionFromSavedDevice(device), props.connection));
                 return (
                   <article
                     key={device.id}
@@ -127,15 +119,16 @@ export function DeviceSheet(props: {
                         setDraft({
                           selectedDeviceId: device.id,
                           name: device.name,
-                          agentUrl: device.agentUrl,
-                          token: device.token
+                          mode: device.mode,
+                          agentUrl: device.mode === "direct" ? device.agentUrl : "",
+                          token: device.mode === "direct" ? device.token : ""
                         })
                       }
-                      title={`${device.name} · ${device.agentUrl}`}
+                      title={`${device.name} · ${savedDeviceAddressLabel(device)}`}
                     >
                       <span className={online ? "online" : ""} />
                       <strong>{device.name}</strong>
-                      <small>{shortAgentUrl(device.agentUrl)}</small>
+                      <small>{savedDeviceAddressLabel(device)}</small>
                     </button>
                     <button
                       className="cn-device-delete-button"
@@ -167,57 +160,100 @@ export function DeviceSheet(props: {
                 <span className={draftOnline ? "cn-live-dot" : "cn-live-dot offline"} />
                 <div>
                   <strong>{draftDisplayName}</strong>
-                  <small>{shortAgentUrl(draft.agentUrl)}</small>
+                  <small>
+                    {draftSavedDevice ? savedDeviceAddressLabel(draftSavedDevice) : draft.agentUrl}
+                  </small>
                 </div>
               </div>
             </div>
 
-            <div className="cn-device-form-fields">
-              <label className="cn-device-field cn-device-field-name">
-                设备名称
-                <input
-                  name="device_name"
-                  value={draft.name}
-                  onChange={(event) =>
-                    setDraft((previous) => ({
-                      ...previous,
-                      name: event.target.value
-                    }))
-                  }
-                  placeholder="Macmini"
-                />
-              </label>
-              <label className="cn-device-field cn-device-field-url">
-                地址
-                <input
-                  name="device_agent_url"
-                  value={draft.agentUrl}
-                  onChange={(event) =>
-                    setDraft((previous) => ({
-                      ...previous,
-                      agentUrl: event.target.value,
-                      selectedDeviceId: null
-                    }))
-                  }
-                  placeholder="http://127.0.0.1:17361"
-                />
-              </label>
-              <label className="cn-device-field cn-device-field-token">
-                Token
-                <input
-                  name="device_access_token"
-                  value={draft.token}
-                  onChange={(event) =>
-                    setDraft((previous) => ({
-                      ...previous,
-                      selectedDeviceId: null,
-                      token: event.target.value
-                    }))
-                  }
-                  placeholder="token"
-                />
-              </label>
-            </div>
+            {draftSavedDevice?.mode === "relay" ? (
+              <div className="cn-device-form-fields">
+                <label className="cn-device-field cn-device-field-name">
+                  设备名称
+                  <input
+                    name="device_name"
+                    value={draft.name}
+                    onChange={(event) =>
+                      setDraft((previous) => ({
+                        ...previous,
+                        name: event.target.value
+                      }))
+                    }
+                    placeholder="MacBook"
+                  />
+                </label>
+                <label className="cn-device-field">
+                  Relay
+                  <input name="device_relay_url" value={draftSavedDevice.relayUrl} disabled />
+                </label>
+              </div>
+            ) : (
+              <div className="cn-device-form-fields">
+                <label className="cn-device-field cn-device-field-name">
+                  设备名称
+                  <input
+                    name="device_name"
+                    value={draft.name}
+                    onChange={(event) =>
+                      setDraft((previous) => ({
+                        ...previous,
+                        name: event.target.value
+                      }))
+                    }
+                    placeholder="Macmini"
+                  />
+                </label>
+                <label className="cn-device-field cn-device-field-url">
+                  地址
+                  <input
+                    name="device_agent_url"
+                    value={draft.agentUrl}
+                    onChange={(event) =>
+                      setDraft((previous) => ({
+                        ...previous,
+                        agentUrl: event.target.value,
+                        mode: "direct",
+                        selectedDeviceId: null
+                      }))
+                    }
+                    placeholder="http://127.0.0.1:17361"
+                  />
+                </label>
+                <label className="cn-device-field cn-device-field-token">
+                  Token
+                  <input
+                    name="device_access_token"
+                    value={draft.token}
+                    onChange={(event) =>
+                      setDraft((previous) => ({
+                        ...previous,
+                        mode: "direct",
+                        selectedDeviceId: null,
+                        token: event.target.value
+                      }))
+                    }
+                    placeholder="token"
+                  />
+                </label>
+              </div>
+            )}
+
+            {relayDevices.length > 0 ? (
+              <details className="cn-device-advanced">
+                <summary>Advanced</summary>
+                <div className="cn-device-advanced-copy">
+                  Direct endpoint 仅用于本地开发模式。
+                </div>
+                <button
+                  className="cn-soft-button"
+                  type="button"
+                  onClick={() => setDraft(createEmptyDeviceDraft())}
+                >
+                  添加 direct endpoint
+                </button>
+              </details>
+            ) : null}
 
             <div className="cn-sheet-actions cn-device-sheet-actions">
               <button className="cn-soft-button" type="button" onClick={props.onClose}>
@@ -228,7 +264,9 @@ export function DeviceSheet(props: {
                 type="button"
                 onClick={() =>
                   void props.onConnect(
-                    { agentUrl: draft.agentUrl, token: draft.token },
+                    draftSavedDevice
+                      ? connectionFromSavedDevice(draftSavedDevice)
+                      : { mode: "direct", agentUrl: draft.agentUrl, token: draft.token },
                     draft.name,
                     draft.selectedDeviceId
                   )
@@ -247,11 +285,10 @@ export function DeviceSheet(props: {
 }
 
 function createActiveDeviceDraft(params: {
-  agentUrl: string;
+  connection: AgentConnection;
   deviceName: string;
   savedDevices: SavedDevice[];
   selectedDeviceId: string | null;
-  token: string;
 }): DeviceDraftState {
   const selectedDevice = params.selectedDeviceId
     ? params.savedDevices.find((device) => device.id === params.selectedDeviceId) ??
@@ -259,26 +296,33 @@ function createActiveDeviceDraft(params: {
     : null;
   const matchedDevice =
     selectedDevice ??
-    findSavedDevice(params.savedDevices, params.agentUrl, params.token);
+    findSavedDevice(params.savedDevices, params.connection);
   if (matchedDevice) {
     return {
       selectedDeviceId: matchedDevice.id,
       name: matchedDevice.name,
-      agentUrl: matchedDevice.agentUrl,
-      token: matchedDevice.token
+      mode: matchedDevice.mode,
+      agentUrl: matchedDevice.mode === "direct" ? matchedDevice.agentUrl : "",
+      token: matchedDevice.mode === "direct" ? matchedDevice.token : ""
     };
   }
   return {
     selectedDeviceId: null,
-    name: params.deviceName || defaultDeviceName(params.agentUrl),
-    agentUrl: params.agentUrl,
-    token: params.token
+    mode: params.connection.mode,
+    name:
+      params.deviceName ||
+      (params.connection.mode === "direct"
+        ? defaultDeviceName(params.connection.agentUrl)
+        : "CodexNext relay"),
+    agentUrl: params.connection.mode === "direct" ? params.connection.agentUrl : "http://127.0.0.1:17361",
+    token: params.connection.mode === "direct" ? params.connection.token : "test-token"
   };
 }
 
 function createEmptyDeviceDraft(): DeviceDraftState {
   return {
     selectedDeviceId: null,
+    mode: "direct",
     name: "",
     agentUrl: "http://127.0.0.1:17361",
     token: "test-token"

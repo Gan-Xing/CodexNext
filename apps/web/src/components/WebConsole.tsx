@@ -28,6 +28,7 @@ export function WebConsole() {
     chatItems,
     clearThreadHoverPreview,
     closeActiveSheet,
+    connection,
     connected,
     codexHistory,
     currentResumeState,
@@ -195,7 +196,13 @@ export function WebConsole() {
               <span className={connected ? "cn-live-dot" : "cn-live-dot offline"} />
               <span className="cn-device-copy compact">
                 <strong>{deviceDisplayName}</strong>
-                <small>{connected ? agentUrl.replace(/^https?:\/\//, "") : "未连接"}</small>
+                <small>
+                  {connected
+                    ? connection.mode === "direct"
+                      ? connection.agentUrl.replace(/^https?:\/\//, "")
+                      : connection.deviceId
+                    : "未连接"}
+                </small>
               </span>
             </button>
           </div>
@@ -350,15 +357,14 @@ export function WebConsole() {
 
         {activeSheet === "device" ? (
           <DeviceSheet
-            agentUrl={agentUrl}
             connected={connected}
+            connection={connection}
             devicePresence={devicePresence}
             deviceName={deviceName}
             healthStatus={healthStatus}
             savedDevices={savedDevices}
             selectedDeviceId={selectedDeviceId}
             streamStatus={streamStatus}
-            token={token}
             onClose={closeActiveSheet}
             onConnect={handleConnect}
             onDeleteDevice={deleteSavedDevice}

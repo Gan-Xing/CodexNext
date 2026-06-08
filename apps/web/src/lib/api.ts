@@ -1,4 +1,5 @@
 import type {
+  AgentConnection,
   LocalApprovalDecision,
   LocalCodexHistoryDetailResponse,
   LocalCodexHistoryResponse,
@@ -10,26 +11,25 @@ import type {
   LocalResumeSessionResponse,
   LocalSendMessageInput,
   LocalStartSessionInput,
-  LocalSessionSummary
+  LocalSessionSummary,
+  RelayDeviceRecord,
+  RelayDevicesResponse
 } from "./types";
 
-export interface AgentConnection {
-  agentUrl: string;
-  token: string;
-}
+export type { AgentConnection };
 
 export async function agentFetch<T>(
   connection: AgentConnection,
   path: string,
   init: RequestInit = {}
 ): Promise<T> {
-  const url = new URL(path, connection.agentUrl);
-  url.searchParams.set("token", connection.token);
+  const url = resolveAgentUrl(connection, path);
 
   const response = await fetch(url, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...relayAuthHeaders(connection),
       ...(init.headers ?? {})
     }
   });
@@ -40,6 +40,24 @@ export async function agentFetch<T>(
   }
 
   return (await response.json()) as T;
+}
+
+export async function listRelayDevices(
+  relayUrl: string,
+  accessToken: string
+): Promise<RelayDeviceRecord[]> {
+  const url = new URL("/api/devices", relayUrl);
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`
+    }
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `${response.status} ${response.statusText}`);
+  }
+  const payload = (await response.json()) as RelayDevicesResponse;
+  return payload.devices;
 }
 
 export function health(connection: AgentConnection): Promise<LocalHealthResponse> {
@@ -144,4 +162,67 @@ export function resolveApproval(
     method: "POST",
     body: JSON.stringify({ decision })
   });
+}
+
+export function isDirectConnection(
+  connection: AgentConnection
+): connection is Extract<AgentConnection, { mode: "direct" }> {
+  return connection.mode === "direct";
+}
+
+export function resolveAgentUrl(connection: AgentConnection, path: string): URL {
+  if (isDirectConnection(connection)) {
+    const url = new URL(path, connection.agentUrl);
+    url.searchParams.set("token", connection.token);
+    return url;
+  }
+
+  const base = new URL(path, connection.relayUrl);
+  const prefix = `/api/relay/devices/${encodeURIComponent(connection.deviceId)}`;
+  if (base.pathname === "/api/health") {
+    base.pathname = `${prefix}/health`;
+    return base;
+  }
+  if (base.pathname === "/api/events") {
+    base.pathname = `${prefix}/events`;
+    return base;
+  }
+  if (base.pathname === "/api/directories") {
+    base.pathname = `${prefix}/directories`;
+    return base;
+  }
+  if (base.pathname === "/api/codex-history") {
+    base.pathname = `${prefix}/codex-history`;
+    return base;
+  }
+  if (base.pathname === "/api/codex-history/detail") {
+    base.pathname = `${prefix}/codex-history/detail`;
+    return base;
+  }
+  if (base.pathname === "/api/codex-history/resume") {
+    base.pathname = `${prefix}/codex-history/resume`;
+    return base;
+  }
+  if (base.pathname === "/api/sessions") {
+    base.pathname = `${prefix}/sessions`;
+    return base;
+  }
+  if (base.pathname.startsWith("/api/sessions/")) {
+    base.pathname = `${prefix}${base.pathname.slice("/api".length)}`;
+    return base;
+  }
+  if (base.pathname.startsWith("/api/approvals/")) {
+    base.pathname = `${prefix}${base.pathname.slice("/api".length)}`;
+    return base;
+  }
+  return base;
+}
+
+function relayAuthHeaders(connection: AgentConnection): Record<string, string> {
+  if (isDirectConnection(connection)) {
+    return {};
+  }
+  return {
+    Authorization: `Bearer ${connection.ownerToken}`
+  };
 }

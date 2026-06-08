@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { Command, InvalidArgumentError } from "commander";
+import { runConnect } from "./commands/connect.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runGoalSmoke } from "./commands/goal-smoke.js";
+import { runPair } from "./commands/pair.js";
 import { runServe } from "./commands/serve.js";
 
 const program = new Command();
@@ -37,6 +39,54 @@ program
   }) => {
     await runGoalSmoke(options);
   });
+
+program
+  .command("connect")
+  .description("Connect this machine to a remote CodexNext control server over Socket.IO.")
+  .requiredOption("--relay <url>", "Control server URL.")
+  .option("--owner-token <token>", "Owner token for the control server.")
+  .option("--device-name <name>", "Override device display name.")
+  .option(
+    "--approval-timeout-ms <number>",
+    "Approval request timeout in milliseconds.",
+    parsePositiveInteger,
+    300_000
+  )
+  .option("--codex-bin <path>", "Codex binary path.", "codex")
+  .action(
+    async (options: {
+      relay: string;
+      ownerToken: string;
+      deviceName?: string;
+      approvalTimeoutMs: number;
+      codexBin: string;
+    }) => {
+      await runConnect(options);
+    }
+  );
+
+program
+  .command("pair")
+  .description("Request a one-time pairing code and bind this machine to a control server.")
+  .requiredOption("--relay <url>", "Control server URL.")
+  .option("--device-name <name>", "Override device display name.")
+  .option(
+    "--approval-timeout-ms <number>",
+    "Approval request timeout in milliseconds.",
+    parsePositiveInteger,
+    300_000
+  )
+  .option("--codex-bin <path>", "Codex binary path.", "codex")
+  .action(
+    async (options: {
+      relay: string;
+      deviceName?: string;
+      approvalTimeoutMs: number;
+      codexBin: string;
+    }) => {
+      await runPair(options);
+    }
+  );
 
 program
   .command("serve")

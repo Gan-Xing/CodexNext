@@ -660,6 +660,205 @@ export interface LocalHealthResponse {
   };
 }
 
+export const RelaySocketPath = "/socket.io/codexnext";
+
+export const RelayNamespace = {
+  User: "/user",
+  Machine: "/machine"
+} as const;
+
+export type RelayNamespace =
+  (typeof RelayNamespace)[keyof typeof RelayNamespace];
+
+export type AgentConnection =
+  | {
+      mode: "direct";
+      agentUrl: string;
+      token: string;
+    }
+  | {
+      mode: "relay";
+      relayUrl: string;
+      ownerToken: string;
+      deviceId: string;
+    };
+
+export interface RelayUserAuth {
+  clientType: "user";
+  ownerToken: string;
+  lastSeqByDevice?: Record<string, number>;
+}
+
+export interface RelayMachineAuth {
+  clientType: "machine";
+  ownerToken: string;
+  deviceId: string;
+  deviceToken?: string;
+  devicePublicKey?: string;
+  lastSeq?: number;
+}
+
+export interface DeviceIdentityFile {
+  version: 1;
+  deviceId: string;
+  deviceName: string;
+  devicePrivateKey?: string;
+  devicePublicKey?: string;
+  deviceToken?: string;
+  createdAt: number;
+  relayUrl?: string;
+}
+
+export interface MachineHelloPayload {
+  deviceId: string;
+  deviceName: string;
+  hostname: string;
+  platform: string;
+  arch: string;
+  agentVersion: string;
+  codexVersion?: string | null;
+  startedAt: number;
+}
+
+export interface MachineHelloAck {
+  ok: true;
+  serverTime: number;
+  heartbeatIntervalMs: number;
+}
+
+export interface RelayErrorAck {
+  ok: false;
+  error: string;
+}
+
+export interface MachineHeartbeatPayload {
+  deviceId: string;
+  at: number;
+  activeSessions: number;
+}
+
+export interface DevicePresence {
+  deviceId: string;
+  online: boolean;
+  lastSeenAt: number;
+  socketId?: string;
+  activeSessions?: number;
+}
+
+export interface RelayDeviceRecord extends DevicePresence {
+  deviceName: string;
+  hostname: string;
+  platform: string;
+  arch: string;
+  agentVersion: string;
+  codexVersion?: string | null;
+  startedAt: number;
+}
+
+export interface RelayDevicesResponse {
+  devices: RelayDeviceRecord[];
+}
+
+export interface RelaySessionResponse {
+  ok: true;
+  sessionToken: string;
+}
+
+export const RelayMethod = {
+  AgentHealth: "agent.health",
+  SessionsList: "sessions.list",
+  SessionsCreate: "sessions.create",
+  SessionsMessage: "sessions.message",
+  SessionsGoalGet: "sessions.goal.get",
+  SessionsGoalSet: "sessions.goal.set",
+  SessionsGoalClear: "sessions.goal.clear",
+  TurnInterrupt: "turn.interrupt",
+  ApprovalDecision: "approval.decision",
+  DirectoriesList: "directories.list",
+  CodexHistoryList: "codexHistory.list",
+  CodexHistoryDetail: "codexHistory.detail",
+  CodexHistoryResume: "codexHistory.resume"
+} as const;
+
+export type RelayMethod = (typeof RelayMethod)[keyof typeof RelayMethod];
+
+export interface RelayRpcRequest {
+  requestId: string;
+  method: RelayMethod;
+  params?: unknown;
+  deadlineMs?: number;
+}
+
+export type RelayRpcResponse =
+  | { ok: true; result?: unknown }
+  | {
+      ok: false;
+      error: {
+        message: string;
+        code?: string;
+        data?: unknown;
+      };
+    };
+
+export interface MachineEventPayload {
+  deviceId: string;
+  event: LocalEvent;
+}
+
+export interface DeviceEventPayload {
+  deviceId: string;
+  event: LocalEvent;
+}
+
+export interface PairingRequestPayload {
+  deviceId: string;
+  deviceToken: string;
+  deviceName: string;
+  hostname: string;
+  platform: string;
+  arch: string;
+  agentVersion: string;
+  codexVersion?: string | null;
+  relayUrl?: string | null;
+}
+
+export interface PairingCreateResponse {
+  requestId: string;
+  pollToken: string;
+  code: string;
+  codeDigits: string;
+  expiresAt: number;
+}
+
+export interface PairingRequestView {
+  requestId: string;
+  codeDigits: string;
+  deviceId: string;
+  deviceName: string;
+  hostname: string;
+  platform: string;
+  arch: string;
+  agentVersion: string;
+  codexVersion?: string | null;
+  relayUrl?: string | null;
+  createdAt: number;
+  expiresAt: number;
+  status: "pending" | "approved" | "expired";
+}
+
+export interface PairingPollResponse {
+  ok: boolean;
+  status: "pending" | "approved" | "expired";
+  deviceId: string;
+  expiresAt: number;
+}
+
+export interface PairingApproveResponse {
+  ok: true;
+  deviceId: string;
+  sessionToken: string;
+}
+
 export {
   deriveCodexConversationTitle,
   deriveCodexGeneratedTitle,
