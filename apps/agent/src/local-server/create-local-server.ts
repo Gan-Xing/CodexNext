@@ -19,6 +19,8 @@ import type {
   LocalEvent
 } from "@codexnext/protocol";
 import {
+  deriveCodexConversationTitle,
+  deriveCodexGeneratedTitle,
   LocalApprovalDecisionSchema,
   LocalResumeSessionSchema,
   LocalSendMessageSchema,
@@ -163,7 +165,8 @@ async function handleRequest(
         const session = await services.sessionManager.resumeSession({
           ...body,
           threadId: history.entry.id,
-          cwd: history.entry.cwd
+          cwd: history.entry.cwd,
+          title: history.entry.title
         });
         sendJson(response, 201, { session, history });
         return;
@@ -510,7 +513,9 @@ async function listCodexHistory(
     useStateDbOnly: true,
     searchTerm: url.searchParams.get("search")?.trim() || null
   });
-  const entries = await Promise.all(response.data.map(threadToHistoryEntry));
+  const entries = await Promise.all(
+    response.data.map((thread) => threadToHistoryEntry(thread, response.data))
+  );
   return { root: "codex app-server thread/list", entries };
 }
 
@@ -540,14 +545,18 @@ async function readCodexHistoryDetailById(
 }
 
 async function threadToHistoryEntry(
-  thread: CodexThread
+  thread: CodexThread,
+  contextThreads?: CodexThread[]
 ): Promise<LocalCodexHistoryEntry> {
-  const title = compactThreadTitle(thread.name ?? thread.preview ?? "");
+  const title =
+    deriveCodexConversationTitle(thread, contextThreads) ??
+    deriveCodexGeneratedTitle(thread.preview) ??
+    "Untitled Codex thread";
   return {
     id: thread.id,
     cwd: thread.cwd,
     cwdExists: await directoryExists(thread.cwd),
-    title: title || "Untitled Codex thread",
+    title,
     createdAt: timestampToIso(thread.createdAt),
     updatedAt: timestampToIso(thread.updatedAt),
     source: formatThreadSource(thread.source)
@@ -634,10 +643,6 @@ function extractUserMessageText(content: unknown): string {
     })
     .filter(Boolean)
     .join("\n\n");
-}
-
-function compactThreadTitle(input: string): string {
-  return input.replace(/\s+/g, " ").trim().slice(0, 120);
 }
 
 function timestampToIso(timestampSeconds: number | null | undefined): string {

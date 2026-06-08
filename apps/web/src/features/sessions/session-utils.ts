@@ -6,6 +6,7 @@ import type {
   LocalSessionSummary
 } from "../../lib/types";
 import type { ChatItem } from "../../lib/types";
+import { deriveCodexGeneratedTitle } from "@codexnext/protocol";
 import { normalizeAgentUrl } from "../devices/device-utils";
 
 export interface ThreadSidebarPrefs {
@@ -218,6 +219,7 @@ export function makeHistoryPreviewSession(
     threadId: entry.id,
     status: "idle",
     cwd: entry.cwd,
+    title: entry.title,
     model: null,
     reasoningEffort: null,
     permissionMode: "request-approval",
@@ -243,6 +245,7 @@ export function makePendingSession(input: {
     threadId: input.sessionId,
     status: "running",
     cwd: input.cwd,
+    title: null,
     model: input.model ?? null,
     reasoningEffort: input.reasoningEffort ?? null,
     permissionMode: input.permissionMode,
@@ -274,12 +277,17 @@ export function sessionTitle(
   chatItems: ChatItem[],
   historyEntries: LocalCodexHistoryEntry[] = []
 ): string {
+  const explicitTitle = session.title?.trim();
+  if (explicitTitle) {
+    return explicitTitle;
+  }
   const historyTitle = historyEntries.find((entry) => entry.id === session.threadId)?.title?.trim();
   if (historyTitle) {
     return historyTitle;
   }
-  if (session.goal?.objective) {
-    return session.goal.objective.slice(0, 80);
+  const firstUserTitle = deriveSessionChatFallbackTitle(session, chatItems);
+  if (firstUserTitle) {
+    return firstUserTitle;
   }
   return shortPath(session.cwd);
 }
@@ -485,6 +493,22 @@ export function threadKeyForHistory(entry: LocalCodexHistoryEntry): string {
 
 export function threadKeyForSession(session: LocalSessionSummary): string {
   return session.threadId || session.sessionId;
+}
+
+function deriveSessionChatFallbackTitle(
+  session: LocalSessionSummary,
+  chatItems: ChatItem[]
+): string | null {
+  const firstUserMessage = chatItems.find(
+    (item) =>
+      item.sessionId === session.sessionId &&
+      item.role === "user" &&
+      item.text.trim().length > 0
+  );
+  if (!firstUserMessage) {
+    return null;
+  }
+  return deriveCodexGeneratedTitle(firstUserMessage.text);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

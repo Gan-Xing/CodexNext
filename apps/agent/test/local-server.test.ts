@@ -279,10 +279,15 @@ describe("SessionManager messages", () => {
     });
 
     expect(session.threadId).toBe("history_1");
+    expect(session.title).toBeNull();
     expect(fake.threadResumeParams[0]).toMatchObject({
       threadId: "history_1",
       cwd: process.cwd(),
       model: "gpt-5.5"
+    });
+    expect(fake.threadReadParams[0]).toEqual({
+      threadId: "history_1",
+      includeTurns: true
     });
   });
 
@@ -307,6 +312,51 @@ describe("SessionManager messages", () => {
     expect(session.threadId).toBe("history_1");
     expect(fake.threadUnarchiveParams).toEqual([{ threadId: "history_1" }]);
     expect(fake.threadResumeParams).toHaveLength(2);
+  });
+
+  it("uses native-like titles for resumed and newly started sessions", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    fake.threadReadResponse = {
+      thread: {
+        id: "history_1",
+        sessionId: "session_1",
+        preview: "",
+        createdAt: 1,
+        updatedAt: 1,
+        cwd: process.cwd(),
+        turns: [
+          {
+            id: "turn_1",
+            items: [],
+            params: {
+              input: [{ type: "text", text: "继续检查 sidebar title 为什么和原生 Codex 不一致" }]
+            }
+          }
+        ]
+      }
+    };
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    const resumed = await manager.resumeSession({
+      threadId: "history_1",
+      cwd: process.cwd(),
+      permissionMode: "request-approval"
+    });
+    const started = await manager.startSession({
+      cwd: process.cwd(),
+      permissionMode: "request-approval",
+      initialMessage: "请按原生 Codex 的标题逻辑修复这个问题"
+    });
+
+    expect(resumed.title).toBe("继续检查 sidebar title 为什么和原生 Codex 不一致");
+    expect(started.title).toBe("请按原生 Codex 的标题逻辑修复这个问题");
   });
 });
 

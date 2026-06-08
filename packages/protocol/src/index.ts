@@ -284,6 +284,7 @@ export interface CodexThread {
   cwd: string;
   cliVersion?: string;
   source?: unknown;
+  title?: string | null;
   name?: string | null;
   path?: string | null;
   turns?: CodexThreadTurn[];
@@ -293,6 +294,7 @@ export interface CodexThread {
 export interface CodexThreadTurn {
   id: string;
   items: CodexThreadItem[];
+  params?: unknown;
   status?: unknown;
   startedAt?: number | null;
   completedAt?: number | null;
@@ -487,6 +489,7 @@ export interface LocalSessionSummary {
   activeTurnId?: string;
   status: LocalSessionStatus;
   cwd: string;
+  title?: string | null;
   model?: string | null;
   reasoningEffort?: LocalReasoningEffort | null;
   permissionMode: LocalPermissionMode;
@@ -656,3 +659,10 @@ export interface LocalHealthResponse {
     version?: string;
   };
 }
+
+export {
+  deriveCodexConversationTitle,
+  deriveCodexGeneratedTitle,
+  normalizeCodexConversationTitle,
+  truncateCodexGeneratedTitle
+} from "./conversation-titles.ts";

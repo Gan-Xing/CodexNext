@@ -11,6 +11,7 @@ import type {
   ApprovalResponse,
   AskForApproval,
   ApprovalsReviewer,
+  CodexThread,
   LocalSendMessageInput,
   LocalPermissionMode,
   LocalResumeSessionInput,
@@ -32,6 +33,8 @@ import type {
 } from "@codexnext/protocol";
 import {
   CodexNotificationMethod,
+  deriveCodexConversationTitle,
+  deriveCodexGeneratedTitle,
   LocalEventType,
   makeTextInput,
   isRecord
@@ -79,6 +82,7 @@ interface LocalSession {
   activeTurnId?: string | undefined;
   status: LocalSessionStatus;
   cwd: string;
+  title?: string | null;
   model?: string | null;
   reasoningEffort?: LocalReasoningEffort | null;
   permissionMode: LocalPermissionMode;
@@ -103,6 +107,7 @@ type PermissionInput = Pick<
 type ResumeSessionInput = Omit<LocalResumeSessionInput, "id" | "cwd"> & {
   threadId: string;
   cwd: string;
+  title?: string | null;
 };
 
 export class SessionManager {
@@ -191,11 +196,15 @@ export class SessionManager {
       });
 
       const threadId = extractThreadId(thread);
+      const initialMessage = input.initialMessage?.trim() || null;
       session = {
         sessionId,
         threadId,
         status: "idle",
         cwd,
+        title:
+          deriveCodexGeneratedTitle(initialMessage) ??
+          deriveCodexConversationTitle(asCodexThread(thread.thread, cwd)),
         model: input.model ?? null,
         reasoningEffort: input.reasoningEffort ?? null,
         permissionMode: permissions.permissionMode,
@@ -226,7 +235,6 @@ export class SessionManager {
           });
         }
 
-        const initialMessage = input.initialMessage?.trim();
         if (initialMessage) {
           await this.startTurn(sessionId, {
             text: initialMessage,
@@ -315,11 +323,18 @@ export class SessionManager {
       }
 
       const threadId = extractThreadId(thread);
+      const sessionTitle =
+        normalizeTitle(input.title) ??
+        deriveCodexConversationTitle(
+          asCodexThread(thread.thread, extractThreadCwd(thread) ?? cwd)
+        ) ??
+        (await readThreadTitle(client, threadId));
       session = {
         sessionId,
         threadId,
         status: "idle",
         cwd: extractThreadCwd(thread) ?? cwd,
+        title: sessionTitle,
         model: thread.model ?? input.model ?? null,
         reasoningEffort: input.reasoningEffort ?? null,
         permissionMode: permissions.permissionMode,
@@ -376,6 +391,10 @@ export class SessionManager {
     const session = this.requireSession(sessionId);
     if (session.activeTurnId) {
       throw new Error(`Session ${sessionId} already has an active turn`);
+    }
+
+    if (!normalizeTitle(session.title)) {
+      session.title = deriveCodexGeneratedTitle(input.text);
     }
 
     this.emitChatUser(session, {
@@ -810,6 +829,21 @@ function extractThreadCwd(response: ThreadResumeResponse): string | undefined {
   return undefined;
 }
 
+async function readThreadTitle(
+  client: ManagedCodexClient,
+  threadId: string
+): Promise<string | null> {
+  try {
+    const response = await client.threadRead({
+      threadId,
+      includeTurns: true
+    });
+    return deriveCodexConversationTitle(response.thread);
+  } catch {
+    return null;
+  }
+}
+
 function isArchivedThreadError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes(" is archived") || message.includes("codex unarchive");
@@ -871,6 +905,14 @@ function touch(session: LocalSession, status?: LocalSessionStatus): void {
   session.updatedAt = Date.now();
 }
 
+function normalizeTitle(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function toSummary(session: LocalSession): LocalSessionSummary {
   return {
     sessionId: session.sessionId,
@@ -879,6 +921,7 @@ function toSummary(session: LocalSession): LocalSessionSummary {
     ...(session.activeTurnId ? { activeTurnId: session.activeTurnId } : {}),
     status: session.status,
     cwd: session.cwd,
+    title: session.title ?? null,
     model: session.model ?? null,
     reasoningEffort: session.reasoningEffort ?? null,
     permissionMode: session.permissionMode,
@@ -889,6 +932,29 @@ function toSummary(session: LocalSession): LocalSessionSummary {
     createdAt: session.createdAt,
     updatedAt: session.updatedAt
   };
+}
+
+function asCodexThread(
+  thread: ThreadStartResponse["thread"],
+  cwd: string
+): CodexThread {
+  const next: CodexThread = {
+    id: typeof thread.id === "string" ? thread.id : "unknown-thread",
+    preview: "",
+    createdAt: 0,
+    updatedAt: 0,
+    cwd: typeof thread.cwd === "string" ? thread.cwd : cwd
+  };
+  if (typeof thread.title === "string") {
+    next.title = thread.title;
+  }
+  if (typeof thread.name === "string") {
+    next.name = thread.name;
+  }
+  if (Array.isArray(thread.turns)) {
+    next.turns = thread.turns as NonNullable<CodexThread["turns"]>;
+  }
+  return next;
 }
 
 function appServerArgs(reasoningEffort?: LocalReasoningEffort | null): string[] {
