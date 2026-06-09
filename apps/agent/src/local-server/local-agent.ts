@@ -273,13 +273,14 @@ async function listCodexHistory(
   const entries = await Promise.all(
     response.data.map((thread) => threadToHistoryEntry(thread, response.data))
   );
-  for (const entry of entries) {
+  const visibleEntries = entries.filter((entry) => !isHiddenCodexHistoryEntry(entry));
+  for (const entry of visibleEntries) {
     if (loadedThreadIds.has(entry.id)) {
       entry.loaded = true;
       entry.threadStatus = entry.threadStatus ?? "loaded";
     }
   }
-  return { root: "codex app-server thread/list", entries };
+  return { root: "codex app-server thread/list", entries: visibleEntries };
 }
 
 async function listLoadedCodexHistoryThreads(
@@ -375,6 +376,25 @@ async function threadToHistoryEntry(
     loaded: isLoadedThreadStatus(thread.status),
     threadStatus: readThreadStatusType(thread.status)
   };
+}
+
+function isHiddenCodexHistoryEntry(entry: LocalCodexHistoryEntry): boolean {
+  const basename = path.basename(entry.cwd);
+  return (
+    entry.cwd.startsWith("/tmp/codex-goal-probe-") ||
+    basename.startsWith("codex-goal-probe-") ||
+    isAutomationPromptTitle(entry.title)
+  );
+}
+
+function isAutomationPromptTitle(title: string): boolean {
+  const trimmed = title.trim();
+  return (
+    trimmed.startsWith("# Codex Native API Loop Prompt") ||
+    trimmed.startsWith("# Codex Gateway Loop Prompt") ||
+    trimmed.startsWith("# CodexBridge Loop Prompt") ||
+    trimmed.startsWith("你正在执行 CodexBridge 后台 Agent 任务")
+  );
 }
 
 function threadToHistoryMessages(

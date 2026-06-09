@@ -434,6 +434,17 @@ describe("local HTTP server guards", () => {
           source: "cli",
           name: "官方 Codex 标题",
           turns: []
+        },
+        {
+          id: "thread_probe",
+          sessionId: "session_probe",
+          preview: "# Codex Native API Loop Prompt",
+          createdAt: 1_786_000_061,
+          updatedAt: 1_786_000_062,
+          cwd: "/tmp/codex-goal-probe-123",
+          source: "cli",
+          name: "# Codex Native API Loop Prompt",
+          turns: []
         }
       ],
       nextCursor: null,
@@ -493,6 +504,7 @@ describe("local HTTP server guards", () => {
           loaded: true
         })
       ]);
+      expect(listBody.entries).toHaveLength(1);
 
       const loaded = await fetch(`${base}/api/codex-history/loaded?token=secret`);
       const loadedBody = await loaded.json() as { threadIds: string[] };

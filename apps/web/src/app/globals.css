@@ -2791,6 +2791,10 @@ summary {
   padding: 0.8rem 0.9rem;
 }
 
+.cn-device-pair-approve-inline {
+  display: none;
+}
+
 .cn-device-library-header {
   align-items: center;
   display: flex;
@@ -3653,6 +3657,18 @@ summary {
     grid-template-columns: 1fr;
   }
 
+  .cn-live-console .cn-device-pair-card {
+    gap: 0.58rem;
+  }
+
+  .cn-live-console .cn-device-pair-copy {
+    gap: 0.12rem;
+  }
+
+  .cn-live-console .cn-device-pair-copy p {
+    display: none;
+  }
+
   .cn-live-console .cn-real-folder-list {
     max-height: 34dvh;
   }
@@ -3673,8 +3689,14 @@ summary {
     align-content: start;
     grid-template-columns: 1fr;
     gap: 0.72rem;
-    overflow: hidden;
-    padding: 0.72rem 0.85rem calc(env(safe-area-inset-bottom) + 0.72rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0.72rem 0.85rem calc(env(safe-area-inset-bottom) + 5.4rem);
+  }
+
+  .cn-live-console .cn-device-sheet.pairing .cn-device-library {
+    max-height: 138px;
+    overflow: auto;
   }
 
   .cn-live-console .cn-saved-device-list {
@@ -3720,6 +3742,14 @@ summary {
   .cn-live-console .cn-device-editor {
     border-radius: 20px;
     padding: 0.8rem;
+  }
+
+  .cn-live-console .cn-device-editor {
+    overflow: visible;
+  }
+
+  .cn-live-console .cn-device-sheet.pairing .cn-saved-device-list {
+    max-height: 76px;
   }
 
   .cn-live-console .cn-device-library-header {
@@ -3793,7 +3823,14 @@ summary {
   }
 
   .cn-live-console .cn-device-command-block {
-    padding: 0.75rem 0.82rem;
+    max-height: 88px;
+    padding: 0.62rem 0.72rem;
+  }
+
+  .cn-live-console .cn-device-pair-request {
+    border-radius: 14px;
+    gap: 0.08rem;
+    padding: 0.62rem 0.72rem;
   }
 
   .cn-live-console .cn-device-command-block code,
@@ -3803,16 +3840,33 @@ summary {
     font-size: 0.78rem;
   }
 
+  .cn-live-console .cn-device-pair-approve-inline {
+    display: inline-flex;
+    justify-content: center;
+    width: 100%;
+  }
+
   .cn-live-console .cn-sheet-actions.cn-device-sheet-actions {
-    background: transparent;
+    background: rgba(255, 255, 255, 0.96);
+    border-top: 1px solid rgba(103, 107, 112, 0.12);
+    bottom: 0;
     margin: 0;
-    padding: 0.72rem 0 0;
-    position: static;
+    padding: 0.62rem 0 calc(env(safe-area-inset-bottom) + 0.62rem);
+    position: sticky;
+    z-index: 4;
   }
 
   .cn-live-console .cn-sheet-actions.cn-device-sheet-actions button {
     flex: 1 1 0;
     min-height: 44px;
+  }
+
+  .cn-live-console .cn-sheet-actions.cn-device-sheet-actions .cn-device-pair-approve {
+    display: none;
+  }
+
+  .cn-live-console .cn-sheet-actions.cn-device-sheet-actions.pairing-ready {
+    display: none;
   }
 
   .cn-live-console .cn-use-folder-button {

@@ -163,7 +163,17 @@ export function DeviceSheet(props: {
     try {
       const request = await getRelayPairingRequest(relayUrl, normalizedCode);
       setRelayPairRequest(request);
-      setRelayPairStatus("ready");
+      if (request.status === "pending") {
+        setRelayPairStatus("ready");
+        return;
+      }
+      if (request.status === "approved") {
+        setRelayPairStatus("waiting");
+        setRelayPairMessage("这个配对码已经批准，等待设备完成接入…");
+        return;
+      }
+      setRelayPairStatus("error");
+      setRelayPairMessage("这个配对码已过期。请在这台设备上重新运行配对命令，然后输入新的 6 位码。");
     } catch (error) {
       setRelayPairRequest(null);
       setRelayPairStatus("error");
@@ -184,6 +194,9 @@ export function DeviceSheet(props: {
         relayUrl,
         relayPairCode,
         relayAccessToken
+      );
+      setRelayPairRequest((previous) =>
+        previous ? { ...previous, status: "approved" } : previous
       );
       setRelayPairStatus("waiting");
       setRelayPairMessage("已批准，等待这台设备完成接入…");
@@ -217,7 +230,13 @@ export function DeviceSheet(props: {
 
   return (
     <div className="cn-overlay-panel device cn-live-overlay">
-      <div className="cn-sheet-card cn-live-sheet cn-device-sheet">
+      <div
+        className={
+          relayPairingVisible
+            ? "cn-sheet-card cn-live-sheet cn-device-sheet pairing"
+            : "cn-sheet-card cn-live-sheet cn-device-sheet"
+        }
+      >
         <div className="cn-device-sheet-header">
           <div className="cn-device-sheet-copy">
             <h2>连接设备</h2>
@@ -369,7 +388,14 @@ export function DeviceSheet(props: {
                         value={pairCodeValue}
                         onChange={(event) => {
                           setRelayPairCode(event.target.value);
-                          if (relayPairStatus === "error") {
+                          const nextCode = normalizeRelayPairCode(event.target.value);
+                          if (
+                            relayPairRequest &&
+                            nextCode !== relayPairRequest.codeDigits
+                          ) {
+                            setRelayPairRequest(null);
+                          }
+                          if (relayPairStatus !== "idle") {
                             setRelayPairStatus("idle");
                             setRelayPairMessage(null);
                           }
@@ -389,6 +415,8 @@ export function DeviceSheet(props: {
                   {relayPairRequest ? (
                     <div className="cn-device-pair-request">
                       <strong>{relayPairRequest.deviceName}</strong>
+                      <small>{pairingStatusLabel(relayPairRequest.status)}</small>
+                      <small>{pairingExpiryLabel(relayPairRequest)}</small>
                       <small>
                         {relayPairRequest.hostname} · {relayPairRequest.platform} ·{" "}
                         {relayPairRequest.arch}
@@ -397,6 +425,16 @@ export function DeviceSheet(props: {
                         {relayPairRequest.codexVersion ?? relayPairRequest.agentVersion}
                       </small>
                     </div>
+                  ) : null}
+                  {relayPairRequest?.status === "pending" ? (
+                    <button
+                      className="cn-primary-button cn-device-pair-approve cn-device-pair-approve-inline"
+                      type="button"
+                      onClick={() => void approveRelayPairing()}
+                      disabled={!relayAccessToken || relayPairStatus === "approving"}
+                    >
+                      {relayPairStatus === "approving" ? "正在批准…" : "允许这台设备接入"}
+                    </button>
                   ) : null}
                   {relayPairMessage ? (
                     <div
@@ -528,7 +566,13 @@ export function DeviceSheet(props: {
               </>
             )}
 
-            <div className="cn-sheet-actions cn-device-sheet-actions">
+            <div
+              className={
+                relayPairRequest?.status === "pending"
+                  ? "cn-sheet-actions cn-device-sheet-actions pairing-ready"
+                  : "cn-sheet-actions cn-device-sheet-actions"
+              }
+            >
               <button className="cn-soft-button" type="button" onClick={props.onClose}>
                 取消
               </button>
@@ -631,4 +675,21 @@ function createEmptyRelayDraft(): DeviceDraftState {
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function pairingStatusLabel(status: PairingRequestView["status"]): string {
+  switch (status) {
+    case "approved":
+      return "已批准";
+    case "rejected":
+      return "已拒绝";
+    case "expired":
+      return "已过期";
+    default:
+      return "等待批准";
+  }
+}
+
+function pairingExpiryLabel(request: PairingRequestView): string {
+  return `有效期至 ${new Date(request.expiresAt).toLocaleString()}`;
 }
