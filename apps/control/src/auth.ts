@@ -1,10 +1,10 @@
 import type { FastifyRequest } from "fastify";
 
 export function readOwnerToken(request: FastifyRequest): string | null {
-  const query = request.query as Record<string, unknown> | undefined;
-  if (query && typeof query.ownerToken === "string" && query.ownerToken.trim()) {
-    return query.ownerToken;
-  }
+  return readBearerToken(request);
+}
+
+export function readBearerToken(request: FastifyRequest): string | null {
   const authorization = request.headers.authorization;
   if (!authorization) {
     return null;
@@ -24,5 +24,5 @@ export function assertOwnerToken(
 }
 
 export function requestAccessToken(request: FastifyRequest): string | null {
-  return readOwnerToken(request);
+  return readBearerToken(request);
 }

@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import Fastify, {
   type FastifyInstance,
@@ -31,7 +31,8 @@ import {
   RelayNamespace,
   RelaySocketPath
 } from "@codexnext/protocol";
-import { requestAccessToken } from "./auth.js";
+import { readBearerToken, requestAccessToken } from "./auth.js";
+import { AuditLogger } from "./audit-log.js";
 import { DeviceEventStore } from "./device-event-store.js";
 import {
   DeviceRegistry,
@@ -44,16 +45,25 @@ interface RegisteredDevice {
   store: DeviceEventStore;
 }
 
-interface BrowserSession {
-  token: string;
+interface BrowserSessionRecord {
+  tokenHash: string;
   createdAt: number;
+  expiresAt: number;
   lastUsedAt: number;
+  revokedAt: number | null;
 }
 
-interface PairingRequestRecord extends PairingRequestView {
+interface PairingRequestRecord extends Omit<PairingRequestView, "status"> {
   code: string;
   deviceToken: string;
   pollToken: string;
+  status: PairingRequestView["status"];
+  consumedAt: number | null;
+}
+
+interface RateLimitRecord {
+  count: number;
+  resetAt: number;
 }
 
 export interface ControlServerOptions {
@@ -63,6 +73,13 @@ export interface ControlServerOptions {
   eventLimit?: number;
   heartbeatIntervalMs?: number;
   rpcTimeoutMs?: number;
+  browserSessionTtlMs?: number;
+  browserSessionIdleMs?: number;
+  pruneIntervalMs?: number;
+  allowedOrigins?: string[];
+  production?: boolean;
+  allowMachineOwnerToken?: boolean;
+  allowRelayFullAccess?: boolean;
 }
 
 export interface ControlServerHandle {
@@ -71,72 +88,131 @@ export interface ControlServerHandle {
   close(): Promise<void>;
 }
 
+const DEFAULT_BROWSER_SESSION_TTL_MS = 8 * 60 * 60_000;
+const DEFAULT_BROWSER_SESSION_IDLE_MS = 2 * 60 * 60_000;
+const DEFAULT_PRUNE_INTERVAL_MS = 60_000;
+const DEFAULT_PAIRING_TTL_MS = 5 * 60_000;
+
 export function createControlServer(
-  options: ControlServerOptions
+  input: ControlServerOptions
 ): ControlServerHandle {
-  const app = Fastify({
-    logger: false
-  });
+  const options = normalizeControlOptions(input);
+  const app = Fastify({ logger: false });
+  const allowedOrigins = options.allowedOrigins;
+  const allowOrigin = createOriginMatcher(allowedOrigins, options.production);
   void app.register(cors, {
-    origin: true,
+    origin(origin, callback) {
+      callback(null, allowOrigin(origin));
+    },
     credentials: false,
-    methods: ["GET", "POST", "OPTIONS"],
+    methods: ["GET", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Authorization", "Content-Type"]
   });
   const io = new SocketIoServer(app.server as HttpServer, {
     path: RelaySocketPath,
     cors: {
-      origin: true,
+      origin(origin, callback) {
+        callback(null, allowOrigin(origin));
+      },
       credentials: false
     }
   });
+
+  const audit = new AuditLogger();
   const devices = new Map<string, RegisteredDevice>();
-  const registry = new DeviceRegistry();
-  const browserSessions = new Map<string, BrowserSession>();
+  const registry = new DeviceRegistry(options.ownerToken);
+  const browserSessions = new Map<string, BrowserSessionRecord>();
   const pairings = new Map<string, PairingRequestRecord>();
-  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15_000;
-  const rpcTimeoutMs = options.rpcTimeoutMs ?? 30_000;
+  const rateLimits = new Map<string, RateLimitRecord>();
+  const heartbeatIntervalMs = options.heartbeatIntervalMs;
+  const rpcTimeoutMs = options.rpcTimeoutMs;
 
   const userNamespace = io.of(RelayNamespace.User);
   const machineNamespace = io.of(RelayNamespace.Machine);
+
+  const pruneTimer = setInterval(() => {
+    pruneBrowserSessions(browserSessions, audit, options.browserSessionIdleMs);
+    prunePairings(pairings, audit);
+    pruneRateLimits(rateLimits);
+  }, options.pruneIntervalMs);
+
   const issueBrowserSession = () => {
     const token = randomBytes(24).toString("base64url");
-    browserSessions.set(token, {
-      token,
-      createdAt: Date.now(),
-      lastUsedAt: Date.now()
+    const now = Date.now();
+    browserSessions.set(hashBrowserSessionToken(options.ownerToken, token), {
+      tokenHash: hashBrowserSessionToken(options.ownerToken, token),
+      createdAt: now,
+      lastUsedAt: now,
+      expiresAt: now + options.browserSessionTtlMs,
+      revokedAt: null
     });
     return token;
   };
+
+  const revokeBrowserSession = (token: string | null | undefined): boolean => {
+    if (!token || token === options.ownerToken) {
+      return false;
+    }
+    const tokenHash = hashBrowserSessionToken(options.ownerToken, token);
+    const session = browserSessions.get(tokenHash);
+    if (!session) {
+      return false;
+    }
+    session.revokedAt = Date.now();
+    browserSessions.delete(tokenHash);
+    return true;
+  };
+
   const isUserAccessToken = (token: string | null | undefined) => {
     if (!token) {
       return false;
     }
-    if (token === options.ownerToken) {
+    if (!options.production && token === options.ownerToken) {
       return true;
     }
-    const session = browserSessions.get(token);
+    const tokenHash = hashBrowserSessionToken(options.ownerToken, token);
+    const session = browserSessions.get(tokenHash);
     if (!session) {
       return false;
     }
-    session.lastUsedAt = Date.now();
+    const now = Date.now();
+    if (
+      session.revokedAt ||
+      session.expiresAt <= now ||
+      session.lastUsedAt + options.browserSessionIdleMs <= now
+    ) {
+      browserSessions.delete(tokenHash);
+      audit.write({
+        action: "relay.session.expired",
+        at: now,
+        outcome: "denied"
+      });
+      return false;
+    }
+    session.lastUsedAt = now;
     return true;
   };
+
   const requireUserAccess = (request: FastifyRequest, reply: FastifyReply) => {
     if (isUserAccessToken(requestAccessToken(request))) {
       return true;
     }
+    audit.write({
+      action: "relay.auth.failure",
+      at: Date.now(),
+      outcome: "failure",
+      reason: "missing_or_invalid_user_token",
+      meta: { ip: request.ip }
+    });
     reply.code(401);
     return false;
   };
-  const pairingForCode = (code: string) =>
-    [...pairings.values()].find((pairing) => pairing.codeDigits === normalizePairCode(code)) ?? null;
 
   userNamespace.use((socket, next) => {
     const auth = socket.handshake.auth as
       | (Partial<RelayUserAuth> & { sessionToken?: string })
       | undefined;
-    const accessToken = auth?.sessionToken ?? auth?.ownerToken;
+    const accessToken = auth?.sessionToken;
     if (!auth || auth.clientType !== "user" || !isUserAccessToken(accessToken)) {
       next(new Error("unauthorized"));
       return;
@@ -159,9 +235,17 @@ export function createControlServer(
       next(new Error("unauthorized"));
       return;
     }
-    const ownerAuthorized = auth.ownerToken === options.ownerToken;
+    const ownerAuthorized =
+      options.allowMachineOwnerToken && auth.ownerToken === options.ownerToken;
     const deviceAuthorized = registry.isAuthorized(auth.deviceId, auth.deviceToken);
     if (!ownerAuthorized && !deviceAuthorized) {
+      audit.write({
+        action: "device.connect",
+        at: Date.now(),
+        deviceId: auth.deviceId,
+        outcome: "denied",
+        reason: "device_not_authorized"
+      });
       next(new Error("unauthorized"));
       return;
     }
@@ -171,18 +255,16 @@ export function createControlServer(
   userNamespace.on("connection", (socket) => {
     const auth = socket.handshake.auth as RelayUserAuth | undefined;
     const lastSeqByDevice = auth?.lastSeqByDevice ?? {};
-
     for (const device of sortedDevices(devices)) {
       socket.emit("device:upsert", device.info);
       const after = Number.isFinite(lastSeqByDevice[device.info.deviceId] ?? NaN)
         ? Math.max(0, Number(lastSeqByDevice[device.info.deviceId]))
         : 0;
       for (const event of device.store.after(after)) {
-        const payload: DeviceEventPayload = {
+        socket.emit("device:event", {
           deviceId: device.info.deviceId,
           event
-        };
-        socket.emit("device:event", payload);
+        } satisfies DeviceEventPayload);
       }
     }
   });
@@ -190,59 +272,85 @@ export function createControlServer(
   machineNamespace.on("connection", (socket) => {
     let registeredDeviceId: string | null = null;
 
-    socket.on("machine:hello", (payload: MachineHelloPayload, ack?: (response: MachineHelloAck | RelayErrorAck) => void) => {
-      const deviceId = payload?.deviceId || registeredDeviceId;
-      if (!deviceId || typeof ack !== "function") {
-        ack?.({ ok: false, error: "invalid machine hello" });
-        return;
-      }
-      registeredDeviceId = deviceId;
-      const existing = devices.get(deviceId);
-      const registryRecord = registry.get(deviceId);
-      const nextInfo: RelayDeviceRecord = {
-        deviceId,
-        deviceName: payload.deviceName,
-        hostname: payload.hostname,
-        platform: payload.platform,
-        arch: payload.arch,
-        agentVersion: payload.agentVersion,
-        codexVersion: payload.codexVersion ?? null,
-        startedAt: payload.startedAt,
-        online: true,
-        lastSeenAt: Date.now(),
-        socketId: socket.id,
-        activeSessions: existing?.info.activeSessions ?? 0
-      };
-      const next: RegisteredDevice = {
-        info: nextInfo,
-        socket,
-        store:
-          existing?.store ??
-          new DeviceEventStore(
-            options.eventLimit !== undefined ? { limit: options.eventLimit } : {}
-          )
-      };
-      devices.set(deviceId, next);
-      if (registryRecord) {
-        registry.upsert({
-          ...registryRecord,
+    socket.on(
+      "machine:hello",
+      (payload: MachineHelloPayload, ack?: (response: MachineHelloAck | RelayErrorAck) => void) => {
+        const deviceId = payload?.deviceId || registeredDeviceId;
+        if (!deviceId || typeof ack !== "function") {
+          ack?.({ ok: false, error: "invalid machine hello" });
+          return;
+        }
+        const registryRecord = registry.get(deviceId);
+        if (registryRecord?.revokedAt) {
+          audit.write({
+            action: "device.connect",
+            at: Date.now(),
+            deviceId,
+            outcome: "denied",
+            reason: "device_revoked"
+          });
+          ack({ ok: false, error: "device revoked" });
+          socket.disconnect(true);
+          return;
+        }
+        registeredDeviceId = deviceId;
+        const existing = devices.get(deviceId);
+        const nextInfo: RelayDeviceRecord = {
+          deviceId,
           deviceName: payload.deviceName,
           hostname: payload.hostname,
           platform: payload.platform,
           arch: payload.arch,
           agentVersion: payload.agentVersion,
           codexVersion: payload.codexVersion ?? null,
-          relayUrl: registryRecord.relayUrl ?? null,
-          updatedAt: Date.now()
+          startedAt: payload.startedAt,
+          online: true,
+          lastSeenAt: Date.now(),
+          socketId: socket.id,
+          activeSessions: existing?.info.activeSessions ?? 0
+        };
+        const next: RegisteredDevice = {
+          info: nextInfo,
+          socket,
+          store:
+            existing?.store ??
+            new DeviceEventStore(
+              options.eventLimit !== undefined ? { limit: options.eventLimit } : {}
+            )
+        };
+        devices.set(deviceId, next);
+        if (registryRecord) {
+          registry.upsert({
+            ...registryRecord,
+            deviceName: payload.deviceName,
+            hostname: payload.hostname,
+            platform: payload.platform,
+            arch: payload.arch,
+            agentVersion: payload.agentVersion,
+            codexVersion: payload.codexVersion ?? null,
+            relayUrl: registryRecord.relayUrl ?? null,
+            updatedAt: Date.now()
+          });
+        }
+        audit.write({
+          action: "device.connect",
+          at: Date.now(),
+          deviceId,
+          outcome: "success",
+          meta: {
+            hostname: payload.hostname,
+            platform: payload.platform,
+            arch: payload.arch
+          }
+        });
+        broadcastUpsert(userNamespace, next.info);
+        ack({
+          ok: true,
+          serverTime: Date.now(),
+          heartbeatIntervalMs
         });
       }
-      broadcastUpsert(userNamespace, next.info);
-      ack({
-        ok: true,
-        serverTime: Date.now(),
-        heartbeatIntervalMs
-      });
-    });
+    );
 
     socket.on("machine:heartbeat", (payload: MachineHeartbeatPayload) => {
       if (!payload?.deviceId) {
@@ -300,6 +408,12 @@ export function createControlServer(
         online: false,
         lastSeenAt: Date.now()
       };
+      audit.write({
+        action: "device.disconnect",
+        at: device.info.lastSeenAt,
+        deviceId: registeredDeviceId,
+        outcome: "success"
+      });
       userNamespace.emit("device:offline", {
         deviceId: device.info.deviceId,
         lastSeenAt: device.info.lastSeenAt
@@ -313,18 +427,58 @@ export function createControlServer(
   }));
 
   app.post("/api/auth/session", async (request, reply) => {
-    if (requestAccessToken(request) !== options.ownerToken) {
+    if (!consumeRateLimit(rateLimits, `auth-session:${request.ip}`, 12, 5 * 60_000)) {
+      reply.code(429);
+      return { error: "Rate limit exceeded" };
+    }
+    if (readBearerToken(request) !== options.ownerToken) {
+      audit.write({
+        action: "relay.session.issue",
+        at: Date.now(),
+        outcome: "failure",
+        reason: "invalid_owner_token",
+        meta: { ip: request.ip }
+      });
       reply.code(401);
       return { error: "Missing or invalid owner token" };
     }
+    const sessionToken = issueBrowserSession();
+    audit.write({
+      action: "relay.session.issue",
+      at: Date.now(),
+      outcome: "success",
+      meta: { ip: request.ip }
+    });
     return {
       ok: true,
-      sessionToken: issueBrowserSession()
+      sessionToken
     } satisfies RelaySessionResponse;
+  });
+
+  app.post("/api/auth/logout", async (request, reply) => {
+    const accessToken = requestAccessToken(request);
+    if (!isUserAccessToken(accessToken)) {
+      reply.code(401);
+      return { error: "Missing or invalid user token" };
+    }
+    if (accessToken) {
+      revokeBrowserSession(accessToken);
+    }
+    audit.write({
+      action: "relay.session.revoke",
+      at: Date.now(),
+      outcome: "success",
+      meta: { ip: request.ip }
+    });
+    return { ok: true };
   });
 
   app.post("/api/pairings/device", async (request, reply) => {
     const body = request.body as PairingRequestPayload;
+    if (!consumeRateLimit(rateLimits, `pairing:create:ip:${request.ip}`, 8, 5 * 60_000)) {
+      reply.code(429);
+      return { error: "Rate limit exceeded" };
+    }
     if (
       !body ||
       typeof body.deviceId !== "string" ||
@@ -338,9 +492,14 @@ export function createControlServer(
       reply.code(400);
       return { error: "Invalid pairing payload" };
     }
+    if (!consumeRateLimit(rateLimits, `pairing:create:device:${body.deviceId}`, 4, 5 * 60_000)) {
+      reply.code(429);
+      return { error: "Rate limit exceeded" };
+    }
 
     const codeDigits = randomDigits(6);
     const requestId = randomUUID();
+    const createdAt = Date.now();
     const record: PairingRequestRecord = {
       requestId,
       code: `${codeDigits.slice(0, 3)}-${codeDigits.slice(3)}`,
@@ -352,14 +511,26 @@ export function createControlServer(
       platform: body.platform,
       arch: body.arch,
       agentVersion: body.agentVersion,
-      ...(body.codexVersion !== undefined ? { codexVersion: body.codexVersion } : {}),
-      ...(body.relayUrl !== undefined ? { relayUrl: body.relayUrl } : {}),
-      createdAt: Date.now(),
-      expiresAt: Date.now() + 5 * 60_000,
+      codexVersion: body.codexVersion ?? null,
+      relayUrl: body.relayUrl ?? null,
+      shortFingerprint: buildShortFingerprint(body.deviceId, body.hostname, body.platform, body.arch),
+      createdAt,
+      expiresAt: createdAt + DEFAULT_PAIRING_TTL_MS,
       status: "pending",
-      pollToken: randomBytes(18).toString("base64url")
+      pollToken: randomBytes(18).toString("base64url"),
+      consumedAt: null
     };
     pairings.set(record.requestId, record);
+    audit.write({
+      action: "pairing.create",
+      at: createdAt,
+      deviceId: record.deviceId,
+      outcome: "success",
+      meta: {
+        hostname: record.hostname,
+        shortFingerprint: record.shortFingerprint
+      }
+    });
     return {
       requestId: record.requestId,
       pollToken: record.pollToken,
@@ -379,6 +550,9 @@ export function createControlServer(
     }
     const status = resolvePairingStatus(pairing);
     pairing.status = status;
+    if (status !== "pending" && pairing.consumedAt === null) {
+      pairing.consumedAt = Date.now();
+    }
     return {
       ok: true,
       status,
@@ -388,8 +562,12 @@ export function createControlServer(
   });
 
   app.get("/api/pairings/requests/:code", async (request, reply) => {
+    if (!consumeRateLimit(rateLimits, `pairing:lookup:ip:${request.ip}`, 30, 5 * 60_000)) {
+      reply.code(429);
+      return { error: "Rate limit exceeded" };
+    }
     const params = request.params as { code: string };
-    const pairing = pairingForCode(params.code);
+    const pairing = pairingForCode(pairings, params.code);
     if (!pairing) {
       reply.code(404);
       return { error: "Pairing request not found" };
@@ -400,11 +578,15 @@ export function createControlServer(
   });
 
   app.post("/api/pairings/requests/:code/approve", async (request, reply) => {
+    if (!consumeRateLimit(rateLimits, `pairing:decision:ip:${request.ip}`, 20, 5 * 60_000)) {
+      reply.code(429);
+      return { error: "Rate limit exceeded" };
+    }
     if (!requireUserAccess(request, reply)) {
       return { error: "Missing or invalid user token" };
     }
     const params = request.params as { code: string };
-    const pairing = pairingForCode(params.code);
+    const pairing = pairingForCode(pairings, params.code);
     if (!pairing) {
       reply.code(404);
       return { error: "Pairing request not found" };
@@ -414,7 +596,9 @@ export function createControlServer(
       reply.code(status === "expired" ? 410 : 409);
       return { error: `Pairing request is ${status}` };
     }
+    const now = Date.now();
     pairing.status = "approved";
+    pairing.consumedAt = now;
     registry.upsert({
       deviceId: pairing.deviceId,
       deviceToken: pairing.deviceToken,
@@ -425,15 +609,53 @@ export function createControlServer(
       agentVersion: pairing.agentVersion,
       codexVersion: pairing.codexVersion ?? null,
       relayUrl: pairing.relayUrl ?? null,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
+      createdAt: now,
+      updatedAt: now,
+      revokedAt: null
     });
-    const sessionToken = issueBrowserSession();
+    audit.write({
+      action: "pairing.approve",
+      at: now,
+      deviceId: pairing.deviceId,
+      outcome: "success",
+      meta: { shortFingerprint: pairing.shortFingerprint }
+    });
     return {
       ok: true,
       deviceId: pairing.deviceId,
-      sessionToken
+      sessionToken: issueBrowserSession()
     } satisfies PairingApproveResponse;
+  });
+
+  app.post("/api/pairings/requests/:code/reject", async (request, reply) => {
+    if (!consumeRateLimit(rateLimits, `pairing:decision:ip:${request.ip}`, 20, 5 * 60_000)) {
+      reply.code(429);
+      return { error: "Rate limit exceeded" };
+    }
+    if (!requireUserAccess(request, reply)) {
+      return { error: "Missing or invalid user token" };
+    }
+    const params = request.params as { code: string };
+    const pairing = pairingForCode(pairings, params.code);
+    if (!pairing) {
+      reply.code(404);
+      return { error: "Pairing request not found" };
+    }
+    const status = resolvePairingStatus(pairing);
+    if (status !== "pending") {
+      reply.code(status === "expired" ? 410 : 409);
+      return { error: `Pairing request is ${status}` };
+    }
+    pairing.status = "rejected";
+    pairing.consumedAt = Date.now();
+    audit.write({
+      action: "pairing.reject",
+      at: pairing.consumedAt,
+      deviceId: pairing.deviceId,
+      outcome: "success",
+      meta: { shortFingerprint: pairing.shortFingerprint }
+    });
+    return { ok: true };
   });
 
   app.get("/api/devices", async (request, reply) => {
@@ -443,6 +665,41 @@ export function createControlServer(
     return {
       devices: sortedDevices(devices).map((device) => device.info)
     };
+  });
+
+  app.delete("/api/devices/:deviceId", async (request, reply) => {
+    if (!requireUserAccess(request, reply)) {
+      return { error: "Missing or invalid user token" };
+    }
+    const params = request.params as { deviceId: string };
+    const revoked = registry.revoke(params.deviceId);
+    if (!revoked) {
+      reply.code(404);
+      return { error: "Device not found" };
+    }
+    const connected = devices.get(params.deviceId);
+    if (connected?.socket) {
+      connected.socket.disconnect(true);
+    }
+    if (connected) {
+      connected.info = {
+        ...connected.info,
+        online: false,
+        lastSeenAt: Date.now()
+      };
+      userNamespace.emit("device:offline", {
+        deviceId: connected.info.deviceId,
+        lastSeenAt: connected.info.lastSeenAt
+      });
+      devices.delete(params.deviceId);
+    }
+    audit.write({
+      action: "device.revoke",
+      at: Date.now(),
+      deviceId: params.deviceId,
+      outcome: "success"
+    });
+    return { ok: true };
   });
 
   app.get("/api/relay/devices/:deviceId/events", async (request, reply) => {
@@ -463,151 +720,184 @@ export function createControlServer(
   });
 
   app.get("/api/relay/devices/:deviceId/health", async (request, reply) =>
-    handleRpcRequest(request, reply, devices, isUserAccessToken, RelayMethodValue.AgentHealth, undefined, rpcTimeoutMs)
+    handleRpcRequest(request, reply, {
+      devices,
+      isUserAccessToken,
+      method: RelayMethodValue.AgentHealth,
+      params: undefined,
+      timeoutMs: rpcTimeoutMs,
+      audit,
+      allowRelayFullAccess: options.allowRelayFullAccess
+    })
   );
 
   app.get("/api/relay/devices/:deviceId/sessions", async (request, reply) =>
-    handleRpcRequest(request, reply, devices, isUserAccessToken, RelayMethodValue.SessionsList, undefined, rpcTimeoutMs)
+    handleRpcRequest(request, reply, {
+      devices,
+      isUserAccessToken,
+      method: RelayMethodValue.SessionsList,
+      params: undefined,
+      timeoutMs: rpcTimeoutMs,
+      audit,
+      allowRelayFullAccess: options.allowRelayFullAccess
+    })
   );
 
   app.post("/api/relay/devices/:deviceId/sessions", async (request, reply) =>
-    handleRpcRequest(request, reply, devices, isUserAccessToken, RelayMethodValue.SessionsCreate, request.body, rpcTimeoutMs)
+    handleRpcRequest(request, reply, {
+      devices,
+      isUserAccessToken,
+      method: RelayMethodValue.SessionsCreate,
+      params: request.body,
+      timeoutMs: rpcTimeoutMs,
+      audit,
+      allowRelayFullAccess: options.allowRelayFullAccess
+    })
   );
 
   app.post("/api/relay/devices/:deviceId/sessions/:sessionId/messages", async (request, reply) => {
     const params = request.params as { sessionId: string };
-    return handleRpcRequest(
-      request,
-      reply,
+    return handleRpcRequest(request, reply, {
       devices,
       isUserAccessToken,
-      RelayMethodValue.SessionsMessage,
-      { sessionId: params.sessionId, body: request.body },
-      rpcTimeoutMs
-    );
+      method: RelayMethodValue.SessionsMessage,
+      params: { sessionId: params.sessionId, body: request.body },
+      timeoutMs: rpcTimeoutMs,
+      audit,
+      allowRelayFullAccess: options.allowRelayFullAccess
+    });
   });
 
   app.get("/api/relay/devices/:deviceId/sessions/:sessionId/goal", async (request, reply) => {
     const params = request.params as { sessionId: string };
-    return handleRpcRequest(
-      request,
-      reply,
+    return handleRpcRequest(request, reply, {
       devices,
       isUserAccessToken,
-      RelayMethodValue.SessionsGoalGet,
-      { sessionId: params.sessionId },
-      rpcTimeoutMs
-    );
+      method: RelayMethodValue.SessionsGoalGet,
+      params: { sessionId: params.sessionId },
+      timeoutMs: rpcTimeoutMs,
+      audit,
+      allowRelayFullAccess: options.allowRelayFullAccess
+    });
   });
 
   app.post("/api/relay/devices/:deviceId/sessions/:sessionId/goal", async (request, reply) => {
     const params = request.params as { sessionId: string };
-    return handleRpcRequest(
-      request,
-      reply,
+    return handleRpcRequest(request, reply, {
       devices,
       isUserAccessToken,
-      RelayMethodValue.SessionsGoalSet,
-      { sessionId: params.sessionId, body: request.body },
-      rpcTimeoutMs
-    );
+      method: RelayMethodValue.SessionsGoalSet,
+      params: { sessionId: params.sessionId, body: request.body },
+      timeoutMs: rpcTimeoutMs,
+      audit,
+      allowRelayFullAccess: options.allowRelayFullAccess
+    });
   });
 
   app.delete("/api/relay/devices/:deviceId/sessions/:sessionId/goal", async (request, reply) => {
     const params = request.params as { sessionId: string };
-    return handleRpcRequest(
-      request,
-      reply,
+    return handleRpcRequest(request, reply, {
       devices,
       isUserAccessToken,
-      RelayMethodValue.SessionsGoalClear,
-      { sessionId: params.sessionId },
-      rpcTimeoutMs
-    );
+      method: RelayMethodValue.SessionsGoalClear,
+      params: { sessionId: params.sessionId },
+      timeoutMs: rpcTimeoutMs,
+      audit,
+      allowRelayFullAccess: options.allowRelayFullAccess
+    });
   });
 
   app.post(
     "/api/relay/devices/:deviceId/sessions/:sessionId/turns/:turnId/interrupt",
     async (request, reply) => {
       const params = request.params as { sessionId: string; turnId: string };
-      return handleRpcRequest(
-        request,
-        reply,
+      return handleRpcRequest(request, reply, {
         devices,
         isUserAccessToken,
-        RelayMethodValue.TurnInterrupt,
-        { sessionId: params.sessionId, turnId: params.turnId },
-        rpcTimeoutMs
-      );
+        method: RelayMethodValue.TurnInterrupt,
+        params: { sessionId: params.sessionId, turnId: params.turnId },
+        timeoutMs: rpcTimeoutMs,
+        audit,
+        allowRelayFullAccess: options.allowRelayFullAccess
+      });
     }
   );
 
   app.post("/api/relay/devices/:deviceId/approvals/:approvalId/decision", async (request, reply) => {
     const params = request.params as { approvalId: string };
-    return handleRpcRequest(
-      request,
-      reply,
+    return handleRpcRequest(request, reply, {
       devices,
       isUserAccessToken,
-      RelayMethodValue.ApprovalDecision,
-      { approvalId: params.approvalId, body: request.body },
-      rpcTimeoutMs
-    );
+      method: RelayMethodValue.ApprovalDecision,
+      params: { approvalId: params.approvalId, body: request.body },
+      timeoutMs: rpcTimeoutMs,
+      audit,
+      allowRelayFullAccess: options.allowRelayFullAccess
+    });
   });
 
   app.get("/api/relay/devices/:deviceId/directories", async (request, reply) => {
     const query = request.query as { path?: string };
-    return handleRpcRequest(
-      request,
-      reply,
+    return handleRpcRequest(request, reply, {
       devices,
       isUserAccessToken,
-      RelayMethodValue.DirectoriesList,
-      { path: query.path },
-      rpcTimeoutMs
-    );
+      method: RelayMethodValue.DirectoriesList,
+      params: { path: query.path },
+      timeoutMs: rpcTimeoutMs,
+      audit,
+      allowRelayFullAccess: options.allowRelayFullAccess
+    });
   });
 
   app.get("/api/relay/devices/:deviceId/codex-history", async (request, reply) => {
     const query = request.query as { limit?: string; search?: string };
-    return handleRpcRequest(
-      request,
-      reply,
+    return handleRpcRequest(request, reply, {
       devices,
       isUserAccessToken,
-      RelayMethodValue.CodexHistoryList,
-      {
+      method: RelayMethodValue.CodexHistoryList,
+      params: {
         limit: query.limit ? Number(query.limit) : undefined,
         search: query.search
       },
-      rpcTimeoutMs
-    );
+      timeoutMs: rpcTimeoutMs,
+      audit,
+      allowRelayFullAccess: options.allowRelayFullAccess
+    });
   });
 
   app.get("/api/relay/devices/:deviceId/codex-history/detail", async (request, reply) => {
     const query = request.query as { id?: string; cwd?: string };
-    return handleRpcRequest(
-      request,
-      reply,
+    return handleRpcRequest(request, reply, {
       devices,
       isUserAccessToken,
-      RelayMethodValue.CodexHistoryDetail,
-      {
+      method: RelayMethodValue.CodexHistoryDetail,
+      params: {
         id: query.id,
         cwd: query.cwd
       },
-      rpcTimeoutMs
-    );
+      timeoutMs: rpcTimeoutMs,
+      audit,
+      allowRelayFullAccess: options.allowRelayFullAccess
+    });
   });
 
   app.post("/api/relay/devices/:deviceId/codex-history/resume", async (request, reply) =>
-    handleRpcRequest(request, reply, devices, isUserAccessToken, RelayMethodValue.CodexHistoryResume, request.body, rpcTimeoutMs)
+    handleRpcRequest(request, reply, {
+      devices,
+      isUserAccessToken,
+      method: RelayMethodValue.CodexHistoryResume,
+      params: request.body,
+      timeoutMs: rpcTimeoutMs,
+      audit,
+      allowRelayFullAccess: options.allowRelayFullAccess
+    })
   );
 
   return {
     app,
     io,
     close: async () => {
+      clearInterval(pruneTimer);
       await io.close();
       await app.close();
     }
@@ -617,22 +907,65 @@ export function createControlServer(
 async function handleRpcRequest(
   request: FastifyRequest,
   reply: FastifyReply,
-  devices: Map<string, RegisteredDevice>,
-  isUserAccessToken: (token: string | null | undefined) => boolean,
-  method: RelayMethod,
-  params: unknown,
-  timeoutMs: number
+  input: {
+    devices: Map<string, RegisteredDevice>;
+    isUserAccessToken: (token: string | null | undefined) => boolean;
+    method: RelayMethod;
+    params: unknown;
+    timeoutMs: number;
+    audit: AuditLogger;
+    allowRelayFullAccess: boolean;
+  }
 ): Promise<unknown> {
   const accessToken = requestAccessToken(request);
-  if (!isUserAccessToken(accessToken)) {
+  if (!input.isUserAccessToken(accessToken)) {
     reply.code(401);
     return { error: "Missing or invalid user token" };
   }
+  if (!input.allowRelayFullAccess && requestsRelayFullAccess(input.method, input.params)) {
+    input.audit.write({
+      action: "relay.rpc",
+      at: Date.now(),
+      method: input.method,
+      outcome: "denied",
+      reason: "relay_full_access_disabled"
+    });
+    reply.code(403);
+    return { error: "Relay full-access is disabled by operator policy." };
+  }
   const { deviceId } = request.params as { deviceId: string };
   try {
-    return await invokeMachineRpc(devices, deviceId, method, params, timeoutMs);
+    const result = await invokeMachineRpc(
+      input.devices,
+      deviceId,
+      input.method,
+      input.params,
+      input.timeoutMs
+    );
+    input.audit.write({
+      action:
+        input.method === RelayMethodValue.ApprovalDecision
+          ? "approval.decision"
+          : "relay.rpc",
+      at: Date.now(),
+      deviceId,
+      method: input.method,
+      outcome: "success",
+      ...(approvalDecisionMeta(input.method, input.params)
+        ? { meta: approvalDecisionMeta(input.method, input.params)! }
+        : {})
+    });
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    input.audit.write({
+      action: "relay.rpc",
+      at: Date.now(),
+      deviceId,
+      method: input.method,
+      outcome: "failure",
+      reason: message
+    });
     const statusCode =
       message.includes("timeout")
         ? 504
@@ -679,13 +1012,183 @@ async function invokeMachineRpc(
         resolve(payload);
       });
   }).catch((error: unknown) => {
-    throw new Error(`relay rpc timeout: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `relay rpc timeout: ${error instanceof Error ? error.message : String(error)}`
+    );
   });
 
   if (!response.ok) {
     throw new Error(response.error.message);
   }
   return response.result;
+}
+
+function normalizeControlOptions(options: ControlServerOptions) {
+  const normalizedOrigins =
+    options.allowedOrigins?.map((origin) => origin.trim()).filter(Boolean) ?? [];
+  if (options.production && normalizedOrigins.length === 0) {
+    throw new Error("Production relay requires at least one explicit allowed origin.");
+  }
+  return {
+    ...options,
+    heartbeatIntervalMs: options.heartbeatIntervalMs ?? 15_000,
+    rpcTimeoutMs: options.rpcTimeoutMs ?? 30_000,
+    browserSessionTtlMs: options.browserSessionTtlMs ?? DEFAULT_BROWSER_SESSION_TTL_MS,
+    browserSessionIdleMs: options.browserSessionIdleMs ?? DEFAULT_BROWSER_SESSION_IDLE_MS,
+    pruneIntervalMs: options.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS,
+    allowedOrigins: normalizedOrigins,
+    production: options.production ?? false,
+    allowMachineOwnerToken:
+      options.allowMachineOwnerToken ?? !(options.production ?? false),
+    allowRelayFullAccess: resolveRelayFullAccessSetting(options.allowRelayFullAccess)
+  };
+}
+
+function resolveRelayFullAccessSetting(
+  explicit: boolean | undefined
+): boolean {
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  if (process.env.CODEXNEXT_DISABLE_RELAY_FULL_ACCESS === "1") {
+    return false;
+  }
+  if (process.env.CODEXNEXT_ALLOW_RELAY_FULL_ACCESS === "0") {
+    return false;
+  }
+  return true;
+}
+
+function pruneBrowserSessions(
+  sessions: Map<string, BrowserSessionRecord>,
+  audit: AuditLogger,
+  idleTimeoutMs: number
+): void {
+  const now = Date.now();
+  for (const [tokenHash, session] of sessions.entries()) {
+    if (
+      session.revokedAt ||
+      session.expiresAt <= now ||
+      session.lastUsedAt + idleTimeoutMs <= now
+    ) {
+      sessions.delete(tokenHash);
+      audit.write({
+        action: "relay.session.prune",
+        at: now,
+        outcome: "success"
+      });
+    }
+  }
+}
+
+function prunePairings(
+  pairings: Map<string, PairingRequestRecord>,
+  audit: AuditLogger
+): void {
+  const now = Date.now();
+  for (const [requestId, pairing] of pairings.entries()) {
+    const status = resolvePairingStatus(pairing);
+    pairing.status = status;
+    if (status === "expired" && pairing.consumedAt === null) {
+      pairing.consumedAt = now;
+      audit.write({
+        action: "pairing.expire",
+        at: now,
+        deviceId: pairing.deviceId,
+        outcome: "success",
+        meta: { shortFingerprint: pairing.shortFingerprint }
+      });
+    }
+    if (
+      pairing.consumedAt !== null &&
+      now - pairing.consumedAt >= 60_000
+    ) {
+      pairings.delete(requestId);
+    }
+  }
+}
+
+function pruneRateLimits(rateLimits: Map<string, RateLimitRecord>): void {
+  const now = Date.now();
+  for (const [key, value] of rateLimits.entries()) {
+    if (value.resetAt <= now) {
+      rateLimits.delete(key);
+    }
+  }
+}
+
+function consumeRateLimit(
+  rateLimits: Map<string, RateLimitRecord>,
+  key: string,
+  limit: number,
+  windowMs: number
+): boolean {
+  const now = Date.now();
+  const existing = rateLimits.get(key);
+  const current =
+    existing && existing.resetAt > now
+      ? existing
+      : { count: 0, resetAt: now + windowMs };
+  current.count += 1;
+  rateLimits.set(key, current);
+  return current.count <= limit;
+}
+
+function hashBrowserSessionToken(ownerToken: string, token: string): string {
+  return createHash("sha256")
+    .update(ownerToken)
+    .update(":browser-session:")
+    .update(token)
+    .digest("base64url");
+}
+
+function createOriginMatcher(allowedOrigins: string[], production: boolean) {
+  return (origin: string | undefined): boolean => {
+    if (!origin) {
+      return true;
+    }
+    if (allowedOrigins.includes(origin)) {
+      return true;
+    }
+    return !production && allowedOrigins.length === 0;
+  };
+}
+
+function pairingForCode(
+  pairings: Map<string, PairingRequestRecord>,
+  code: string
+): PairingRequestRecord | null {
+  return (
+    [...pairings.values()].find(
+      (pairing) => pairing.codeDigits === normalizePairCode(code)
+    ) ?? null
+  );
+}
+
+function requestsRelayFullAccess(method: RelayMethod, params: unknown): boolean {
+  if (
+    method !== RelayMethodValue.SessionsCreate &&
+    method !== RelayMethodValue.CodexHistoryResume
+  ) {
+    return false;
+  }
+  if (!isRecord(params)) {
+    return false;
+  }
+  return (
+    params.permissionMode === "full-access" ||
+    (params.sandbox === "danger-full-access" && params.approvalPolicy === "never")
+  );
+}
+
+function approvalDecisionMeta(method: RelayMethod, params: unknown): Record<string, unknown> | undefined {
+  if (method !== RelayMethodValue.ApprovalDecision || !isRecord(params) || !isRecord(params.body)) {
+    return undefined;
+  }
+  if (typeof params.body.decision !== "string") {
+    return undefined;
+  }
+  return { decision: params.body.decision };
 }
 
 function registerEventOnlyDevice(
@@ -716,9 +1219,11 @@ function registerEventOnlyDevice(
   return created;
 }
 
-function resolvePairingStatus(pairing: PairingRequestRecord): PairingRequestRecord["status"] {
-  if (pairing.status === "approved") {
-    return "approved";
+function resolvePairingStatus(
+  pairing: PairingRequestRecord
+): PairingRequestRecord["status"] {
+  if (pairing.status === "approved" || pairing.status === "rejected") {
+    return pairing.status;
   }
   if (Date.now() >= pairing.expiresAt) {
     return "expired";
@@ -736,12 +1241,25 @@ function toPairingView(pairing: PairingRequestRecord): PairingRequestView {
     platform: pairing.platform,
     arch: pairing.arch,
     agentVersion: pairing.agentVersion,
-    ...(pairing.codexVersion !== undefined ? { codexVersion: pairing.codexVersion } : {}),
-    ...(pairing.relayUrl !== undefined ? { relayUrl: pairing.relayUrl } : {}),
+    codexVersion: pairing.codexVersion ?? null,
+    relayUrl: pairing.relayUrl ?? null,
+    shortFingerprint: pairing.shortFingerprint,
     createdAt: pairing.createdAt,
     expiresAt: pairing.expiresAt,
     status: resolvePairingStatus(pairing)
   };
+}
+
+function buildShortFingerprint(
+  deviceId: string,
+  hostname: string,
+  platform: string,
+  arch: string
+): string {
+  const digest = createHash("sha256")
+    .update(`${deviceId}:${hostname}:${platform}:${arch}`)
+    .digest("hex");
+  return digest.slice(0, 12);
 }
 
 function normalizePairCode(code: string): string {
@@ -768,4 +1286,8 @@ function broadcastUpsert(
   info: RelayDeviceRecord
 ): void {
   namespace.emit("device:upsert", info);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

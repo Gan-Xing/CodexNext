@@ -22,6 +22,115 @@
     "Segoe UI", sans-serif;
 }
 
+.cn-login-page,
+.cn-pair-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  background: #f6f7f9;
+}
+
+.cn-login-card,
+.cn-pair-card {
+  width: min(100%, 28rem);
+  background: #fff;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  border-radius: 1.5rem;
+  padding: 1.5rem;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.08);
+}
+
+.cn-login-kicker,
+.cn-pair-kicker {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b7280;
+}
+
+.cn-login-card h1,
+.cn-pair-card h1 {
+  margin: 0.75rem 0 0.5rem;
+  font-size: 2rem;
+  line-height: 1.05;
+}
+
+.cn-login-card p,
+.cn-pair-card p {
+  margin: 0 0 1rem;
+  color: #4b5563;
+}
+
+.cn-login-field {
+  display: grid;
+  gap: 0.45rem;
+  margin: 1rem 0 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.cn-login-field input {
+  width: 100%;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  border-radius: 0.95rem;
+  background: #fff;
+  padding: 0.9rem 1rem;
+  font: inherit;
+  color: #111827;
+}
+
+.cn-login-submit {
+  margin-top: 1rem;
+  width: 100%;
+  border: none;
+  border-radius: 999px;
+  background: #111827;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  padding: 0.95rem 1rem;
+}
+
+.cn-login-submit:disabled {
+  opacity: 0.45;
+}
+
+.cn-login-error,
+.cn-pair-error {
+  color: #b91c1c !important;
+}
+
+.cn-pair-meta {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 1rem;
+}
+
+.cn-pair-meta div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.cn-pair-meta span {
+  font-size: 0.82rem;
+  color: #6b7280;
+}
+
+.cn-pair-meta strong {
+  color: #111827;
+  font-weight: 700;
+}
+
+.cn-pair-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
 .cn-pair-page {
   align-items: center;
   background: #f6f7f9;

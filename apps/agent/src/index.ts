@@ -56,7 +56,7 @@ program
   .action(
     async (options: {
       relay: string;
-      ownerToken: string;
+      ownerToken?: string;
       deviceName?: string;
       approvalTimeoutMs: number;
       codexBin: string;
@@ -98,6 +98,10 @@ program
     "Allowed Web Console origin.",
     "http://127.0.0.1:3000"
   )
+  .option(
+    "--allow-remote-direct",
+    "Explicitly allow direct mode to bind beyond loopback."
+  )
   .option("--token <token>", "Local API token. Generated if omitted.")
   .option(
     "--approval-timeout-ms <number>",
@@ -111,6 +115,7 @@ program
       host: string;
       port: number;
       webOrigin: string;
+      allowRemoteDirect?: boolean;
       token?: string;
       approvalTimeoutMs: number;
       codexBin: string;

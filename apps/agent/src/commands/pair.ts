@@ -68,6 +68,9 @@ export async function runPair(options: PairOptions): Promise<void> {
     if (status.status === "pending") {
       continue;
     }
+    if (status.status === "rejected") {
+      throw new Error("配对请求已被拒绝。");
+    }
     if (status.status === "expired") {
       throw new Error("配对码已过期。");
     }

@@ -11,11 +11,13 @@ export interface ServeOptions {
   port: number;
   webOrigin: string;
   token?: string;
+  allowRemoteDirect?: boolean;
   approvalTimeoutMs: number;
   codexBin: string;
 }
 
 export async function runServe(options: ServeOptions): Promise<void> {
+  assertAllowedDirectHost(options.host, options.allowRemoteDirect ?? false);
   const token = options.token ?? randomBytes(24).toString("base64url");
   const logger = pino({
     name: "codexnext-agent-serve",
@@ -60,4 +62,18 @@ export async function runServe(options: ServeOptions): Promise<void> {
   });
 
   logger.debug({ apiUrl, webUrl }, "local agent started");
+}
+
+export function assertAllowedDirectHost(host: string, allowRemoteDirect: boolean): void {
+  if (allowRemoteDirect || isLoopbackHost(host)) {
+    return;
+  }
+  throw new Error(
+    `Refusing remote direct mode on host ${host}. Pass --allow-remote-direct to expose direct mode beyond loopback.`
+  );
+}
+
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
 }

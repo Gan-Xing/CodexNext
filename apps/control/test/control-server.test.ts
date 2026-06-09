@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { io, type Socket } from "socket.io-client";
@@ -12,11 +15,13 @@ import type {
   RelayRpcRequest
 } from "@codexnext/protocol";
 import { RelayNamespace, RelaySocketPath } from "@codexnext/protocol";
+import { DeviceRegistry } from "../src/device-registry.js";
 import { createControlServer, type ControlServerHandle } from "../src/server.js";
 
 const ownerToken = "owner-token";
 const handles = new Set<ControlServerHandle>();
 const sockets = new Set<Socket>();
+const originalHome = process.env.HOME;
 
 afterEach(async () => {
   for (const socket of sockets) {
@@ -27,6 +32,7 @@ afterEach(async () => {
     await handle.close();
   }
   handles.clear();
+  process.env.HOME = originalHome;
 });
 
 describe("control server relay", () => {
@@ -38,7 +44,9 @@ describe("control server relay", () => {
 
   it("registers machine hello and updates heartbeat presence", async () => {
     const { baseUrl } = await startServer();
-    const machine = createMachineSocket(baseUrl, "device_1");
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
     const hello = await waitForConnect(machine, () =>
       emitAck<MachineHelloAck | RelayErrorAck>(machine, "machine:hello", {
         deviceId: "device_1",
@@ -71,7 +79,9 @@ describe("control server relay", () => {
 
   it("returns relay rpc ack results over HTTP", async () => {
     const { baseUrl } = await startServer();
-    const machine = createMachineSocket(baseUrl, "device_1");
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
     await waitForConnect(machine, () =>
       emitAck(machine, "machine:hello", {
         deviceId: "device_1",
@@ -122,7 +132,9 @@ describe("control server relay", () => {
 
   it("returns 504-style errors when relay rpc times out", async () => {
     const { baseUrl } = await startServer({ rpcTimeoutMs: 50 });
-    const machine = createMachineSocket(baseUrl, "device_1");
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
     await waitForConnect(machine, () =>
       emitAck(machine, "machine:hello", {
         deviceId: "device_1",
@@ -147,7 +159,9 @@ describe("control server relay", () => {
 
   it("stores machine events and replays them to browser clients after seq", async () => {
     const { baseUrl } = await startServer();
-    const machine = createMachineSocket(baseUrl, "device_1");
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
     await waitForConnect(machine, () =>
       emitAck(machine, "machine:hello", {
         deviceId: "device_1",
@@ -171,9 +185,21 @@ describe("control server relay", () => {
       }
     });
 
-    const browser = createUserSocket(baseUrl, {
-      device_1: 0
-    }, false);
+    const session = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ownerToken}`
+      }
+    });
+    const sessionPayload = (await session.json()) as { sessionToken: string };
+    const browser = createUserSocket(
+      baseUrl,
+      {
+        device_1: 0
+      },
+      sessionPayload.sessionToken,
+      false
+    );
     const replayPromise = waitForDeviceEvent(browser);
     browser.connect();
     await waitForConnect(browser, async () => undefined);
@@ -194,7 +220,11 @@ describe("control server relay", () => {
   });
 
   it("approves a pairing request and authorizes machine connect without owner token", async () => {
-    const { baseUrl } = await startServer();
+    const { baseUrl } = await startServer({
+      production: true,
+      allowedOrigins: ["http://example.com"],
+      allowMachineOwnerToken: false
+    });
     const createResponse = await fetch(`${baseUrl}/api/pairings/device`, {
       method: "POST",
       headers: {
@@ -221,12 +251,20 @@ describe("control server relay", () => {
     const request = (await requestResponse.json()) as PairingRequestView;
     expect(request.deviceId).toBe("device_paired");
 
+    const sessionIssue = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ownerToken}`
+      }
+    });
+    const issuedSession = (await sessionIssue.json()) as { sessionToken: string };
+
     const approveResponse = await fetch(
       `${baseUrl}/api/pairings/requests/${pairing.codeDigits}/approve`,
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${ownerToken}`
+          Authorization: `Bearer ${issuedSession.sessionToken}`
         }
       }
     );
@@ -302,6 +340,203 @@ describe("control server relay", () => {
     expect(typeof payload.sessionToken).toBe("string");
     expect(payload.sessionToken.length).toBeGreaterThan(12);
   });
+
+  it("requires owner auth to mint relay browser sessions", async () => {
+    const { baseUrl } = await startServer({ production: true, allowedOrigins: ["http://example.com"] });
+    const response = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST"
+    });
+    expect(response.status).toBe(401);
+  });
+
+  it("revokes browser sessions on logout", async () => {
+    const { baseUrl } = await startServer();
+    const issue = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ownerToken}`
+      }
+    });
+    const payload = (await issue.json()) as { sessionToken: string };
+    const logout = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${payload.sessionToken}`
+      }
+    });
+    expect(logout.status).toBe(200);
+    const list = await authorizedFetch(`${baseUrl}/api/devices`, payload.sessionToken);
+    expect(list.status).toBe(401);
+  });
+
+  it("expires browser sessions when ttl elapses", async () => {
+    const { baseUrl } = await startServer({
+      browserSessionTtlMs: 1
+    });
+    const issue = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ownerToken}`
+      }
+    });
+    const payload = (await issue.json()) as { sessionToken: string };
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const list = await authorizedFetch(`${baseUrl}/api/devices`, payload.sessionToken);
+    expect(list.status).toBe(401);
+  });
+
+  it("stores hashed device tokens instead of plaintext", async () => {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "codexnext-control-"));
+    process.env.HOME = tempHome;
+    const { baseUrl } = await startServer();
+
+    const createResponse = await fetch(`${baseUrl}/api/pairings/device`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        deviceId: "device_hashed",
+        deviceToken: "super-secret-device-token",
+        deviceName: "MacBook Air",
+        hostname: "macbook-air.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0"
+      })
+    });
+    const pairing = (await createResponse.json()) as PairingCreateResponse;
+    await fetch(`${baseUrl}/api/pairings/requests/${pairing.codeDigits}/approve`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ownerToken}`
+      }
+    });
+
+    const persisted = readFileSync(
+      path.join(tempHome, ".codexnext", "control-devices.json"),
+      "utf8"
+    );
+    expect(persisted).toContain("\"deviceTokenHash\"");
+    expect(persisted).not.toContain("super-secret-device-token");
+  });
+
+  it("denies revoked device tokens", async () => {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "codexnext-revoke-"));
+    process.env.HOME = tempHome;
+    const registry = new DeviceRegistry(ownerToken);
+    registry.upsert({
+      deviceId: "device_revoked",
+      deviceToken: "device-token",
+      deviceName: "MacBook Air",
+      hostname: "macbook-air.local",
+      platform: "darwin",
+      arch: "arm64",
+      agentVersion: "0.1.0",
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+    expect(registry.isAuthorized("device_revoked", "device-token")).toBe(true);
+    registry.revoke("device_revoked");
+    expect(registry.isAuthorized("device_revoked", "device-token")).toBe(false);
+  });
+
+  it("rate limits pairing create", async () => {
+    const { baseUrl } = await startServer();
+    let lastStatus = 200;
+    for (let attempt = 0; attempt < 9; attempt += 1) {
+      const response = await fetch(`${baseUrl}/api/pairings/device`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          deviceId: `device_rate_${attempt}`,
+          deviceToken: `device-token-${attempt}`,
+          deviceName: "Rate Device",
+          hostname: "rate-device.local",
+          platform: "darwin",
+          arch: "arm64",
+          agentVersion: "0.1.0"
+        })
+      });
+      lastStatus = response.status;
+    }
+    expect(lastStatus).toBe(429);
+  });
+
+  it("requires auth for reject pairing", async () => {
+    const { baseUrl } = await startServer();
+    const createResponse = await fetch(`${baseUrl}/api/pairings/device`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        deviceId: "device_reject",
+        deviceToken: "device-token-reject",
+        deviceName: "Reject Device",
+        hostname: "reject-device.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0"
+      })
+    });
+    const pairing = (await createResponse.json()) as PairingCreateResponse;
+    const reject = await fetch(
+      `${baseUrl}/api/pairings/requests/${pairing.codeDigits}/reject`,
+      { method: "POST" }
+    );
+    expect(reject.status).toBe(401);
+  });
+
+  it("allows relay full-access by default", async () => {
+    const { baseUrl } = await startServer();
+    const session = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ownerToken}`
+      }
+    });
+    const payload = (await session.json()) as { sessionToken: string };
+    const response = await fetch(`${baseUrl}/api/relay/devices/device_1/sessions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${payload.sessionToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        cwd: "/tmp",
+        permissionMode: "full-access"
+      })
+    });
+    expect(response.status).not.toBe(403);
+  });
+
+  it("blocks relay full-access when explicitly disabled", async () => {
+    const { baseUrl } = await startServer({
+      allowRelayFullAccess: false
+    });
+    const session = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ownerToken}`
+      }
+    });
+    const payload = (await session.json()) as { sessionToken: string };
+    const response = await fetch(`${baseUrl}/api/relay/devices/device_1/sessions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${payload.sessionToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        cwd: "/tmp",
+        permissionMode: "full-access"
+      })
+    });
+    expect(response.status).toBe(403);
+  });
 });
 
 async function startServer(overrides: Partial<Parameters<typeof createControlServer>[0]> = {}) {
@@ -326,13 +561,15 @@ function createMachineSocket(
   overrides: Partial<{
     deviceToken: string;
     ownerToken: string;
-  }> = {}
+  }> = {},
+  autoConnect = true
 ): Socket {
   const socket = io(`${baseUrl}${RelayNamespace.Machine}`, {
     path: RelaySocketPath,
+    autoConnect,
     auth: {
       clientType: "machine",
-      ...(overrides.ownerToken !== undefined ? { ownerToken: overrides.ownerToken } : { ownerToken }),
+      ...(overrides.ownerToken !== undefined ? { ownerToken: overrides.ownerToken } : {}),
       ...(overrides.deviceToken ? { deviceToken: overrides.deviceToken } : {}),
       deviceId
     }
@@ -344,6 +581,7 @@ function createMachineSocket(
 function createUserSocket(
   baseUrl: string,
   lastSeqByDevice: Record<string, number>,
+  sessionToken: string,
   autoConnect = true
 ): Socket {
   const socket = io(`${baseUrl}${RelayNamespace.User}`, {
@@ -351,7 +589,7 @@ function createUserSocket(
     autoConnect,
     auth: {
       clientType: "user",
-      ownerToken,
+      sessionToken,
       lastSeqByDevice
     }
   });

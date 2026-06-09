@@ -1,37 +1,87 @@
 # Security
 
-CodexNext Phase 1 is local-only. It does not expose Codex app-server over a network transport and does not store OpenAI or Codex credentials.
+CodexNext now has two operating modes:
 
-## Security Principles
+- direct mode: local development and localhost-only use
+- relay mode: multi-device remote control through `apps/control`
 
-- Keep Codex login state on the user's device.
-- Prefer `codex app-server --stdio` for the first milestone.
-- Do not expose app-server directly to the public internet.
-- Do not persist approval decisions in phase 1.
-- Default approval requests to decline until a real UI can ask the user.
-- Treat `cwd` as a trusted local project selected by the user.
+Codex already owns command approvals, sandbox mode, and final permission enforcement. CodexNext security is responsible for:
 
-## Approval Handling
+- who may access the public Web entry
+- which devices are trusted to join the relay
+- how relay/browser/device tokens are stored
+- how remote and direct entry points are exposed
+- how administrative actions are audited
 
-The Codex app-server may send server-initiated JSON-RPC requests for command execution or file changes. Phase 1 handles these requests through `onApprovalRequest` and returns a decline decision by default.
+## Phase 3B Guarantees
 
-This keeps the first milestone safe while preserving the extension point needed for a future Web or mobile approval UI.
+- Public relay Web requires login.
+- Web login uses an HttpOnly cookie.
+- `ownerToken` is server-only.
+- Browser relay sessions are short-lived and hashed in control memory.
+- Relay browser session tokens are not persisted to `localStorage`.
+- Pairing approve/reject requires authenticated user access.
+- Pairing requests are rate-limited, expire after 5 minutes, and are pruned.
+- Control registry stores `deviceTokenHash`, not plaintext `deviceToken`.
+- Revoked devices cannot reconnect.
+- Direct remote mode requires explicit `--allow-remote-direct`.
+- Relay `full-access` remains available in relay mode by default so Codex permissions stay consistent across direct and relay entry points. Set `CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1` only if you intentionally want an extra relay-only gate.
+- Audit logs record login, pairing, session issue/revoke, device connect/revoke, relay RPC status, and approval decisions.
 
-## Process Boundary
+## Secrets And Tokens
 
-`apps/agent` starts `codex app-server --stdio` as a child process. JSON-RPC messages travel over stdin/stdout. Stderr is ignored by default and can be emitted for debug logging with `LOG_LEVEL=debug`.
+Never expose these values to browser JS, URLs, query strings, or shared screenshots:
 
-Ctrl+C sends `turn/interrupt` when a turn is active and then closes the child process.
+- `CODEXNEXT_OWNER_TOKEN`
+- raw relay `sessionToken`
+- raw device pairing `deviceToken`
+- Codex/OpenAI credentials from the local Codex installation
 
-## Future Security Work
+Persisted files:
 
-Later phases need additional controls before any remote control-plane feature ships:
+- `~/.codexnext/device.json`
+  - contains device identity and local device token
+  - written with restrictive permissions
+- `~/.codexnext/control-devices.json`
+  - stores trusted device metadata
+  - stores `deviceTokenHash`, not plaintext token
+- `~/.codexnext/control-audit.log`
+- `~/.codexnext/web-audit.log`
 
-- device identity and signing
-- explicit project allowlists
-- encrypted relay transport
-- user-visible approval prompts
-- audit log of approval decisions
-- local secret storage for device keys
-- no server-side storage of OpenAI tokens
+## Direct Mode
 
+Direct mode is for local development.
+
+- Default bind host is loopback.
+- Any non-loopback bind requires `--allow-remote-direct`.
+- Direct mode still uses token + Origin checks.
+- Direct mode should not be your public/mobile deployment path.
+
+## Relay Mode
+
+Relay mode is the recommended remote/mobile path.
+
+- browsers/mobile connect only to Web + control
+- machines connect outbound to control over Socket.IO
+- device trust is established through pairing
+- device revoke disconnects the current machine socket and blocks future reconnects
+
+## Emergency Response
+
+If a relay deployment looks compromised:
+
+1. Stop `apps/control`.
+2. Rotate `CODEXNEXT_OWNER_TOKEN`.
+3. Rotate `CODEXNEXT_WEB_SESSION_SECRET`.
+4. Revoke affected devices from the registry.
+5. Invalidate old pairings by restarting control.
+6. Review `control-audit.log` and `web-audit.log`.
+
+## Future Work
+
+Still out of scope in Phase 3B:
+
+- OAuth or passkeys
+- multi-user SaaS authorization
+- end-to-end encrypted relay payloads
+- non-Codex agents

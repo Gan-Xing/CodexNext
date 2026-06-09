@@ -78,7 +78,17 @@ export function DeviceSheet(props: {
     draft.selectedDeviceId &&
       props.connected &&
       draftSavedDevice &&
-      isSameAgentConnection(connectionFromSavedDevice(draftSavedDevice), props.connection)
+      connectionFromSavedDevice(
+        draftSavedDevice,
+        props.relayConnectionInfo?.accessToken ?? null
+      ) &&
+      isSameAgentConnection(
+        connectionFromSavedDevice(
+          draftSavedDevice,
+          props.relayConnectionInfo?.accessToken ?? null
+        )!,
+        props.connection
+      )
   );
   const draftOnline = draftConnected || draftPresence?.status === "online";
   const draftDisplayName = draft.name.trim() || draftSavedDevice?.name || "新设备";
@@ -91,7 +101,7 @@ export function DeviceSheet(props: {
     (relaySelectedDevice?.mode === "relay" ? relaySelectedDevice.relayUrl : null);
   const relayAccessToken =
     props.relayConnectionInfo?.accessToken ??
-    (relaySelectedDevice?.mode === "relay" ? relaySelectedDevice.ownerToken : null);
+    null;
   const pairCodeValue = formatRelayPairCode(relayPairCode);
   const relayPairingVisible = props.relayEnabled && (relayPairMode || waitingForRelayDevice);
   const relayPairCommand = relayUrl ? `codexnext pair --relay ${relayUrl}` : "";
@@ -251,7 +261,17 @@ export function DeviceSheet(props: {
                 const online =
                   presence?.status === "online" ||
                   (props.connected &&
-                    isSameAgentConnection(connectionFromSavedDevice(device), props.connection));
+                    connectionFromSavedDevice(
+                      device,
+                      props.relayConnectionInfo?.accessToken ?? null
+                    ) &&
+                    isSameAgentConnection(
+                      connectionFromSavedDevice(
+                        device,
+                        props.relayConnectionInfo?.accessToken ?? null
+                      )!,
+                      props.connection
+                    ));
                 return (
                   <article
                     key={device.id}
@@ -532,7 +552,11 @@ export function DeviceSheet(props: {
                   onClick={() =>
                     void props.onConnect(
                       draftSavedDevice
-                        ? connectionFromSavedDevice(draftSavedDevice)
+                        ? connectionFromSavedDevice(
+                            draftSavedDevice,
+                            props.relayConnectionInfo?.accessToken ?? null
+                          ) ??
+                          { mode: "direct", agentUrl: draft.agentUrl, token: draft.token }
                         : { mode: "direct", agentUrl: draft.agentUrl, token: draft.token },
                       draft.name,
                       draft.selectedDeviceId

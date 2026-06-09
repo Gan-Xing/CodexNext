@@ -1,0 +1,17 @@
+[Unit]
+Description=CodexNext Relay Agent
+After=network-online.target codexnext-control.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__CODEXNEXT_USER__
+WorkingDirectory=__CODEXNEXT_ROOT__
+EnvironmentFile=/etc/codexnext/agent.env
+ExecStart=__CODEXNEXT_ROOT__/scripts/ops/run-relay-agent.sh
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

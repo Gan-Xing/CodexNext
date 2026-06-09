@@ -1,17 +1,14 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { DeviceIdentityFile } from "@codexnext/protocol";
 
-const deviceDirectory = path.join(os.homedir(), ".codexnext");
-const identityPath = path.join(deviceDirectory, "device.json");
-
 export async function readOrCreateDeviceIdentity(input?: {
   deviceName?: string;
   relayUrl?: string;
 }): Promise<DeviceIdentityFile> {
-  await mkdir(deviceDirectory, { recursive: true });
+  await mkdir(deviceDirectory(), { recursive: true, mode: 0o700 });
   const existing = await readIdentityFile();
   if (existing) {
     const nextName = input?.deviceName?.trim();
@@ -37,7 +34,7 @@ export async function readOrCreateDeviceIdentity(input?: {
     return existing;
   }
 
-  const created: DeviceIdentityFile = {
+    const created: DeviceIdentityFile = {
     version: 1,
     deviceId: randomUUID(),
     deviceName: input?.deviceName?.trim() || os.hostname() || "CodexNext device",
@@ -51,7 +48,7 @@ export async function readOrCreateDeviceIdentity(input?: {
 
 async function readIdentityFile(): Promise<DeviceIdentityFile | null> {
   try {
-    const raw = await readFile(identityPath, "utf8");
+    const raw = await readFile(identityPath(), "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (!isDeviceIdentityFile(parsed)) {
       return null;
@@ -63,7 +60,11 @@ async function readIdentityFile(): Promise<DeviceIdentityFile | null> {
 }
 
 async function writeIdentityFile(identity: DeviceIdentityFile): Promise<void> {
-  await writeFile(identityPath, `${JSON.stringify(identity, null, 2)}\n`, "utf8");
+  await writeFile(identityPath(), `${JSON.stringify(identity, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600
+  });
+  await chmod(identityPath(), 0o600);
 }
 
 function isDeviceIdentityFile(value: unknown): value is DeviceIdentityFile {
@@ -78,4 +79,12 @@ function isDeviceIdentityFile(value: unknown): value is DeviceIdentityFile {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deviceDirectory(): string {
+  return path.join(os.homedir(), ".codexnext");
+}
+
+function identityPath(): string {
+  return path.join(deviceDirectory(), "device.json");
 }

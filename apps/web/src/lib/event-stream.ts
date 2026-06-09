@@ -134,7 +134,7 @@ function openManagedRelayStream(input: {
     reconnectionDelayMax: 5_000,
     auth: {
       clientType: "user",
-      ownerToken: input.connection.ownerToken,
+      sessionToken: input.connection.sessionToken,
       lastSeqByDevice: {
         [input.connection.deviceId]: lastSeq
       }
@@ -144,7 +144,7 @@ function openManagedRelayStream(input: {
   const refreshAuth = () => {
     socket.auth = {
       clientType: "user",
-      ownerToken: input.connection.ownerToken,
+      sessionToken: input.connection.sessionToken,
       lastSeqByDevice: {
         [input.connection.deviceId]: lastSeq
       }

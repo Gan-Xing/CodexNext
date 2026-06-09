@@ -1,23 +1,24 @@
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import type { RelaySessionResponse } from "@codexnext/protocol";
-
-function configuredRelayUrl(): string | null {
-  return (
-    process.env.CODEXNEXT_RELAY_URL ||
-    process.env.NEXT_PUBLIC_CODEXNEXT_RELAY_URL ||
-    null
-  );
-}
-
-function configuredOwnerToken(): string | null {
-  return process.env.CODEXNEXT_OWNER_TOKEN || null;
-}
+import {
+  configuredOwnerToken,
+  configuredRelayUrl,
+  isLoggedIn,
+  webLoginEnabled
+} from "../../../../lib/server-auth";
 
 export async function POST() {
   const relayUrl = configuredRelayUrl();
   const ownerToken = configuredOwnerToken();
   if (!relayUrl || !ownerToken) {
     return new NextResponse(null, { status: 204 });
+  }
+  if (webLoginEnabled()) {
+    const cookieStore = await cookies();
+    if (!isLoggedIn(cookieStore)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
   }
 
   const response = await fetch(new URL("/api/auth/session", relayUrl), {

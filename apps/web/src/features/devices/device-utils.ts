@@ -15,7 +15,6 @@ export interface RelaySavedDevice {
   name: string;
   mode: "relay";
   relayUrl: string;
-  ownerToken: string;
   deviceId: string;
   hostname?: string | null;
   online?: boolean;
@@ -107,7 +106,7 @@ export function findSavedDevice(
           token: token ?? ""
         } satisfies AgentConnection)
       : connectionOrAgentUrl;
-  return devices.find((device) => isSameAgentConnection(connectionFromSavedDevice(device), connection)) ?? null;
+  return devices.find((device) => isSameSavedDeviceConnection(device, connection)) ?? null;
 }
 
 export function isSameDeviceEndpoint(
@@ -134,7 +133,6 @@ export function isSameAgentConnection(
   return left.mode === "relay" &&
     right.mode === "relay" &&
     normalizeAgentUrl(left.relayUrl) === normalizeAgentUrl(right.relayUrl) &&
-    left.ownerToken === right.ownerToken &&
     left.deviceId === right.deviceId;
 }
 
@@ -176,12 +174,18 @@ export function defaultDeviceName(agentUrl: string): string {
   }
 }
 
-export function connectionFromSavedDevice(device: SavedDevice): AgentConnection {
+export function connectionFromSavedDevice(
+  device: SavedDevice,
+  relaySessionToken?: string | null
+): AgentConnection | null {
   if (device.mode === "relay") {
+    if (!relaySessionToken) {
+      return null;
+    }
     return {
       mode: "relay",
       relayUrl: device.relayUrl,
-      ownerToken: device.ownerToken,
+      sessionToken: relaySessionToken,
       deviceId: device.deviceId
     };
   }
@@ -208,7 +212,6 @@ function isSavedDevice(value: unknown): value is SavedDevice {
       typeof value.id === "string" &&
       typeof value.name === "string" &&
       typeof value.relayUrl === "string" &&
-      typeof value.ownerToken === "string" &&
       typeof value.deviceId === "string"
     );
   }
@@ -223,4 +226,27 @@ function isSavedDevice(value: unknown): value is SavedDevice {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function isSameSavedDeviceConnection(
+  device: SavedDevice,
+  connection: AgentConnection | SavedDevice
+): boolean {
+  if (device.mode !== connection.mode) {
+    return false;
+  }
+  if (device.mode === "direct" && connection.mode === "direct") {
+    return (
+      normalizeAgentUrl(device.agentUrl) ===
+        normalizeAgentUrl(connection.mode === "direct" ? connection.agentUrl : "") &&
+      device.token === (connection.mode === "direct" ? connection.token : "")
+    );
+  }
+  return (
+    device.mode === "relay" &&
+    connection.mode === "relay" &&
+    normalizeAgentUrl(device.relayUrl) ===
+      normalizeAgentUrl(connection.mode === "relay" ? connection.relayUrl : "") &&
+    device.deviceId === (connection.mode === "relay" ? connection.deviceId : "")
+  );
 }

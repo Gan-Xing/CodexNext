@@ -679,19 +679,19 @@ export type AgentConnection =
   | {
       mode: "relay";
       relayUrl: string;
-      ownerToken: string;
+      sessionToken: string;
       deviceId: string;
     };
 
 export interface RelayUserAuth {
   clientType: "user";
-  ownerToken: string;
+  sessionToken: string;
   lastSeqByDevice?: Record<string, number>;
 }
 
 export interface RelayMachineAuth {
   clientType: "machine";
-  ownerToken: string;
+  ownerToken?: string;
   deviceId: string;
   deviceToken?: string;
   devicePublicKey?: string;
@@ -841,14 +841,15 @@ export interface PairingRequestView {
   agentVersion: string;
   codexVersion?: string | null;
   relayUrl?: string | null;
+  shortFingerprint: string;
   createdAt: number;
   expiresAt: number;
-  status: "pending" | "approved" | "expired";
+  status: "pending" | "approved" | "rejected" | "expired";
 }
 
 export interface PairingPollResponse {
   ok: boolean;
-  status: "pending" | "approved" | "expired";
+  status: "pending" | "approved" | "rejected" | "expired";
   deviceId: string;
   expiresAt: number;
 }

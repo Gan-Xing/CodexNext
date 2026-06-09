@@ -3,9 +3,6 @@ import type {
   PairingRequestView
 } from "./types";
 
-export const relayAccessTokenStorageKey = "codexnext.relayAccessToken.v1";
-export const legacyRelayOwnerTokenStorageKey = "codexnext.relayOwnerToken.v1";
-
 export function resolveDefaultRelayUrl(): string {
   return process.env.NEXT_PUBLIC_CODEXNEXT_RELAY_URL || window.location.origin;
 }

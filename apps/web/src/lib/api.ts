@@ -223,6 +223,6 @@ function relayAuthHeaders(connection: AgentConnection): Record<string, string> {
     return {};
   }
   return {
-    Authorization: `Bearer ${connection.ownerToken}`
+    Authorization: `Bearer ${connection.sessionToken}`
   };
 }

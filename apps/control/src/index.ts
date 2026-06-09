@@ -14,6 +14,25 @@ program
   .option("--host <host>", "Host to bind.", "127.0.0.1")
   .option("--port <port>", "Port to bind.", parsePositiveInteger, 3002)
   .option(
+    "--allow-origin <origin>",
+    "Allowed browser origin. Repeat for multiple origins.",
+    collectString,
+    []
+  )
+  .option("--production", "Enable production security checks.")
+  .option(
+    "--allow-machine-owner-token",
+    "Allow machine bootstrap with owner token. Disabled by default in production."
+  )
+  .option(
+    "--allow-relay-full-access",
+    "Allow relay requests to ask for full-access. Deprecated: relay full-access is now enabled by default."
+  )
+  .option(
+    "--disable-relay-full-access",
+    "Disable relay requests from asking for full-access."
+  )
+  .option(
     "--heartbeat-interval-ms <number>",
     "Heartbeat interval returned to machines.",
     parsePositiveInteger,
@@ -30,6 +49,11 @@ program
       ownerToken: string;
       host: string;
       port: number;
+      allowOrigin: string[];
+      production?: boolean;
+      allowMachineOwnerToken?: boolean;
+      allowRelayFullAccess?: boolean;
+      disableRelayFullAccess?: boolean;
       heartbeatIntervalMs: number;
       rpcTimeoutMs: number;
     }) => {
@@ -37,6 +61,18 @@ program
         ownerToken: options.ownerToken,
         host: options.host,
         port: options.port,
+        allowedOrigins: options.allowOrigin,
+        ...(options.production !== undefined ? { production: options.production } : {}),
+        ...(options.allowMachineOwnerToken !== undefined
+          ? { allowMachineOwnerToken: options.allowMachineOwnerToken }
+          : {}),
+        ...(
+          options.disableRelayFullAccess
+            ? { allowRelayFullAccess: false }
+            : options.allowRelayFullAccess !== undefined
+              ? { allowRelayFullAccess: options.allowRelayFullAccess }
+              : {}
+        ),
         heartbeatIntervalMs: options.heartbeatIntervalMs,
         rpcTimeoutMs: options.rpcTimeoutMs
       });
@@ -80,4 +116,8 @@ function parsePositiveInteger(value: string): number {
     throw new InvalidArgumentError("Expected a positive integer.");
   }
   return parsed;
+}
+
+function collectString(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }

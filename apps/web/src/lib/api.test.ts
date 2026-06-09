@@ -5,7 +5,7 @@ describe("relay api url mapping", () => {
   const relayConnection = {
     mode: "relay" as const,
     relayUrl: "http://127.0.0.1:3002",
-    ownerToken: "owner",
+    sessionToken: "session",
     deviceId: "device_1"
   };
 
