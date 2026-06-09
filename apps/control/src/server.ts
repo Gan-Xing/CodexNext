@@ -40,6 +40,7 @@ import {
   DeviceRegistry,
   type RegisteredMachineRecord
 } from "./device-registry.js";
+import { SidebarPrefsStore } from "./sidebar-prefs-store.js";
 
 interface RegisteredDevice {
   info: RelayDeviceRecord;
@@ -135,6 +136,7 @@ export function createControlServer(
   const audit = new AuditLogger();
   const devices = new Map<string, RegisteredDevice>();
   const registry = new DeviceRegistry(options.ownerToken);
+  const sidebarPrefs = new SidebarPrefsStore();
   const browserSessions = new Map<string, BrowserSessionRecord>();
   const pairings = new Map<string, PairingRequestRecord>();
   const rateLimits = new Map<string, RateLimitRecord>();
@@ -722,6 +724,57 @@ export function createControlServer(
       outcome: "success"
     });
     return { ok: true };
+  });
+
+  app.get("/api/devices/:deviceId/sidebar-prefs", async (request, reply) => {
+    if (!requireUserAccess(request, reply)) {
+      return { error: "Missing or invalid user token" };
+    }
+    const params = request.params as { deviceId: string };
+    if (!registry.get(params.deviceId) && !devices.has(params.deviceId)) {
+      reply.code(404);
+      return { error: "Device not found" };
+    }
+    const prefs = sidebarPrefs.get(params.deviceId);
+    audit.write({
+      action: "sidebar-prefs.read",
+      at: Date.now(),
+      deviceId: params.deviceId,
+      outcome: "success"
+    });
+    return {
+      project: prefs.project,
+      thread: prefs.thread
+    };
+  });
+
+  app.put("/api/devices/:deviceId/sidebar-prefs", async (request, reply) => {
+    if (!requireUserAccess(request, reply)) {
+      return { error: "Missing or invalid user token" };
+    }
+    const params = request.params as { deviceId: string };
+    if (!registry.get(params.deviceId) && !devices.has(params.deviceId)) {
+      reply.code(404);
+      return { error: "Device not found" };
+    }
+    const body = (request.body ?? {}) as {
+      project?: unknown;
+      thread?: unknown;
+    };
+    const prefs = sidebarPrefs.upsert(params.deviceId, {
+      project: body.project,
+      thread: body.thread
+    });
+    audit.write({
+      action: "sidebar-prefs.write",
+      at: Date.now(),
+      deviceId: params.deviceId,
+      outcome: "success"
+    });
+    return {
+      project: prefs.project,
+      thread: prefs.thread
+    };
   });
 
   app.get("/api/relay/devices/:deviceId/events", async (request, reply) => {

@@ -104,3 +104,18 @@ export interface PendingApprovalView {
   createdAt: number;
   expiresAt: number;
 }
+
+export interface ThreadSidebarPrefsPayload {
+  pinned: string[];
+}
+
+export interface ProjectSidebarPrefsPayload {
+  hidden: string[];
+  pinned: string[];
+  renamed: Record<string, string>;
+}
+
+export interface SidebarPrefsResponse {
+  project: ProjectSidebarPrefsPayload;
+  thread: ThreadSidebarPrefsPayload;
+}

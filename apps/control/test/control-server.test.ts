@@ -81,6 +81,105 @@ describe("control server relay", () => {
     });
   });
 
+  it("requires auth for sidebar prefs endpoints", async () => {
+    const { baseUrl } = await startServer();
+    const response = await fetch(`${baseUrl}/api/devices/device_1/sidebar-prefs`);
+    expect(response.status).toBe(401);
+  });
+
+  it("stores relay sidebar prefs per device", async () => {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "codexnext-sidebar-prefs-"));
+    process.env.HOME = tempHome;
+    const { baseUrl } = await startServer();
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    const defaultsResponse = await authorizedFetch(
+      `${baseUrl}/api/devices/device_1/sidebar-prefs`
+    );
+    expect(defaultsResponse.status).toBe(200);
+    expect(await defaultsResponse.json()).toEqual({
+      project: {
+        hidden: [],
+        pinned: [],
+        renamed: {}
+      },
+      thread: {
+        pinned: []
+      }
+    });
+
+    const updateResponse = await fetch(`${baseUrl}/api/devices/device_1/sidebar-prefs`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${ownerToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        project: {
+          hidden: ["/tmp/dev"],
+          pinned: ["/tmp/dev"],
+          renamed: {
+            "/tmp/dev": "dev"
+          }
+        },
+        thread: {
+          pinned: ["thread_hot"]
+        }
+      })
+    });
+    expect(updateResponse.status).toBe(200);
+    expect(await updateResponse.json()).toEqual({
+      project: {
+        hidden: ["/tmp/dev"],
+        pinned: ["/tmp/dev"],
+        renamed: {
+          "/tmp/dev": "dev"
+        }
+      },
+      thread: {
+        pinned: ["thread_hot"]
+      }
+    });
+
+    const rereadResponse = await authorizedFetch(
+      `${baseUrl}/api/devices/device_1/sidebar-prefs`
+    );
+    expect(rereadResponse.status).toBe(200);
+    expect(await rereadResponse.json()).toEqual({
+      project: {
+        hidden: ["/tmp/dev"],
+        pinned: ["/tmp/dev"],
+        renamed: {
+          "/tmp/dev": "dev"
+        }
+      },
+      thread: {
+        pinned: ["thread_hot"]
+      }
+    });
+
+    const persisted = readFileSync(
+      path.join(tempHome, ".codexnext", "control-sidebar-prefs.json"),
+      "utf8"
+    );
+    expect(persisted).toContain("\"deviceId\": \"device_1\"");
+    expect(persisted).toContain("\"thread_hot\"");
+    expect(persisted).toContain("\"/tmp/dev\"");
+  });
+
   it("returns relay rpc ack results over HTTP", async () => {
     const { baseUrl } = await startServer();
     const machine = createMachineSocket(baseUrl, "device_1", {

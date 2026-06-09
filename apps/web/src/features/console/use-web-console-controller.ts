@@ -9,6 +9,7 @@ import {
   createSession,
   getLoadedCodexThreads,
   getCodexHistoryTurns,
+  getRelaySidebarPrefs,
   health,
   interruptSessionTurn,
   listCodexHistory,
@@ -19,6 +20,7 @@ import {
   resolveApproval,
   resumeCodexHistory,
   sendSessionMessage,
+  updateRelaySidebarPrefs,
   type AgentConnection
 } from "../../lib/api";
 import { openManagedEventStream, type ManagedEventStream } from "../../lib/event-stream";
@@ -223,6 +225,8 @@ export function useWebConsoleController() {
   const sessionSidebarRef = useRef<HTMLElement | null>(null);
   const sidebarResizeCleanupRef = useRef<(() => void) | null>(null);
   const previousSessionIdRef = useRef<string | null | undefined>(undefined);
+  const latestThreadSidebarPrefsRef = useRef(threadSidebarPrefs);
+  const latestProjectSidebarPrefsRef = useRef(projectSidebarPrefs);
 
   const activeWorkspace = selectedDeviceId ? deviceWorkspaces[selectedDeviceId] ?? null : null;
   const selectedSavedDevice =
@@ -636,6 +640,89 @@ export function useWebConsoleController() {
   }, [relayBootstrap]);
 
   useEffect(() => {
+    latestThreadSidebarPrefsRef.current = threadSidebarPrefs;
+  }, [threadSidebarPrefs]);
+
+  useEffect(() => {
+    latestProjectSidebarPrefsRef.current = projectSidebarPrefs;
+  }, [projectSidebarPrefs]);
+
+  const syncRelaySidebarPrefs = useCallback(
+    async (deviceConnection: Extract<AgentConnection, { mode: "relay" }>, scopeKey: string) => {
+      const localThreadPrefs = getThreadSidebarPrefs(
+        latestThreadSidebarPrefsRef.current,
+        scopeKey
+      );
+      const localProjectPrefs = getProjectSidebarPrefs(
+        latestProjectSidebarPrefsRef.current,
+        scopeKey
+      );
+      const remotePrefs = await getRelaySidebarPrefs(
+        deviceConnection.relayUrl,
+        deviceConnection.sessionToken,
+        deviceConnection.deviceId
+      );
+      const normalizedRemoteThread = sanitizeThreadSidebarPrefs(remotePrefs.thread);
+      const normalizedRemoteProject = sanitizeProjectSidebarPrefs(remotePrefs.project);
+      const remoteEmpty =
+        normalizedRemoteThread.pinned.length === 0 &&
+        normalizedRemoteProject.pinned.length === 0 &&
+        normalizedRemoteProject.hidden.length === 0 &&
+        Object.keys(normalizedRemoteProject.renamed).length === 0;
+      const localHasData =
+        localThreadPrefs.pinned.length > 0 ||
+        localProjectPrefs.pinned.length > 0 ||
+        localProjectPrefs.hidden.length > 0 ||
+        Object.keys(localProjectPrefs.renamed).length > 0;
+
+      const nextThreadPrefs =
+        remoteEmpty && localHasData ? localThreadPrefs : normalizedRemoteThread;
+      const nextProjectPrefs =
+        remoteEmpty && localHasData ? localProjectPrefs : normalizedRemoteProject;
+
+      if (remoteEmpty && localHasData) {
+        await updateRelaySidebarPrefs(
+          deviceConnection.relayUrl,
+          deviceConnection.sessionToken,
+          deviceConnection.deviceId,
+          {
+            thread: nextThreadPrefs,
+            project: nextProjectPrefs
+          }
+        );
+      }
+
+      persistThreadSidebarPrefs((previous) => ({
+        ...previous,
+        [scopeKey]: nextThreadPrefs
+      }));
+      persistProjectSidebarPrefs((previous) => ({
+        ...previous,
+        [scopeKey]: nextProjectPrefs
+      }));
+    },
+    []
+  );
+
+  const pushRelaySidebarPrefs = useCallback(
+    async (threadPrefs: ThreadSidebarPrefs, projectPrefs: ProjectSidebarPrefs) => {
+      if (connection.mode !== "relay") {
+        return;
+      }
+      await updateRelaySidebarPrefs(
+        connection.relayUrl,
+        connection.sessionToken,
+        connection.deviceId,
+        {
+          thread: threadPrefs,
+          project: projectPrefs
+        }
+      );
+    },
+    [connection]
+  );
+
+  useEffect(() => {
     if (!relayBootstrap) {
       return;
     }
@@ -678,6 +765,28 @@ export function useWebConsoleController() {
     }
     previousSessionIdRef.current = currentSessionId;
   }, [currentSessionId]);
+
+  useEffect(() => {
+    if (connection.mode !== "relay") {
+      return;
+    }
+    let cancelled = false;
+    void syncRelaySidebarPrefs(connection, sidebarPrefsScopeKey).catch((syncError) => {
+      if (!cancelled) {
+        setError(formatError(syncError));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    connection.mode,
+    connection.mode === "relay" ? connection.relayUrl : null,
+    connection.mode === "relay" ? connection.sessionToken : null,
+    connection.mode === "relay" ? connection.deviceId : null,
+    sidebarPrefsScopeKey,
+    syncRelaySidebarPrefs
+  ]);
 
   useEffect(() => {
     if (relayEnabled && !RELAY_FULL_ACCESS_ENABLED && permissionMode === "full-access") {
@@ -846,37 +955,22 @@ export function useWebConsoleController() {
     });
   }
 
-  function updateThreadSidebarPrefs(
-    scopeKey: string,
-    updater: (prefs: ThreadSidebarPrefs) => ThreadSidebarPrefs
-  ) {
-    const scope = scopeKey;
+  function togglePinnedThread(threadId: string) {
+    const nextThreadPrefs = sanitizeThreadSidebarPrefs({
+      ...activeThreadPrefs,
+      pinned: activeThreadPrefs.pinned.includes(threadId)
+        ? activeThreadPrefs.pinned.filter((value) => value !== threadId)
+        : [threadId, ...activeThreadPrefs.pinned.filter((value) => value !== threadId)]
+    });
     persistThreadSidebarPrefs((previous) => ({
       ...previous,
-      [scope]: sanitizeThreadSidebarPrefs(updater(previous[scope] ?? { pinned: [] }))
+      [sidebarPrefsScopeKey]: nextThreadPrefs
     }));
-  }
-
-  function updateProjectSidebarPrefs(
-    scopeKey: string,
-    updater: (prefs: ProjectSidebarPrefs) => ProjectSidebarPrefs
-  ) {
-    const scope = scopeKey;
-    persistProjectSidebarPrefs((previous) => ({
-      ...previous,
-      [scope]: sanitizeProjectSidebarPrefs(
-        updater(previous[scope] ?? { hidden: [], pinned: [], renamed: {} })
-      )
-    }));
-  }
-
-  function togglePinnedThread(threadId: string) {
-    updateThreadSidebarPrefs(sidebarPrefsScopeKey, (prefs) => ({
-      ...prefs,
-      pinned: prefs.pinned.includes(threadId)
-        ? prefs.pinned.filter((value) => value !== threadId)
-        : [threadId, ...prefs.pinned.filter((value) => value !== threadId)]
-    }));
+    if (connection.mode === "relay") {
+      void pushRelaySidebarPrefs(nextThreadPrefs, activeProjectPrefs).catch((syncError) =>
+        setError(formatError(syncError))
+      );
+    }
   }
 
   async function archiveThread(item: ThreadListItem) {
@@ -917,21 +1011,39 @@ export function useWebConsoleController() {
           loadedThreadIds: workspace.loadedThreadIds.filter((value) => value !== item.threadId)
         };
       });
-      updateThreadSidebarPrefs(sidebarPrefsScopeKey, (prefs) => ({
-        pinned: prefs.pinned.filter((value) => value !== item.threadId)
+      const nextThreadPrefs = sanitizeThreadSidebarPrefs({
+        pinned: activeThreadPrefs.pinned.filter((value) => value !== item.threadId)
+      });
+      persistThreadSidebarPrefs((previous) => ({
+        ...previous,
+        [sidebarPrefsScopeKey]: nextThreadPrefs
       }));
+      if (connection.mode === "relay") {
+        void pushRelaySidebarPrefs(nextThreadPrefs, activeProjectPrefs).catch((syncError) =>
+          setError(formatError(syncError))
+        );
+      }
     } catch (archiveError) {
       setError(formatError(archiveError));
     }
   }
 
   function togglePinnedProject(projectCwd: string) {
-    updateProjectSidebarPrefs(sidebarPrefsScopeKey, (prefs) => ({
-      ...prefs,
-      pinned: prefs.pinned.includes(projectCwd)
-        ? prefs.pinned.filter((value) => value !== projectCwd)
-        : [projectCwd, ...prefs.pinned.filter((value) => value !== projectCwd)]
+    const nextProjectPrefs = sanitizeProjectSidebarPrefs({
+      ...activeProjectPrefs,
+      pinned: activeProjectPrefs.pinned.includes(projectCwd)
+        ? activeProjectPrefs.pinned.filter((value) => value !== projectCwd)
+        : [projectCwd, ...activeProjectPrefs.pinned.filter((value) => value !== projectCwd)]
+    });
+    persistProjectSidebarPrefs((previous) => ({
+      ...previous,
+      [sidebarPrefsScopeKey]: nextProjectPrefs
     }));
+    if (connection.mode === "relay") {
+      void pushRelaySidebarPrefs(activeThreadPrefs, nextProjectPrefs).catch((syncError) =>
+        setError(formatError(syncError))
+      );
+    }
   }
 
   function renameProject(group: ProjectThreadGroupData) {
@@ -940,18 +1052,25 @@ export function useWebConsoleController() {
       return;
     }
     const trimmed = nextName.trim();
-    updateProjectSidebarPrefs(sidebarPrefsScopeKey, (prefs) => {
-      const renamed = { ...prefs.renamed };
-      if (!trimmed || trimmed === group.cwd.split("/").filter(Boolean).at(-1)) {
-        delete renamed[group.cwd];
-      } else {
-        renamed[group.cwd] = trimmed;
-      }
-      return {
-        ...prefs,
-        renamed
-      };
+    const renamed = { ...activeProjectPrefs.renamed };
+    if (!trimmed || trimmed === group.cwd.split("/").filter(Boolean).at(-1)) {
+      delete renamed[group.cwd];
+    } else {
+      renamed[group.cwd] = trimmed;
+    }
+    const nextProjectPrefs = sanitizeProjectSidebarPrefs({
+      ...activeProjectPrefs,
+      renamed
     });
+    persistProjectSidebarPrefs((previous) => ({
+      ...previous,
+      [sidebarPrefsScopeKey]: nextProjectPrefs
+    }));
+    if (connection.mode === "relay") {
+      void pushRelaySidebarPrefs(activeThreadPrefs, nextProjectPrefs).catch((syncError) =>
+        setError(formatError(syncError))
+      );
+    }
   }
 
   async function archiveProject(group: ProjectThreadGroupData) {
@@ -1011,9 +1130,18 @@ export function useWebConsoleController() {
           loadedThreadIds: workspace.loadedThreadIds.filter((value) => !threadIdSet.has(value))
         };
       });
-      updateThreadSidebarPrefs(sidebarPrefsScopeKey, (prefs) => ({
-        pinned: prefs.pinned.filter((value) => !threadIdSet.has(value))
+      const nextThreadPrefs = sanitizeThreadSidebarPrefs({
+        pinned: activeThreadPrefs.pinned.filter((value) => !threadIdSet.has(value))
+      });
+      persistThreadSidebarPrefs((previous) => ({
+        ...previous,
+        [sidebarPrefsScopeKey]: nextThreadPrefs
       }));
+      if (connection.mode === "relay") {
+        void pushRelaySidebarPrefs(nextThreadPrefs, activeProjectPrefs).catch((syncError) =>
+          setError(formatError(syncError))
+        );
+      }
     } catch (archiveError) {
       setError(formatError(archiveError));
     }
@@ -1029,15 +1157,22 @@ export function useWebConsoleController() {
       (session) => session.sessionId === currentSessionId
     );
 
-    updateProjectSidebarPrefs(sidebarPrefsScopeKey, (prefs) => {
-      const renamed = { ...prefs.renamed };
-      delete renamed[group.cwd];
-      return {
-        hidden: [group.cwd, ...prefs.hidden.filter((value) => value !== group.cwd)],
-        pinned: prefs.pinned.filter((value) => value !== group.cwd),
-        renamed
-      };
+    const renamed = { ...activeProjectPrefs.renamed };
+    delete renamed[group.cwd];
+    const nextProjectPrefs = sanitizeProjectSidebarPrefs({
+      hidden: [group.cwd, ...activeProjectPrefs.hidden.filter((value) => value !== group.cwd)],
+      pinned: activeProjectPrefs.pinned.filter((value) => value !== group.cwd),
+      renamed
     });
+    persistProjectSidebarPrefs((previous) => ({
+      ...previous,
+      [sidebarPrefsScopeKey]: nextProjectPrefs
+    }));
+    if (connection.mode === "relay") {
+      void pushRelaySidebarPrefs(activeThreadPrefs, nextProjectPrefs).catch((syncError) =>
+        setError(formatError(syncError))
+      );
+    }
 
     patchActiveWorkspace((workspace) => ({
       ...workspace,

@@ -4602,8 +4602,8 @@ summary {
   background: transparent;
   color: var(--cn-muted);
   display: inline-flex;
-  font-size: 0.84rem;
-  font-weight: 720;
+  font-size: 0.8rem;
+  font-weight: 700;
   gap: 0.28rem;
   justify-content: flex-start;
   min-height: 28px;
@@ -4768,7 +4768,7 @@ summary {
 .cn-thread-list-toggle {
   background: transparent;
   color: var(--cn-muted);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 500;
   justify-self: start;
   margin-left: 1.92rem;
@@ -6978,7 +6978,7 @@ summary {
 
   .cn-project-tree-toggle,
   .cn-pinned-header {
-    font-size: 0.82rem;
+    font-size: 0.78rem;
   }
 
   .cn-thread-row,

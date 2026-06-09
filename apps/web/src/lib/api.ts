@@ -14,6 +14,7 @@ import type {
   LocalSendMessageInput,
   LocalStartSessionInput,
   LocalSessionSummary,
+  SidebarPrefsResponse,
   RelayDeviceRecord,
   RelayDevicesResponse
 } from "./types";
@@ -60,6 +61,46 @@ export async function listRelayDevices(
   }
   const payload = (await response.json()) as RelayDevicesResponse;
   return payload.devices;
+}
+
+export async function getRelaySidebarPrefs(
+  relayUrl: string,
+  accessToken: string,
+  deviceId: string
+): Promise<SidebarPrefsResponse> {
+  const url = new URL(`/api/devices/${encodeURIComponent(deviceId)}/sidebar-prefs`, relayUrl);
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`
+    }
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `${response.status} ${response.statusText}`);
+  }
+  return (await response.json()) as SidebarPrefsResponse;
+}
+
+export async function updateRelaySidebarPrefs(
+  relayUrl: string,
+  accessToken: string,
+  deviceId: string,
+  prefs: SidebarPrefsResponse
+): Promise<SidebarPrefsResponse> {
+  const url = new URL(`/api/devices/${encodeURIComponent(deviceId)}/sidebar-prefs`, relayUrl);
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(prefs)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `${response.status} ${response.statusText}`);
+  }
+  return (await response.json()) as SidebarPrefsResponse;
 }
 
 export function health(connection: AgentConnection): Promise<LocalHealthResponse> {
