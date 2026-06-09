@@ -4586,6 +4586,35 @@ summary {
   padding: 0.2rem 0 0.14rem;
 }
 
+.cn-pinned-section {
+  display: grid;
+  gap: 0.18rem;
+  margin-bottom: 0.48rem;
+}
+
+.cn-pinned-header {
+  align-items: center;
+  background: transparent;
+  color: var(--cn-ink);
+  display: inline-flex;
+  font-size: 0.98rem;
+  font-weight: 760;
+  gap: 0.28rem;
+  justify-self: start;
+  min-height: 28px;
+  padding: 0;
+}
+
+.cn-pinned-header .cn-codex-icon {
+  color: var(--cn-muted);
+  height: 14px;
+  width: 14px;
+}
+
+.cn-pinned-thread-list {
+  gap: 0.08rem;
+}
+
 .cn-project-group {
   display: grid;
   gap: 0.08rem;
@@ -4773,6 +4802,10 @@ summary {
   font-weight: 700;
 }
 
+.cn-pinned-thread-row {
+  padding-left: 0;
+}
+
 .cn-thread-main {
   align-items: center;
   background: transparent;
@@ -4788,6 +4821,11 @@ summary {
   padding: 0.36rem 0.14rem;
   text-align: left;
   width: 100%;
+}
+
+.cn-pinned-thread-main {
+  grid-template-columns: minmax(0, 1fr);
+  padding-right: 2rem;
 }
 
 .cn-thread-title {
@@ -4838,6 +4876,31 @@ summary {
 .cn-thread-row:hover .cn-thread-time,
 .cn-thread-row:focus-within .cn-thread-time {
   opacity: 0;
+}
+
+.cn-thread-pin-inline {
+  align-items: center;
+  background: transparent;
+  border-radius: 8px;
+  color: #8b9096;
+  display: inline-flex;
+  height: 26px;
+  justify-content: center;
+  position: absolute;
+  right: 0.28rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+}
+
+.cn-thread-pin-inline:hover {
+  background: rgba(31, 35, 40, 0.06);
+  color: var(--cn-ink);
+}
+
+.cn-thread-pin-inline .cn-codex-icon {
+  height: 14px;
+  width: 14px;
 }
 
 .cn-thread-action {
@@ -6915,6 +6978,10 @@ summary {
     padding-bottom: 0.08rem;
   }
 
+  .cn-pinned-header {
+    font-size: 0.92rem;
+  }
+
   .cn-thread-row,
   .cn-thread-main {
     min-height: 31px;
@@ -7111,6 +7178,17 @@ summary {
     max-height: min(72dvh, 560px);
     right: 0.75rem;
     top: 0.75rem;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .cn-project-header-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .cn-project-name {
+    padding-right: 2.3rem;
   }
 }
 

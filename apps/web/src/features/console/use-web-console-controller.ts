@@ -323,6 +323,23 @@ export function useWebConsoleController() {
     currentSessionId,
     selectedHistoryKey
   );
+  const pinnedThreadItems = useMemo(
+    () =>
+      projectGroups
+        .flatMap((group) => group.items.filter((item) => item.pinned))
+        .sort((left, right) => right.timestamp - left.timestamp),
+    [projectGroups]
+  );
+  const visibleProjectGroups = useMemo(
+    () =>
+      projectGroups
+        .map((group) => ({
+          ...group,
+          items: group.items.filter((item) => !item.pinned)
+        }))
+        .filter((group) => group.items.length > 0),
+    [projectGroups]
+  );
   const firstApproval = pendingApprovals[0] ?? null;
 
   const patchDeviceWorkspace = useCallback(
@@ -2167,7 +2184,8 @@ export function useWebConsoleController() {
     permissionMode,
     permissionOptions: availablePermissionOptions,
     planModeEnabled,
-    projectGroups,
+    pinnedThreadItems,
+    projectGroups: visibleProjectGroups,
     reasoningEffort,
     reasoningOptions,
     relayEnabled,

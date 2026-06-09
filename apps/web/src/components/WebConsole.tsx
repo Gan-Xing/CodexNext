@@ -11,7 +11,7 @@ import {
 import { ChatCanvas } from "./chat/ChatCanvas";
 import { LiveComposer } from "./chat/LiveComposer";
 import { NewSessionCanvas } from "./chat/NewSessionCanvas";
-import { ProjectThreadGroup } from "./chat/ProjectThreadGroup";
+import { PinnedThreadSection, ProjectThreadGroup } from "./chat/ProjectThreadGroup";
 import { CodexIcon } from "./DesignLab";
 import { ApprovalModal } from "./sheets/ApprovalModal";
 import { DeviceSheet } from "./sheets/DeviceSheet";
@@ -70,6 +70,7 @@ export function WebConsole() {
     pendingApprovals,
     permissionMode,
     planModeEnabled,
+    pinnedThreadItems,
     projectGroups,
     reasoningEffort,
     resetSidebarWidth,
@@ -210,6 +211,16 @@ export function WebConsole() {
           </div>
 
           <div className="cn-project-tree">
+            <PinnedThreadSection
+              items={pinnedThreadItems}
+              historyLoadingKey={historyLoadingKey}
+              onArchiveThread={archiveThread}
+              onHideThreadPreview={clearThreadHoverPreview}
+              onShowThreadPreview={showThreadHoverPreview}
+              onTogglePinnedThread={togglePinnedThread}
+              onSelectHistory={(entry) => void selectHistory(entry)}
+              onSelectSession={selectSession}
+            />
             <span className="cn-project-tree-title">项目</span>
             <div className="cn-project-scroll" onScroll={clearThreadHoverPreview}>
               {projectGroups.map((group) => (
@@ -226,7 +237,7 @@ export function WebConsole() {
                   onSelectSession={selectSession}
                 />
               ))}
-              {projectGroups.length === 0 ? (
+              {projectGroups.length === 0 && pinnedThreadItems.length === 0 ? (
                 <div className="cn-empty-sidebar">
                   {connected ? "还没有对话" : "先连接设备"}
                 </div>
