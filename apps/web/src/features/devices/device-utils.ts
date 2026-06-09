@@ -1,4 +1,5 @@
 import type { AgentConnection } from "../../lib/api";
+import { createClientId } from "../../lib/random-id";
 
 export interface DirectSavedDevice {
   id: string;
@@ -150,10 +151,7 @@ export function normalizeAgentUrl(agentUrl: string): string {
 }
 
 export function createSavedDeviceId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `device_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  return createClientId("device");
 }
 
 export function shortAgentUrl(agentUrl: string): string {

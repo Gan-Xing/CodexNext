@@ -21,6 +21,7 @@ import {
 } from "../../lib/api";
 import { openManagedEventStream, type ManagedEventStream } from "../../lib/event-stream";
 import { formatConnectionError, formatError } from "../../lib/format/text";
+import { createClientId } from "../../lib/random-id";
 import {
   requestRelaySession,
   resolveDefaultRelayUrl
@@ -1649,7 +1650,7 @@ export function useWebConsoleController() {
     }
 
     const message = buildMessageWithAttachments(text, attachments);
-    const clientMessageId = crypto.randomUUID();
+    const clientMessageId = createClientId("message");
     const targetSessionId = currentSession?.sessionId ?? pendingSessionId(clientMessageId);
     const optimisticTurnId = currentSession?.activeTurnId ?? undefined;
 
