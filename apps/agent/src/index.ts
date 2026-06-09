@@ -89,8 +89,8 @@ program
   );
 
 program
-  .command("serve")
-  .description("Run the localhost-only CodexNext agent API and SSE event stream.")
+  .command("dev-serve")
+  .description("Dev-only direct agent API for local troubleshooting.")
   .option("--host <host>", "Host to bind.", "127.0.0.1")
   .option("--port <port>", "Port to bind.", parsePositiveInteger, 17361)
   .option(

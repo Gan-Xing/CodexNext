@@ -1,5 +1,4 @@
 import type {
-  AgentConnection,
   DeviceIdentityFile,
   DevicePresence,
   DeviceEventPayload,
@@ -32,8 +31,14 @@ import type {
   LocalSessionSummary
 } from "@codexnext/protocol";
 
+export interface AgentConnection {
+  mode: "relay";
+  relayUrl: string;
+  sessionToken: string;
+  deviceId: string;
+}
+
 export type {
-  AgentConnection,
   DeviceIdentityFile,
   DevicePresence,
   DeviceEventPayload,

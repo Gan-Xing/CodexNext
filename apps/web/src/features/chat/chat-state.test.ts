@@ -12,9 +12,10 @@ import {
 
 function makeWorkspace() {
   return createDeviceWorkspace({
-    mode: "direct",
-    agentUrl: "http://127.0.0.1:17361",
-    token: "secret"
+    mode: "relay",
+    relayUrl: "http://127.0.0.1:3922",
+    sessionToken: "session-token",
+    deviceId: "device_linux"
   });
 }
 

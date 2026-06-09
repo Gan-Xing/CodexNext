@@ -1,17 +1,7 @@
 import type { AgentConnection } from "../../lib/api";
 import { createClientId } from "../../lib/random-id";
 
-export interface DirectSavedDevice {
-  id: string;
-  name: string;
-  mode: "direct";
-  agentUrl: string;
-  token: string;
-  codexVersion?: string | null;
-  lastConnectedAt?: number | null;
-}
-
-export interface RelaySavedDevice {
+export interface SavedDevice {
   id: string;
   name: string;
   mode: "relay";
@@ -23,14 +13,9 @@ export interface RelaySavedDevice {
   lastConnectedAt?: number | null;
 }
 
-export type SavedDevice = DirectSavedDevice | RelaySavedDevice;
-
 export interface DeviceDraftState {
   selectedDeviceId: string | null;
-  mode: "direct" | "relay";
   name: string;
-  agentUrl: string;
-  token: string;
 }
 
 export interface DevicePresenceState {
@@ -40,39 +25,47 @@ export interface DevicePresenceState {
   status: "checking" | "offline" | "online";
 }
 
-export const savedDevicesStorageKey = "codexnext.savedDevices.v1";
-export const sidebarWidthStorageKey = "codexnext.sidebarWidth.v1";
-
-export function deviceNameStorageKey(agentUrl: string): string {
-  return `codexnext.deviceName.${agentUrl}`;
+export interface SavedDevicesReadResult {
+  devices: SavedDevice[];
+  droppedLegacyDirectDevices: number;
 }
 
+export const savedDevicesStorageKey = "codexnext.savedDevices.v1";
+export const sidebarWidthStorageKey = "codexnext.sidebarWidth.v1";
+export const relayOnlyMigrationNoticeStorageKey =
+  "codexnext.relayOnlyMigrationNotice.v1";
+
 export function readSavedDevices(): SavedDevice[] {
+  return readSavedDevicesState().devices;
+}
+
+export function readSavedDevicesState(): SavedDevicesReadResult {
   try {
     const raw = window.localStorage.getItem(savedDevicesStorageKey);
     if (!raw) {
-      return [];
+      return { devices: [], droppedLegacyDirectDevices: 0 };
     }
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
-      return [];
+      return { devices: [], droppedLegacyDirectDevices: 0 };
     }
-    return parsed
-      .filter(isSavedDevice)
-      .map((device) =>
-        device.mode === "relay"
-          ? {
-              ...device,
-              relayUrl: normalizeAgentUrl(device.relayUrl)
-            }
-          : {
-              ...device,
-              mode: "direct" as const,
-              agentUrl: normalizeAgentUrl(device.agentUrl)
-            }
-      );
+
+    const relayDevices = parsed.filter(isRelaySavedDevice).map((device) => ({
+      ...device,
+      relayUrl: normalizeAgentUrl(device.relayUrl)
+    }));
+    const droppedLegacyDirectDevices = parsed.length - relayDevices.length;
+
+    if (droppedLegacyDirectDevices > 0) {
+      window.localStorage.setItem(savedDevicesStorageKey, JSON.stringify(relayDevices));
+    }
+
+    return {
+      devices: relayDevices,
+      droppedLegacyDirectDevices
+    };
   } catch {
-    return [];
+    return { devices: [], droppedLegacyDirectDevices: 0 };
   }
 }
 
@@ -96,45 +89,25 @@ export function readSidebarWidth(
 
 export function findSavedDevice(
   devices: SavedDevice[],
-  connectionOrAgentUrl: AgentConnection | string,
-  token?: string
+  connectionOrDeviceId: AgentConnection | string
 ): SavedDevice | null {
-  const connection =
-    typeof connectionOrAgentUrl === "string"
-      ? ({
-          mode: "direct",
-          agentUrl: connectionOrAgentUrl,
-          token: token ?? ""
-        } satisfies AgentConnection)
-      : connectionOrAgentUrl;
-  return devices.find((device) => isSameSavedDeviceConnection(device, connection)) ?? null;
-}
-
-export function isSameDeviceEndpoint(
-  device: SavedDevice,
-  agentUrl: string,
-  token: string
-): boolean {
-  return device.mode === "direct" &&
-    normalizeAgentUrl(device.agentUrl) === normalizeAgentUrl(agentUrl) &&
-    device.token === token;
+  if (typeof connectionOrDeviceId === "string") {
+    return devices.find((device) => device.deviceId === connectionOrDeviceId) ?? null;
+  }
+  return (
+    devices.find((device) => isSameSavedDeviceConnection(device, connectionOrDeviceId)) ??
+    null
+  );
 }
 
 export function isSameAgentConnection(
   left: AgentConnection,
   right: AgentConnection
 ): boolean {
-  if (left.mode !== right.mode) {
-    return false;
-  }
-  if (left.mode === "direct" && right.mode === "direct") {
-    return normalizeAgentUrl(left.agentUrl) === normalizeAgentUrl(right.agentUrl) &&
-      left.token === right.token;
-  }
-  return left.mode === "relay" &&
-    right.mode === "relay" &&
+  return (
     normalizeAgentUrl(left.relayUrl) === normalizeAgentUrl(right.relayUrl) &&
-    left.deviceId === right.deviceId;
+    left.deviceId === right.deviceId
+  );
 }
 
 export function normalizeAgentUrl(agentUrl: string): string {
@@ -154,71 +127,35 @@ export function createSavedDeviceId(): string {
   return createClientId("device");
 }
 
-export function shortAgentUrl(agentUrl: string): string {
-  try {
-    const url = new URL(agentUrl);
-    return `${url.hostname}:${url.port || (url.protocol === "https:" ? "443" : "80")}`;
-  } catch {
-    return agentUrl;
-  }
-}
-
-export function defaultDeviceName(agentUrl: string): string {
-  try {
-    const url = new URL(agentUrl);
-    return `Codex agent @ ${url.hostname}`;
-  } catch {
-    return "Codex agent";
-  }
-}
-
 export function connectionFromSavedDevice(
   device: SavedDevice,
   relaySessionToken?: string | null
 ): AgentConnection | null {
-  if (device.mode === "relay") {
-    if (!relaySessionToken) {
-      return null;
-    }
-    return {
-      mode: "relay",
-      relayUrl: device.relayUrl,
-      sessionToken: relaySessionToken,
-      deviceId: device.deviceId
-    };
+  if (!relaySessionToken) {
+    return null;
   }
   return {
-    mode: "direct",
-    agentUrl: device.agentUrl,
-    token: device.token
+    mode: "relay",
+    relayUrl: device.relayUrl,
+    sessionToken: relaySessionToken,
+    deviceId: device.deviceId
   };
 }
 
 export function savedDeviceAddressLabel(device: SavedDevice): string {
-  if (device.mode === "relay") {
-    return device.hostname?.trim() || device.deviceId;
-  }
-  return shortAgentUrl(device.agentUrl);
+  return device.hostname?.trim() || device.deviceId;
 }
 
-function isSavedDevice(value: unknown): value is SavedDevice {
+function isRelaySavedDevice(value: unknown): value is SavedDevice {
   if (!isRecord(value)) {
     return false;
-  }
-  if (value.mode === "relay") {
-    return (
-      typeof value.id === "string" &&
-      typeof value.name === "string" &&
-      typeof value.relayUrl === "string" &&
-      typeof value.deviceId === "string"
-    );
   }
   return (
     typeof value.id === "string" &&
     typeof value.name === "string" &&
-    (value.mode === "direct" || value.mode === undefined) &&
-    typeof value.agentUrl === "string" &&
-    typeof value.token === "string"
+    (value.mode === "relay" || value.mode === undefined) &&
+    typeof value.relayUrl === "string" &&
+    typeof value.deviceId === "string"
   );
 }
 
@@ -230,21 +167,9 @@ export function isSameSavedDeviceConnection(
   device: SavedDevice,
   connection: AgentConnection | SavedDevice
 ): boolean {
-  if (device.mode !== connection.mode) {
-    return false;
-  }
-  if (device.mode === "direct" && connection.mode === "direct") {
-    return (
-      normalizeAgentUrl(device.agentUrl) ===
-        normalizeAgentUrl(connection.mode === "direct" ? connection.agentUrl : "") &&
-      device.token === (connection.mode === "direct" ? connection.token : "")
-    );
-  }
   return (
-    device.mode === "relay" &&
-    connection.mode === "relay" &&
     normalizeAgentUrl(device.relayUrl) ===
       normalizeAgentUrl(connection.mode === "relay" ? connection.relayUrl : "") &&
-    device.deviceId === (connection.mode === "relay" ? connection.deviceId : "")
+    device.deviceId === connection.deviceId
   );
 }

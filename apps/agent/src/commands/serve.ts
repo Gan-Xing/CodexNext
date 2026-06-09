@@ -17,6 +17,7 @@ export interface ServeOptions {
 }
 
 export async function runServe(options: ServeOptions): Promise<void> {
+  assertDevDirectEnabled();
   assertAllowedDirectHost(options.host, options.allowRemoteDirect ?? false);
   const token = options.token ?? randomBytes(24).toString("base64url");
   const logger = pino({
@@ -35,16 +36,12 @@ export async function runServe(options: ServeOptions): Promise<void> {
 
   const address = await listen(handle, options.host, options.port);
   const apiUrl = `http://${address.address}:${address.port}`;
-  const primaryWebOrigin = options.webOrigin.split(",")[0]?.trim() ?? options.webOrigin;
-  const webUrl = `${primaryWebOrigin}?agent=${encodeURIComponent(
-    apiUrl
-  )}&token=${encodeURIComponent(token)}`;
 
-  printSection("codexnext serve", "local agent is listening");
+  printSection("codexnext dev-serve", "hidden direct-mode agent is listening");
   printLine(`API: ${apiUrl}`);
-  printLine(`Token: ${token}`);
-  printLine(`Web: ${webUrl}`);
   printLine("");
+  printLine("Direct mode is dev-only and no token URL is printed.");
+  printLine("Pass --token explicitly if you need to test a local client.");
   printLine("Press Ctrl+C to stop the local agent.");
 
   const shutdown = async () => {
@@ -61,7 +58,16 @@ export async function runServe(options: ServeOptions): Promise<void> {
     void shutdown();
   });
 
-  logger.debug({ apiUrl, webUrl }, "local agent started");
+  logger.debug({ apiUrl }, "local dev-only direct agent started");
+}
+
+export function assertDevDirectEnabled(): void {
+  if (process.env.CODEXNEXT_ENABLE_DEV_DIRECT === "1") {
+    return;
+  }
+  throw new Error(
+    "Direct mode is disabled. Set CODEXNEXT_ENABLE_DEV_DIRECT=1 to use codexnext serve for local development."
+  );
 }
 
 export function assertAllowedDirectHost(host: string, allowRemoteDirect: boolean): void {

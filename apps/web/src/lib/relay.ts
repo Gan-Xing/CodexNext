@@ -4,7 +4,13 @@ import type {
 } from "./types";
 
 export function resolveDefaultRelayUrl(): string {
-  return process.env.NEXT_PUBLIC_CODEXNEXT_RELAY_URL || window.location.origin;
+  if (process.env.NEXT_PUBLIC_CODEXNEXT_RELAY_URL) {
+    return process.env.NEXT_PUBLIC_CODEXNEXT_RELAY_URL;
+  }
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return window.location.origin;
 }
 
 export interface RelaySessionBootstrap {

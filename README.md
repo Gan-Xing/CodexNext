@@ -2,49 +2,39 @@
 
 Your personal Codex control plane.
 
-CodexNext is a Codex app-server first personal AI programming control plane. It now supports:
+CodexNext is a relay-first control plane for Codex app-server. Users sign in to the Web UI, pair machines into a control server, and then control those machines from one browser entry. Product UX is relay-only: no Agent URL, Access Token, `?agent=`, or `?token=` in normal use.
 
-- direct localhost mode for local development
-- relay mode for multi-device control through `apps/control`
-- browser login gating for public relay deployments
-- device pairing and revoke
-- Codex approvals and sandbox controls delegated to Codex itself
+## Included
 
-## Phase 1 Scope
-
-Included:
-
-- pnpm monorepo
 - `packages/protocol`
 - `packages/codex-client`
 - `apps/agent`
-- `apps/web`
 - `apps/control`
-- local Web console
-- relay Web console
-- device pairing
-- docs and ADR
+- `apps/web`
+- relay login gate
+- device pairing and revoke
+- recent-first history loading
+- shared recent-page cache for thread switching
+- docs and ADRs
 - `codexnext doctor`
-- `codexnext goal-smoke --cwd <path> --goal <text> [--model <model>] [--token-budget <number>]`
-- `codexnext serve`
+- `codexnext goal-smoke`
 - `codexnext pair`
 - `codexnext connect`
 
-Not included:
+## Not Included
 
 - React Native
-- NestJS server
-- multi-device sync
+- OAuth / passkeys
+- multi-user SaaS authorization
 - non-Codex CLIs
-- Codex TUI parsing
-- simulated `/goal` slash-command input
+- a rewritten Codex permission system
 
 ## Requirements
 
 - Node >= 20
 - pnpm
 - Codex CLI with `codex app-server`
-- A valid Codex login/session for running a real turn
+- a valid Codex login/session on each machine that will run an agent
 
 ## Install
 
@@ -60,58 +50,34 @@ pnpm test
 pnpm --filter @codexnext/agent dev -- doctor
 ```
 
-## Run The Smoke Test
+## Relay-Only Product Topology
 
-```bash
-pnpm --filter @codexnext/agent dev -- goal-smoke \
-  --cwd /path/to/repo \
-  --goal "Inspect the project and make one small verifiable change"
-```
+Think in service roles, not in one fixed machine layout:
 
-Optional:
+- `control`
+  - device presence
+  - relay RPC
+  - event replay
+  - pairing / revoke
+  - audit log
+- `web`
+  - login page
+  - HttpOnly cookie session
+  - relay session bootstrap
+  - browser/mobile UI
+- `agent`
+  - one controllable Codex machine
+  - outbound connection to control
+  - local Codex execution
+  - approvals still enforced by Codex itself
 
-```bash
-pnpm --filter @codexnext/agent dev -- goal-smoke \
-  --cwd /path/to/repo \
-  --goal "Inspect the project and make one small verifiable change" \
-  --model gpt-5.4 \
-  --token-budget 20000
-```
+Common topology:
 
-The command starts `codex app-server --stdio`, sends `initialize`, sends the `initialized` notification, starts a thread, calls `thread/goal/set`, starts a turn, prints app-server notifications, and exits when the turn completes.
+- one server runs `control + web + agent`
+- every additional machine runs `agent`
+- browsers and phones open only the Web URL
 
-Ctrl+C sends `turn/interrupt` when a turn is active, then closes the child process.
-
-## Run The Local Web Console
-
-Start the local agent:
-
-```bash
-pnpm --filter @codexnext/agent dev -- serve \
-  --host 127.0.0.1 \
-  --port 17361 \
-  --web-origin http://127.0.0.1:3000
-```
-
-Remote direct mode is disabled by default. To bind beyond loopback, you must opt in explicitly:
-
-```bash
-pnpm --filter @codexnext/agent dev -- serve \
-  --host 0.0.0.0 \
-  --port 17361 \
-  --web-origin http://127.0.0.1:3000 \
-  --allow-remote-direct
-```
-
-Start the Web Console:
-
-```bash
-pnpm --filter @codexnext/web dev
-```
-
-The Web dev server listens on `0.0.0.0:3000`, so the page is reachable from this Mac and from trusted devices on the same local network. Open the URL printed by `serve`. The page connects to the local agent, starts Codex sessions, sends chat messages, steers active turns, interrupts turns, manages Goals through `thread/goal/*`, streams app-server events, and resolves approval requests in the browser.
-
-## Run The Relay Control Plane
+## Start The Relay Control Plane
 
 Generate a password hash for the Web login gate:
 
@@ -122,23 +88,13 @@ node -e 'const {randomBytes,scryptSync}=require("node:crypto");const password=pr
 Start the control server:
 
 ```bash
-pnpm --filter @codexnext/control dev -- \
-  --owner-token "$CODEXNEXT_OWNER_TOKEN" \
-  --host 0.0.0.0 \
-  --port 3922 \
-  --production \
-  --allow-origin https://your-web-origin.example
+pnpm --filter @codexnext/control dev --   --owner-token "$CODEXNEXT_OWNER_TOKEN"   --host 0.0.0.0   --port 3922   --production   --allow-origin https://your-web-origin.example
 ```
 
-Start the Web app against the relay:
+Start the Web app:
 
 ```bash
-CODEXNEXT_RELAY_URL=http://127.0.0.1:3922 \
-CODEXNEXT_OWNER_TOKEN="$CODEXNEXT_OWNER_TOKEN" \
-CODEXNEXT_WEB_AUTH_PASSWORD_HASH="$CODEXNEXT_WEB_AUTH_PASSWORD_HASH" \
-CODEXNEXT_WEB_SESSION_SECRET="$CODEXNEXT_WEB_SESSION_SECRET" \
-CODEXNEXT_PUBLIC_ORIGIN=https://your-web-origin.example \
-pnpm --filter @codexnext/web dev
+CODEXNEXT_RELAY_URL=http://127.0.0.1:3922 CODEXNEXT_OWNER_TOKEN="$CODEXNEXT_OWNER_TOKEN" CODEXNEXT_WEB_AUTH_PASSWORD_HASH="$CODEXNEXT_WEB_AUTH_PASSWORD_HASH" CODEXNEXT_WEB_SESSION_SECRET="$CODEXNEXT_WEB_SESSION_SECRET" CODEXNEXT_PUBLIC_ORIGIN=https://your-web-origin.example pnpm --filter @codexnext/web dev
 ```
 
 Pair a machine into the relay:
@@ -147,153 +103,56 @@ Pair a machine into the relay:
 pnpm --filter @codexnext/agent dev -- pair --relay http://relay-host:3922
 ```
 
-For long-running multi-device deployment with Linux `systemd` and macOS `launchd`, see:
+After pairing, the machine appears in the Web UI automatically.
 
-- [docs/RELAY_DEPLOYMENT.md](/Users/ganxing/Desktop/Dev/codexnext/docs/RELAY_DEPLOYMENT.md)
+## Long-Running Deployment
 
-### Long-Running Deployment Scripts
+For Linux `systemd`, macOS `launchd`, and service-role deployment examples, see:
 
-Think in terms of service roles, not operating systems:
+- [docs/RELAY_DEPLOYMENT.md](./docs/RELAY_DEPLOYMENT.md)
 
-- `control`
-  - relay control plane
-  - device presence, RPC relay, event replay, pairing, revoke
-- `web`
-  - browser/mobile UI
-  - login gate, cookie session, relay session bootstrap
-- `agent`
-  - one controllable Codex machine
-  - outbound relay connection, local Codex execution, approvals delegated to Codex
-
-Any machine can run any combination of these roles if the runtime dependencies are present.
-The current bundled service-manager helpers cover the most common cases:
+Bundled helpers currently cover:
 
 - Linux `systemd`
   - any subset of `control,web,agent`
 - macOS `launchd`
   - bundled helper currently targets `agent`
 - Windows
-  - no bundled service-manager script yet
-  - roles still apply; run the same commands under your preferred service manager
+  - no bundled service-manager helper yet
+  - the same roles still apply
 
-Linux, install all three roles by default:
+Linux install examples:
 
 ```bash
 ./scripts/ops/install-linux-services.sh
-```
-
-Linux, install only a node agent:
-
-```bash
 ./scripts/ops/install-linux-services.sh --roles agent
-```
-
-Linux, install any explicit subset:
-
-```bash
 ./scripts/ops/install-linux-services.sh --roles control,web
-./scripts/ops/install-linux-services.sh --roles web,agent
 ```
 
-macOS, install the relay agent as a launchd service:
+macOS agent install example:
 
 ```bash
 ./scripts/ops/install-macos-agent.sh
 ```
 
-The agent startup script now auto-discovers a usable `codex` binary from common paths such as:
+The agent startup helpers auto-discover a usable `codex` binary from common locations such as `PATH`, `~/.local/bin`, `~/bin`, and `~/.nvm/versions/node/*/bin`.
 
-- `PATH`
-- `~/.local/bin`
-- `~/bin`
-- `~/.nvm/versions/node/*/bin`
-
-You can still force an exact binary with:
-
-```bash
-CODEXNEXT_CODEX_BIN=/absolute/path/to/codex
-```
-
-Relay security notes:
+## Security Notes
 
 - public relay Web requires login
 - `ownerToken` is server-only
-- relay browser sessions are short-lived and not persisted to `localStorage`
-- relay `full-access` follows Codex by default; use `CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1` only if you want to turn it off at the relay gate
-- device revocation disconnects the machine and blocks future reconnects
+- relay session tokens are issued after login and should not be persisted client-side
+- relay full-access is disabled by default; set `CODEXNEXT_ALLOW_RELAY_FULL_ACCESS=1` on the control server only if you explicitly want relay users to request Codex `full-access`
+- approvals and sandbox enforcement remain Codex-native
 
-## Design Lab
+## Hidden Dev-Only Direct Mode
 
-Open `http://127.0.0.1:3000/design` while the Web app is running to review the fake-data UI workbench before wiring real agent logic. Stable design routes include `/design/new-session`, `/design/thread`, `/design/approval`, `/design/device`, `/design/components`, and `/design/archive`.
+Direct mode is no longer part of the normal product path.
 
-## Approval Behavior
-
-Phase 1 defaults command and file approval requests to decline. This is not hard-coded into JSON-RPC internals. It is implemented through `onApprovalRequest`, so later UI work can replace the callback with an approval dialog.
-
-Covered methods:
-
-- `item/commandExecution/requestApproval`
-- `item/fileChange/requestApproval`
-- `execCommandApproval`
-- `applyPatchApproval`
-
-## Troubleshooting
-
-If `doctor` fails on Node:
+A hidden local troubleshooting path still exists for development only:
 
 ```bash
-node --version
+CODEXNEXT_ENABLE_DEV_DIRECT=1 pnpm --filter @codexnext/agent dev -- dev-serve --host 127.0.0.1 --port 17361
 ```
 
-Install Node >= 20 using your preferred Node version manager.
-
-If `doctor` fails on pnpm:
-
-```bash
-corepack enable
-corepack prepare pnpm@latest --activate
-```
-
-If `doctor` fails on Codex:
-
-```bash
-which codex
-codex --version
-codex app-server --help
-```
-
-Install or upgrade the Codex CLI, ensure `codex` is on `PATH`, and restart the shell or Codex app if the PATH was recently changed.
-
-If `goal-smoke` fails with an app-server JSON-RPC error, check:
-
-- Codex login state
-- model access
-- `cwd` exists and is readable
-- the installed Codex CLI supports `thread/goal/set`
-- the request did not exceed the default 60 second JSON-RPC timeout
-
-If relay Web keeps returning `401` on `/api/relay/session`, check:
-
-- login cookie exists and is not expired
-- `CODEXNEXT_WEB_SESSION_SECRET` is set
-- `CODEXNEXT_WEB_AUTH_PASSWORD_HASH` is set
-- `CODEXNEXT_OWNER_TOKEN` is available to the Web server process
-
-If relay devices do not appear, check:
-
-- control server `--allow-origin` includes the Web origin
-- the machine has completed `codexnext pair`
-- the device was not revoked
-
-If a relay device appears briefly and then disconnects, check:
-
-- the agent host can execute `codex app-server`
-- `CODEXNEXT_CODEX_BIN` points at a valid executable, or leave it unset and let the startup script auto-detect it
-- `sudo journalctl -u codexnext-agent -n 100 --no-pager` on Linux
-
-## Package Layout
-
-- `packages/protocol`: shared JSON-RPC, Codex method names, lightweight app-server types, and Zod CLI validation.
-- `packages/codex-client`: JSON-RPC client, stdio transport, Codex app-server wrappers, and approval callback routing.
-- `apps/agent`: CLI commands and human-readable smoke-test event output.
-- `apps/web`: Next.js App Router local Web Console for Phase 2A.
+This command is intentionally hidden from normal UX and does not print tokenized Web URLs.

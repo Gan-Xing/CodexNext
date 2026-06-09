@@ -8,13 +8,9 @@ import {
   getRelayPairingRequest,
   normalizeRelayPairCode
 } from "../../lib/relay";
-import type {
-  LocalHealthResponse,
-  PairingRequestView
-} from "../../lib/types";
+import type { LocalHealthResponse, PairingRequestView } from "../../lib/types";
 import {
   connectionFromSavedDevice,
-  defaultDeviceName,
   findSavedDevice,
   isSameAgentConnection,
   savedDeviceAddressLabel,
@@ -38,8 +34,8 @@ export function DeviceSheet(props: {
   devicePresence: Record<string, DevicePresenceState>;
   deviceName: string;
   healthStatus: LocalHealthResponse | null;
+  migrationNotice: string | null;
   relayConnectionInfo: { accessToken: string; relayUrl: string } | null;
-  relayEnabled: boolean;
   savedDevices: SavedDevice[];
   selectedDeviceId: string | null;
   streamStatus: string;
@@ -50,6 +46,7 @@ export function DeviceSheet(props: {
     deviceId: string | null
   ) => Promise<void>;
   onDeleteDevice: (deviceId: string) => void;
+  onDismissMigrationNotice: () => void;
   onRefreshRelayDevices: () => Promise<SavedDevice[]>;
 }) {
   const [draft, setDraft] = useState<DeviceDraftState>(() =>
@@ -60,9 +57,7 @@ export function DeviceSheet(props: {
       selectedDeviceId: props.selectedDeviceId
     })
   );
-  const [relayPairMode, setRelayPairMode] = useState(
-    props.relayEnabled && !props.savedDevices.some((device) => device.mode === "relay")
-  );
+  const [relayPairMode, setRelayPairMode] = useState(props.savedDevices.length === 0);
   const [relayPairCode, setRelayPairCode] = useState("");
   const [relayPairRequest, setRelayPairRequest] = useState<PairingRequestView | null>(null);
   const [relayPairStatus, setRelayPairStatus] = useState<RelayPairStatus>("idle");
@@ -92,18 +87,13 @@ export function DeviceSheet(props: {
   );
   const draftOnline = draftConnected || draftPresence?.status === "online";
   const draftDisplayName = draft.name.trim() || draftSavedDevice?.name || "新设备";
-  const relayDevices = props.savedDevices.filter((device) => device.mode === "relay");
-  const relaySelectedDevice =
-    draftSavedDevice?.mode === "relay" ? draftSavedDevice : relayDevices[0] ?? null;
-  const waitingForRelayDevice = props.relayEnabled && relayDevices.length === 0;
+  const relaySelectedDevice = draftSavedDevice ?? props.savedDevices[0] ?? null;
+  const waitingForRelayDevice = props.savedDevices.length === 0;
   const relayUrl =
-    props.relayConnectionInfo?.relayUrl ??
-    (relaySelectedDevice?.mode === "relay" ? relaySelectedDevice.relayUrl : null);
-  const relayAccessToken =
-    props.relayConnectionInfo?.accessToken ??
-    null;
+    props.relayConnectionInfo?.relayUrl ?? relaySelectedDevice?.relayUrl ?? null;
+  const relayAccessToken = props.relayConnectionInfo?.accessToken ?? null;
   const pairCodeValue = formatRelayPairCode(relayPairCode);
-  const relayPairingVisible = props.relayEnabled && (relayPairMode || waitingForRelayDevice);
+  const relayPairingVisible = relayPairMode || waitingForRelayDevice;
   const relayPairCommand = relayUrl ? `codexnext pair --relay ${relayUrl}` : "";
 
   useEffect(() => {
@@ -111,31 +101,28 @@ export function DeviceSheet(props: {
       draft.selectedDeviceId &&
       !props.savedDevices.some((device) => device.id === draft.selectedDeviceId)
     ) {
-      setDraft(props.relayEnabled ? createEmptyRelayDraft() : createEmptyDeviceDraft());
+      setDraft(createEmptyRelayDraft());
     }
-  }, [draft.selectedDeviceId, props.relayEnabled, props.savedDevices]);
+  }, [draft.selectedDeviceId, props.savedDevices]);
 
   useEffect(() => {
-    if (props.relayEnabled && relayDevices.length === 0) {
+    if (props.savedDevices.length === 0) {
       setRelayPairMode(true);
       return;
     }
-    if (relayDevices.length > 0 && draftSavedDevice?.mode === "relay") {
+    if (draftSavedDevice) {
       setRelayPairMode(false);
     }
-  }, [draftSavedDevice?.mode, props.relayEnabled, relayDevices.length]);
+  }, [draftSavedDevice, props.savedDevices.length]);
 
   useEffect(() => {
-    if (props.relayEnabled && !relayPairMode && !draftSavedDevice && relaySelectedDevice) {
+    if (!relayPairMode && !draftSavedDevice && relaySelectedDevice) {
       setDraft({
         selectedDeviceId: relaySelectedDevice.id,
-        name: relaySelectedDevice.name,
-        mode: "relay",
-        agentUrl: "",
-        token: ""
+        name: relaySelectedDevice.name
       });
     }
-  }, [draftSavedDevice, props.relayEnabled, relayPairMode, relaySelectedDevice]);
+  }, [draftSavedDevice, relayPairMode, relaySelectedDevice]);
 
   function resetRelayPairing(options?: { keepCode?: boolean }) {
     if (!options?.keepCode) {
@@ -173,7 +160,7 @@ export function DeviceSheet(props: {
         return;
       }
       setRelayPairStatus("error");
-      setRelayPairMessage("这个配对码已过期。请在这台设备上重新运行配对命令，然后输入新的 6 位码。");
+      setRelayPairMessage("这个配对码已失效，请在设备上重新运行配对命令。");
     } catch (error) {
       setRelayPairRequest(null);
       setRelayPairStatus("error");
@@ -203,19 +190,13 @@ export function DeviceSheet(props: {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         await sleep(1500);
         const devices = await props.onRefreshRelayDevices();
-        const matched = devices.find(
-          (device) =>
-            device.mode === "relay" && device.deviceId === payload.deviceId
-        );
+        const matched = devices.find((device) => device.deviceId === payload.deviceId);
         if (!matched) {
           continue;
         }
         setDraft({
           selectedDeviceId: matched.id,
-          name: matched.name,
-          mode: "relay",
-          agentUrl: "",
-          token: ""
+          name: matched.name
         });
         setRelayPairMode(false);
         resetRelayPairing();
@@ -247,32 +228,35 @@ export function DeviceSheet(props: {
         </div>
 
         <div className="cn-device-manager">
-          <section className="cn-device-library" aria-label="已保存设备">
+          <section className="cn-device-library" aria-label="已接入设备">
             <div className="cn-device-library-header">
               <strong>设备</strong>
               <button
                 className="cn-add-mini-button"
                 type="button"
                 onClick={() => {
-                  if (props.relayEnabled) {
-                    setRelayPairMode(true);
-                    setDraft(createEmptyRelayDraft());
-                    resetRelayPairing();
-                    return;
-                  }
-                  setDraft(createEmptyDeviceDraft());
+                  setRelayPairMode(true);
+                  setDraft(createEmptyRelayDraft());
+                  resetRelayPairing();
                 }}
               >
                 <CodexIcon name="plus" />
-                {props.relayEnabled ? "接入" : "新增"}
+                接入
               </button>
             </div>
 
+            {props.migrationNotice ? (
+              <div className="cn-device-migration-notice" role="status">
+                <span>{props.migrationNotice}</span>
+                <button type="button" onClick={props.onDismissMigrationNotice}>
+                  知道了
+                </button>
+              </div>
+            ) : null}
+
             <div className="cn-saved-device-list">
               {props.savedDevices.length === 0 ? (
-                <div className="cn-empty-device-list">
-                  {props.relayEnabled ? "还没有设备，先接入一台。" : "还没有设备"}
-                </div>
+                <div className="cn-empty-device-list">还没有设备，先接入一台。</div>
               ) : null}
               {props.savedDevices.map((device) => {
                 const selected = draft.selectedDeviceId === device.id && !relayPairMode;
@@ -294,11 +278,7 @@ export function DeviceSheet(props: {
                 return (
                   <article
                     key={device.id}
-                    className={
-                      selected
-                        ? "cn-saved-device-card selected"
-                        : "cn-saved-device-card"
-                    }
+                    className={selected ? "cn-saved-device-card selected" : "cn-saved-device-card"}
                   >
                     <button
                       className="cn-saved-device-main"
@@ -308,10 +288,7 @@ export function DeviceSheet(props: {
                         resetRelayPairing();
                         setDraft({
                           selectedDeviceId: device.id,
-                          name: device.name,
-                          mode: device.mode,
-                          agentUrl: device.mode === "direct" ? device.agentUrl : "",
-                          token: device.mode === "direct" ? device.token : ""
+                          name: device.name
                         });
                       }}
                       title={`${device.name} · ${savedDeviceAddressLabel(device)}`}
@@ -326,12 +303,12 @@ export function DeviceSheet(props: {
                       onClick={() => {
                         props.onDeleteDevice(device.id);
                         if (draft.selectedDeviceId === device.id) {
-                          setDraft(props.relayEnabled ? createEmptyRelayDraft() : createEmptyDeviceDraft());
+                          setDraft(createEmptyRelayDraft());
                         }
                       }}
-                      aria-label={`删除设备 ${device.name}`}
+                      aria-label={`移除设备 ${device.name}`}
                     >
-                      删除
+                      移除
                     </button>
                   </article>
                 );
@@ -339,278 +316,179 @@ export function DeviceSheet(props: {
             </div>
           </section>
 
-          <section className="cn-device-editor" aria-label="设备连接设置">
-            <div className="cn-device-editor-top">
-              <div
-                className={
-                  draftOnline ? "cn-real-device-row online" : "cn-real-device-row"
-                }
-              >
-                <CodexIcon name="terminal" />
-                <span className={draftOnline ? "cn-live-dot" : "cn-live-dot offline"} />
-                <div>
-                  <strong>{draftDisplayName}</strong>
-                  <small>
-                    {draftSavedDevice
-                      ? savedDeviceAddressLabel(draftSavedDevice)
-                      : relayPairingVisible
-                        ? "通过配对码接入 relay"
-                        : draft.agentUrl}
-                  </small>
-                </div>
-              </div>
-            </div>
-
+          <section className="cn-device-editor" aria-label="当前设备">
             {relayPairingVisible ? (
-              <>
-                <div className="cn-device-pair-card">
-                  <div className="cn-device-pair-copy">
-                    <strong>接入新设备</strong>
-                    <p>在另一台设备上运行下面命令。拿到 6 位配对码后，在这里批准。</p>
+              <div className="cn-relay-pair-card">
+                <div className="cn-device-preview-header relay">
+                  <div className="cn-device-preview-title relay-only">
+                    <CodexIcon name="terminal" />
+                    <div>
+                      <strong>接入新设备</strong>
+                      <small>{relayUrl ? `Relay ${relayUrl}` : "当前 relay 地址不可用"}</small>
+                    </div>
                   </div>
-                  <label className="cn-device-field">
-                    Relay
-                    <input
-                      name="device_relay_url"
-                      value={relayUrl ?? ""}
-                      disabled
-                      placeholder="http://100.100.115.100:3922"
-                    />
-                  </label>
-                  <div className="cn-device-command-block">
-                    <code>{relayPairCommand || "等待 relay 地址…"}</code>
+                </div>
+                <div className="cn-relay-pair-flow">
+                  <div className="cn-relay-pair-step">
+                    <span>1</span>
+                    <div>
+                      <strong>在目标设备上运行</strong>
+                      <code>{relayPairCommand || "codexnext pair --relay <relay-url>"}</code>
+                    </div>
                   </div>
-                  <div className="cn-device-form-fields cn-device-pair-fields">
-                    <label className="cn-device-field cn-device-field-code">
-                      配对码
-                      <input
-                        name="device_pair_code"
-                        value={pairCodeValue}
-                        onChange={(event) => {
-                          setRelayPairCode(event.target.value);
-                          const nextCode = normalizeRelayPairCode(event.target.value);
-                          if (
-                            relayPairRequest &&
-                            nextCode !== relayPairRequest.codeDigits
-                          ) {
-                            setRelayPairRequest(null);
-                          }
-                          if (relayPairStatus !== "idle") {
+                  <div className="cn-relay-pair-step">
+                    <span>2</span>
+                    <div>
+                      <strong>输入 6 位配对码</strong>
+                      <div className="cn-relay-pair-code-row">
+                        <input
+                          value={pairCodeValue}
+                          onChange={(event) => {
+                            setRelayPairCode(normalizeRelayPairCode(event.target.value));
                             setRelayPairStatus("idle");
                             setRelayPairMessage(null);
-                          }
-                        }}
-                        placeholder="123-456"
-                      />
-                    </label>
-                    <button
-                      className="cn-soft-button cn-device-pair-button"
-                      type="button"
-                      onClick={() => void lookupRelayPairing()}
-                      disabled={!relayUrl || relayPairStatus === "loading" || relayPairStatus === "approving"}
-                    >
-                      {relayPairStatus === "loading" ? "查询中…" : "查找配对码"}
-                    </button>
+                          }}
+                          inputMode="numeric"
+                          placeholder="123-456"
+                          aria-label="配对码"
+                        />
+                        <button type="button" onClick={() => void lookupRelayPairing()}>
+                          查找配对码
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  {relayPairRequest ? (
-                    <div className="cn-device-pair-request">
-                      <strong>{relayPairRequest.deviceName}</strong>
-                      <small>{pairingStatusLabel(relayPairRequest.status)}</small>
-                      <small>{pairingExpiryLabel(relayPairRequest)}</small>
-                      <small>
-                        {relayPairRequest.hostname} · {relayPairRequest.platform} ·{" "}
-                        {relayPairRequest.arch}
-                      </small>
-                      <small>
-                        {relayPairRequest.codexVersion ?? relayPairRequest.agentVersion}
-                      </small>
-                    </div>
-                  ) : null}
-                  {relayPairRequest?.status === "pending" ? (
-                    <button
-                      className="cn-primary-button cn-device-pair-approve cn-device-pair-approve-inline"
-                      type="button"
-                      onClick={() => void approveRelayPairing()}
-                      disabled={!relayAccessToken || relayPairStatus === "approving"}
-                    >
-                      {relayPairStatus === "approving" ? "正在批准…" : "允许这台设备接入"}
-                    </button>
-                  ) : null}
-                  {relayPairMessage ? (
-                    <div
-                      className={
-                        relayPairStatus === "error"
-                          ? "cn-live-error inline"
-                          : "cn-device-pair-message"
-                      }
-                    >
-                      {relayPairStatus === "error" ? (
-                        <>
-                          <strong>配对失败</strong>
-                          <span>{relayPairMessage}</span>
-                        </>
-                      ) : (
-                        relayPairMessage
-                      )}
-                    </div>
-                  ) : null}
-                  {relayPairRequest?.status === "pending" ? (
-                    <button
-                      className="cn-primary-button cn-device-pair-approve"
-                      type="button"
-                      onClick={() => void approveRelayPairing()}
-                      disabled={!relayAccessToken || relayPairStatus === "approving"}
-                    >
-                      {relayPairStatus === "approving" ? "正在批准…" : "允许这台设备接入"}
-                    </button>
-                  ) : null}
                 </div>
-
-                <details className="cn-device-advanced">
-                  <summary>Advanced</summary>
-                  <div className="cn-device-advanced-copy">
-                    Direct endpoint 仅用于本地开发模式。
-                  </div>
-                  <button
-                    className="cn-soft-button"
-                    type="button"
-                    onClick={() => {
-                      setRelayPairMode(false);
-                      setDraft(createEmptyDeviceDraft());
-                    }}
-                  >
-                    添加 direct endpoint
-                  </button>
-                </details>
-              </>
-            ) : draftSavedDevice?.mode === "relay" ? (
-              <div className="cn-device-form-fields">
-                <label className="cn-device-field cn-device-field-name">
-                  设备名称
-                  <input
-                    name="device_name"
-                    value={draft.name}
-                    onChange={(event) =>
-                      setDraft((previous) => ({
-                        ...previous,
-                        name: event.target.value
-                      }))
-                    }
-                    placeholder="MacBook"
-                  />
-                </label>
-                <label className="cn-device-field">
-                  Relay
-                  <input name="device_relay_url" value={draftSavedDevice.relayUrl} disabled />
-                </label>
-              </div>
-            ) : (
-              <>
-                <div className="cn-device-form-fields">
-                  <label className="cn-device-field cn-device-field-name">
-                    设备名称
-                    <input
-                      name="device_name"
-                      value={draft.name}
-                      onChange={(event) =>
-                        setDraft((previous) => ({
-                          ...previous,
-                          name: event.target.value
-                        }))
-                      }
-                      placeholder="Macmini"
-                    />
-                  </label>
-                  <label className="cn-device-field cn-device-field-url">
-                    地址
-                    <input
-                      name="device_agent_url"
-                      value={draft.agentUrl}
-                      onChange={(event) =>
-                        setDraft((previous) => ({
-                          ...previous,
-                          agentUrl: event.target.value,
-                          mode: "direct",
-                          selectedDeviceId: null
-                        }))
-                      }
-                      placeholder="http://127.0.0.1:17361"
-                    />
-                  </label>
-                  <label className="cn-device-field cn-device-field-token">
-                    Token
-                    <input
-                      name="device_access_token"
-                      value={draft.token}
-                      onChange={(event) =>
-                        setDraft((previous) => ({
-                          ...previous,
-                          mode: "direct",
-                          selectedDeviceId: null,
-                          token: event.target.value
-                        }))
-                      }
-                      placeholder="token"
-                    />
-                  </label>
-                </div>
-
-                {props.relayEnabled ? (
-                  <details className="cn-device-advanced">
-                    <summary>Advanced</summary>
-                    <div className="cn-device-advanced-copy">
-                      当前页面优先使用 relay。这里只保留 direct endpoint 调试入口。
-                    </div>
-                  </details>
+                {relayPairMessage ? (
+                  <p className={relayPairStatus === "error" ? "cn-relay-pair-error" : "cn-relay-pair-hint"}>
+                    {relayPairMessage}
+                  </p>
                 ) : null}
-              </>
-            )}
-
-            <div
-              className={
-                relayPairRequest?.status === "pending"
-                  ? "cn-sheet-actions cn-device-sheet-actions pairing-ready"
-                  : "cn-sheet-actions cn-device-sheet-actions"
-              }
-            >
-              <button className="cn-soft-button" type="button" onClick={props.onClose}>
-                取消
-              </button>
-              {relayPairingVisible ? (
-                relayDevices.length > 0 ? (
+                {relayPairRequest ? (
+                  <div className="cn-relay-pair-request-card">
+                    <div>
+                      <span>设备</span>
+                      <strong>{relayPairRequest.deviceName}</strong>
+                    </div>
+                    <div>
+                      <span>主机</span>
+                      <strong>{relayPairRequest.hostname}</strong>
+                    </div>
+                    <div>
+                      <span>平台</span>
+                      <strong>
+                        {relayPairRequest.platform} · {relayPairRequest.arch}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>指纹</span>
+                      <strong>{relayPairRequest.shortFingerprint}</strong>
+                    </div>
+                    <div>
+                      <span>状态</span>
+                      <strong>{pairingStatusLabel(relayPairRequest.status)}</strong>
+                    </div>
+                    <small>{pairingExpiryLabel(relayPairRequest)}</small>
+                  </div>
+                ) : null}
+                <div className="cn-device-actions sticky">
                   <button
-                    className="cn-primary-button"
+                    className="cn-secondary-button"
                     type="button"
                     onClick={() => {
                       setRelayPairMode(false);
                       resetRelayPairing();
                     }}
                   >
-                    返回设备列表
+                    返回列表
                   </button>
-                ) : null
-              ) : (
-                <button
-                  className="cn-primary-button"
-                  type="button"
-                  onClick={() =>
-                    void props.onConnect(
-                      draftSavedDevice
-                        ? connectionFromSavedDevice(
-                            draftSavedDevice,
-                            props.relayConnectionInfo?.accessToken ?? null
-                          ) ??
-                          { mode: "direct", agentUrl: draft.agentUrl, token: draft.token }
-                        : { mode: "direct", agentUrl: draft.agentUrl, token: draft.token },
-                      draft.name,
-                      draft.selectedDeviceId
-                    )
-                  }
-                >
-                  {draftConnected ? "重连" : "连接"}
-                </button>
-              )}
-            </div>
+                  <button
+                    className="cn-primary-button"
+                    type="button"
+                    disabled={relayPairStatus !== "ready"}
+                    onClick={() => void approveRelayPairing()}
+                  >
+                    允许这台设备接入
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="cn-device-preview-header">
+                  <div className="cn-device-preview-title">
+                    <CodexIcon name="terminal" />
+                    <div>
+                      <strong>{draftDisplayName}</strong>
+                      <small>
+                        {draftOnline ? "online" : "disconnected"}
+                        {draftPresence?.codexVersion ? ` · ${draftPresence.codexVersion}` : ""}
+                      </small>
+                    </div>
+                  </div>
+                </div>
+
+                <label className="cn-field">
+                  <span>设备名称</span>
+                  <input
+                    value={draft.name}
+                    onChange={(event) =>
+                      setDraft((previous) => ({ ...previous, name: event.target.value }))
+                    }
+                    placeholder="给这台设备起个名字"
+                  />
+                </label>
+
+                <label className="cn-field readonly">
+                  <span>地址</span>
+                  <input value={relaySelectedDevice ? savedDeviceAddressLabel(relaySelectedDevice) : ""} readOnly />
+                </label>
+
+                <div className="cn-device-status-grid">
+                  <div>
+                    <span>连接状态</span>
+                    <strong>{props.connected && draftConnected ? "已连接" : props.streamStatus}</strong>
+                  </div>
+                  <div>
+                    <span>Codex</span>
+                    <strong>{draftPresence?.codexVersion ?? props.healthStatus?.codex?.version ?? "unknown"}</strong>
+                  </div>
+                </div>
+
+                <div className="cn-device-actions sticky">
+                  <button className="cn-secondary-button" type="button" onClick={props.onClose}>
+                    取消
+                  </button>
+                  <button
+                    className="cn-primary-button"
+                    type="button"
+                    disabled={!relaySelectedDevice || !relayAccessToken}
+                    onClick={() => {
+                      if (!relaySelectedDevice || !relayAccessToken) {
+                        return;
+                      }
+                      setDraft((previous) => ({
+                        ...previous,
+                        name: previous.name.trim() || relaySelectedDevice.name
+                      }));
+                      const nextConnection = connectionFromSavedDevice(
+                        relaySelectedDevice,
+                        relayAccessToken
+                      );
+                      if (!nextConnection) {
+                        return;
+                      }
+                      void props.onConnect(
+                        nextConnection,
+                        draft.name.trim() || relaySelectedDevice.name,
+                        relaySelectedDevice.id
+                      );
+                    }}
+                  >
+                    {draftConnected ? "重新连接" : "连接"}
+                  </button>
+                </div>
+              </>
+            )}
           </section>
         </div>
       </div>
@@ -625,51 +503,25 @@ function createActiveDeviceDraft(params: {
   selectedDeviceId: string | null;
 }): DeviceDraftState {
   const selectedDevice = params.selectedDeviceId
-    ? params.savedDevices.find((device) => device.id === params.selectedDeviceId) ??
-      null
+    ? params.savedDevices.find((device) => device.id === params.selectedDeviceId) ?? null
     : null;
-  const matchedDevice =
-    selectedDevice ??
-    findSavedDevice(params.savedDevices, params.connection);
+  const matchedDevice = selectedDevice ?? findSavedDevice(params.savedDevices, params.connection);
   if (matchedDevice) {
     return {
       selectedDeviceId: matchedDevice.id,
-      name: matchedDevice.name,
-      mode: matchedDevice.mode,
-      agentUrl: matchedDevice.mode === "direct" ? matchedDevice.agentUrl : "",
-      token: matchedDevice.mode === "direct" ? matchedDevice.token : ""
+      name: matchedDevice.name
     };
   }
   return {
     selectedDeviceId: null,
-    mode: params.connection.mode,
-    name:
-      params.deviceName ||
-      (params.connection.mode === "direct"
-        ? defaultDeviceName(params.connection.agentUrl)
-        : "CodexNext relay"),
-    agentUrl: params.connection.mode === "direct" ? params.connection.agentUrl : "",
-    token: params.connection.mode === "direct" ? params.connection.token : ""
-  };
-}
-
-function createEmptyDeviceDraft(): DeviceDraftState {
-  return {
-    selectedDeviceId: null,
-    mode: "direct",
-    name: "",
-    agentUrl: "http://127.0.0.1:17361",
-    token: "test-token"
+    name: params.deviceName || "CodexNext relay"
   };
 }
 
 function createEmptyRelayDraft(): DeviceDraftState {
   return {
     selectedDeviceId: null,
-    mode: "relay",
-    name: "CodexNext relay",
-    agentUrl: "",
-    token: ""
+    name: ""
   };
 }
 

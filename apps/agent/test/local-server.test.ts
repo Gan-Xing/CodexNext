@@ -636,7 +636,10 @@ describe("local HTTP server guards", () => {
       });
       const body = await response.json() as {
         session: { threadId: string };
-        history: { messages: Array<{ text: string }> };
+        history: {
+          messages: Array<{ text: string }>;
+          nextCursor: string | null;
+        };
       };
 
       expect(response.status).toBe(201);

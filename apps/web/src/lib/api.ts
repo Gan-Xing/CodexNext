@@ -32,7 +32,7 @@ export async function agentFetch<T>(
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...relayAuthHeaders(connection),
+      Authorization: `Bearer ${connection.sessionToken}`,
       ...(init.headers ?? {})
     }
   });
@@ -145,9 +145,7 @@ export function getCodexHistoryDetail(
   connection: AgentConnection,
   input: { id: string; cwd?: string }
 ): Promise<LocalCodexHistoryDetailResponse> {
-  const query = new URLSearchParams({
-    id: input.id
-  });
+  const query = new URLSearchParams({ id: input.id });
   if (input.cwd) {
     query.set("cwd", input.cwd);
   }
@@ -163,9 +161,7 @@ export function getCodexHistoryTurns(
     limit?: number;
   }
 ): Promise<LocalCodexHistoryPageResponse> {
-  const query = new URLSearchParams({
-    id: input.id
-  });
+  const query = new URLSearchParams({ id: input.id });
   if (input.cwd) {
     query.set("cwd", input.cwd);
   }
@@ -249,19 +245,7 @@ export function resolveApproval(
   });
 }
 
-export function isDirectConnection(
-  connection: AgentConnection
-): connection is Extract<AgentConnection, { mode: "direct" }> {
-  return connection.mode === "direct";
-}
-
 export function resolveAgentUrl(connection: AgentConnection, path: string): URL {
-  if (isDirectConnection(connection)) {
-    const url = new URL(path, connection.agentUrl);
-    url.searchParams.set("token", connection.token);
-    return url;
-  }
-
   const base = new URL(path, connection.relayUrl);
   const prefix = `/api/relay/devices/${encodeURIComponent(connection.deviceId)}`;
   if (base.pathname === "/api/health") {
@@ -313,13 +297,4 @@ export function resolveAgentUrl(connection: AgentConnection, path: string): URL 
     return base;
   }
   return base;
-}
-
-function relayAuthHeaders(connection: AgentConnection): Record<string, string> {
-  if (isDirectConnection(connection)) {
-    return {};
-  }
-  return {
-    Authorization: `Bearer ${connection.sessionToken}`
-  };
 }

@@ -62,19 +62,15 @@ import {
 import {
   createSavedDeviceId,
   connectionFromSavedDevice,
-  defaultDeviceName,
-  deviceNameStorageKey,
   findSavedDevice,
-  isSameDeviceEndpoint,
   isSameAgentConnection,
   isSameSavedDeviceConnection,
   normalizeAgentUrl,
-  readSavedDevices,
+  readSavedDevicesState,
   readSidebarWidth,
-  savedDevicesStorageKey,
-  savedDeviceAddressLabel,
+  relayOnlyMigrationNoticeStorageKey,
   sidebarWidthStorageKey,
-  shortAgentUrl,
+  savedDevicesStorageKey,
   type DevicePresenceState,
   type SavedDevice
 } from "../devices/device-utils";
@@ -169,10 +165,7 @@ const MAX_SIDEBAR_WIDTH = 620;
 const HISTORY_PAGE_CACHE_TTL_MS = 15_000;
 const RELAY_CONFIGURED = Boolean(process.env.NEXT_PUBLIC_CODEXNEXT_RELAY_URL);
 const RELAY_FULL_ACCESS_ENABLED =
-  process.env.NEXT_PUBLIC_CODEXNEXT_DISABLE_RELAY_FULL_ACCESS !== "1" &&
-  process.env.NEXT_PUBLIC_CODEXNEXT_ALLOW_RELAY_FULL_ACCESS !== "0";
-const URL_RELAY_TOKEN_ENABLED =
-  process.env.NEXT_PUBLIC_CODEXNEXT_ALLOW_URL_TOKEN === "1";
+  process.env.NEXT_PUBLIC_CODEXNEXT_ALLOW_RELAY_FULL_ACCESS === "1";
 
 interface RelayBootstrapConfig {
   sessionToken: string;
@@ -180,10 +173,8 @@ interface RelayBootstrapConfig {
 }
 
 export function useWebConsoleController() {
-  const [agentUrl, setAgentUrl] = useState("http://127.0.0.1:17361");
-  const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [autoConnect, setAutoConnect] = useState<AgentConnection | null>(null);
+  const [migrationNotice, setMigrationNotice] = useState<string | null>(null);
   const [savedDevices, setSavedDevices] = useState<SavedDevice[]>([]);
   const [threadSidebarPrefs, setThreadSidebarPrefs] = useState<Record<string, ThreadSidebarPrefs>>({});
   const [projectSidebarPrefs, setProjectSidebarPrefs] = useState<Record<string, ProjectSidebarPrefs>>({});
@@ -238,8 +229,12 @@ export function useWebConsoleController() {
     : null;
   const connection: AgentConnection =
     activeWorkspace?.connection ??
-    selectedSavedDeviceConnection ??
-    { mode: "direct", agentUrl, token };
+    selectedSavedDeviceConnection ?? {
+      mode: "relay",
+      relayUrl: relayBootstrap?.relayUrl ?? resolveDefaultRelayUrl(),
+      sessionToken: relayBootstrap?.sessionToken ?? "",
+      deviceId: selectedSavedDevice?.deviceId ?? ""
+    };
   const healthStatus = activeWorkspace?.healthStatus ?? null;
   const streamStatus = activeWorkspace?.streamStatus ?? "disconnected";
   const events = activeWorkspace?.events ?? [];
@@ -276,10 +271,10 @@ export function useWebConsoleController() {
       streamStatus !== "disconnected" &&
       streamStatus !== "error"
   );
-  const sidebarPrefsScopeKey =
-    connection.mode === "relay"
-      ? relayThreadPrefsScope(connection.relayUrl, connection.deviceId)
-      : agentUrl;
+  const sidebarPrefsScopeKey = relayThreadPrefsScope(
+    connection.relayUrl,
+    connection.deviceId || "unbound"
+  );
   const activeTurn = Boolean(currentSession?.activeTurnId);
   const currentGoal = currentSession?.goal ?? null;
   const hasCurrentGoal = Boolean(currentGoal?.objective?.trim());
@@ -289,10 +284,7 @@ export function useWebConsoleController() {
   const activeThreadPrefs = getThreadSidebarPrefs(threadSidebarPrefs, sidebarPrefsScopeKey);
   const activeProjectPrefs = getProjectSidebarPrefs(projectSidebarPrefs, sidebarPrefsScopeKey);
   const relayEnabled =
-    RELAY_CONFIGURED ||
-    Boolean(relayBootstrap) ||
-    connection.mode === "relay" ||
-    savedDevices.some((device) => device.mode === "relay");
+    RELAY_CONFIGURED || Boolean(relayBootstrap) || savedDevices.length > 0;
   const availablePermissionOptions =
     relayEnabled && !RELAY_FULL_ACCESS_ENABLED
       ? permissionOptions.filter((option) => option.mode !== "full-access")
@@ -324,9 +316,7 @@ export function useWebConsoleController() {
     [sidebarWidth]
   );
   const deviceDisplayName =
-    deviceName ||
-    healthStatus?.device?.defaultName ||
-    (relayEnabled && !selectedSavedDevice ? "CodexNext relay" : defaultDeviceName(agentUrl));
+    deviceName || healthStatus?.device?.defaultName || "CodexNext relay";
   const projectGroups = groupProjectThreads(
     sessions,
     codexHistory,
@@ -363,9 +353,10 @@ export function useWebConsoleController() {
           previous[deviceId] ??
           createDeviceWorkspace(
             (device ? connectionForSavedDevice(device) : null) ?? {
-              mode: "direct",
-              agentUrl,
-              token
+              mode: "relay",
+              relayUrl: relayBootstrap?.relayUrl ?? resolveDefaultRelayUrl(),
+              sessionToken: relayBootstrap?.sessionToken ?? "",
+              deviceId: device?.deviceId ?? ""
             }
           );
         return {
@@ -374,7 +365,7 @@ export function useWebConsoleController() {
         };
       });
     },
-    [agentUrl, connectionForSavedDevice, savedDevices, token]
+    [connectionForSavedDevice, relayBootstrap, savedDevices]
   );
 
   const patchActiveWorkspace = useCallback(
@@ -479,89 +470,40 @@ export function useWebConsoleController() {
   }, [currentSessionId, ensureSessionHistoryHydrated, sessionHistoryOrigins]);
 
   useEffect(() => {
-    const storedDevices = readSavedDevices();
+    const { devices: storedDevices, droppedLegacyDirectDevices } = readSavedDevicesState();
     const storedSidebarWidth = readSidebarWidth(clampSidebarWidth);
     const storedThreadPrefs = readThreadSidebarPrefs();
     const storedProjectPrefs = readProjectSidebarPrefs();
+    const params = new URLSearchParams(window.location.search);
+    const queryDeviceId = params.get("deviceId");
+
     setSavedDevices(storedDevices);
     if (storedSidebarWidth !== null) {
       setSidebarWidth(storedSidebarWidth);
     }
     setThreadSidebarPrefs(storedThreadPrefs);
     setProjectSidebarPrefs(storedProjectPrefs);
-    setDeviceWorkspaces((previous) => {
-      const next = { ...previous };
-      for (const device of storedDevices) {
-        const deviceConnection =
-          device.mode === "direct"
-            ? connectionFromSavedDevice(device)
-            : null;
-        if (!deviceConnection) {
-          continue;
-        }
-        next[device.id] =
-          next[device.id] ??
-          createDeviceWorkspace(deviceConnection);
-      }
-      return next;
-    });
 
-    const params = new URLSearchParams(window.location.search);
-    const queryAgent = params.get("agent");
-    const queryToken = params.get("token");
-    const queryRelay = params.get("relay");
-    const queryDeviceId = params.get("deviceId");
-    const querySessionToken = URL_RELAY_TOKEN_ENABLED
-      ? params.get("sessionToken")
-      : null;
-    if (queryAgent) {
-      setAgentUrl(queryAgent);
-    }
-    if (queryToken) {
-      setToken(queryToken);
-    }
-    if (queryAgent) {
-      const matchedDevice = findSavedDevice(storedDevices, queryAgent, queryToken ?? "");
-      if (matchedDevice) {
-        setSelectedDeviceId(matchedDevice.id);
-        setDeviceName(matchedDevice.name);
-      } else {
-        setDeviceName(
-          window.localStorage.getItem(deviceNameStorageKey(queryAgent)) ??
-            defaultDeviceName(queryAgent)
+    if (droppedLegacyDirectDevices > 0) {
+      const noticeSeen = window.localStorage.getItem(relayOnlyMigrationNoticeStorageKey) === "1";
+      if (!noticeSeen) {
+        window.localStorage.setItem(relayOnlyMigrationNoticeStorageKey, "1");
+        setMigrationNotice(
+          `已移除 ${droppedLegacyDirectDevices} 个旧版直连设备。现在请通过“接入设备”完成配对。`
         );
       }
-    } else {
-      const preferredDevice = [...storedDevices].sort(
-        (a, b) => (b.lastConnectedAt ?? 0) - (a.lastConnectedAt ?? 0)
-      )[0];
-      if (preferredDevice) {
-        setSelectedDeviceId(preferredDevice.id);
-        if (preferredDevice.mode === "direct") {
-          setAgentUrl(preferredDevice.agentUrl);
-          setToken(preferredDevice.token);
-        }
-        setDeviceName(preferredDevice.name);
-      }
-    }
-    if (queryAgent && queryToken) {
-      setAutoConnect({ mode: "direct", agentUrl: queryAgent, token: queryToken });
     }
 
-    const bootstrapRelayUrl =
-      queryRelay || (!queryAgent ? resolveDefaultRelayUrl() : "");
-    if (querySessionToken && bootstrapRelayUrl) {
-      setRelayBootstrap({
-        sessionToken: querySessionToken,
-        relayUrl: normalizeAgentUrl(bootstrapRelayUrl)
-      });
-      if (queryDeviceId) {
-        setSelectedDeviceId(queryDeviceId);
-      }
-      return;
+    const preferredDevice = queryDeviceId
+      ? storedDevices.find((device) => device.id === queryDeviceId || device.deviceId === queryDeviceId) ?? null
+      : [...storedDevices].sort((a, b) => (b.lastConnectedAt ?? 0) - (a.lastConnectedAt ?? 0))[0] ?? null;
+
+    if (preferredDevice) {
+      setSelectedDeviceId(preferredDevice.id);
+      setDeviceName(preferredDevice.name);
     }
 
-    if (!bootstrapRelayUrl) {
+    if (!resolveDefaultRelayUrl()) {
       return;
     }
 
@@ -583,15 +525,6 @@ export function useWebConsoleController() {
       });
   }, []);
 
-  useEffect(() => {
-    if (!autoConnect) {
-      return;
-    }
-    setAutoConnect(null);
-    const label = autoConnect.mode === "direct" ? autoConnect.agentUrl : autoConnect.relayUrl;
-    void connect(autoConnect).catch((err) => setError(formatConnectionError(err, label)));
-  }, [autoConnect]);
-
   const refreshRelayDevices = useCallback(async () => {
     if (!relayBootstrap) {
       return [] as SavedDevice[];
@@ -612,8 +545,7 @@ export function useWebConsoleController() {
       lastConnectedAt: device.lastSeenAt
     }));
 
-    const directDevices = readSavedDevices().filter((device) => device.mode === "direct");
-    persistDevices([...relaySavedDevices, ...directDevices]);
+    persistDevices(relaySavedDevices);
     setDeviceWorkspaces((previous) => {
       const next = { ...previous };
       for (const device of relaySavedDevices) {
@@ -767,7 +699,7 @@ export function useWebConsoleController() {
   }, [currentSessionId]);
 
   useEffect(() => {
-    if (connection.mode !== "relay") {
+    if (!connection.deviceId || !connection.sessionToken) {
       return;
     }
     let cancelled = false;
@@ -780,10 +712,9 @@ export function useWebConsoleController() {
       cancelled = true;
     };
   }, [
-    connection.mode,
-    connection.mode === "relay" ? connection.relayUrl : null,
-    connection.mode === "relay" ? connection.sessionToken : null,
-    connection.mode === "relay" ? connection.deviceId : null,
+    connection.relayUrl,
+    connection.sessionToken,
+    connection.deviceId,
     sidebarPrefsScopeKey,
     syncRelaySidebarPrefs
   ]);
@@ -795,21 +726,27 @@ export function useWebConsoleController() {
   }, [permissionMode, relayEnabled]);
 
   useEffect(() => {
-    const selectedDevice = savedDevices.find((device) => device.id === selectedDeviceId);
+    const selectedDevice = savedDevices.find((device) => device.id === selectedDeviceId) ?? null;
     const selectedConnection =
       selectedDevice ? connectionForSavedDevice(selectedDevice) : null;
     if (selectedDevice && selectedConnection && isSameAgentConnection(selectedConnection, connection)) {
       setDeviceName(selectedDevice.name);
       return;
     }
-    const matchingDevice = findSavedDevice(savedDevices, connection);
+    const matchingDevice = connection.deviceId
+      ? findSavedDevice(savedDevices, connection)
+      : null;
     if (matchingDevice) {
       setSelectedDeviceId(matchingDevice.id);
       setDeviceName(matchingDevice.name);
       return;
     }
-    setDeviceName(window.localStorage.getItem(deviceNameStorageKey(agentUrl)) ?? "");
-  }, [agentUrl, savedDevices, selectedDeviceId, token]);
+    if (selectedDevice) {
+      setDeviceName(selectedDevice.name);
+      return;
+    }
+    setDeviceName("");
+  }, [connection, connectionForSavedDevice, savedDevices, selectedDeviceId]);
 
   useEffect(() => {
     if (!sidebarCollapsed && !sidebarResizing) {
@@ -1367,10 +1304,6 @@ export function useWebConsoleController() {
     }
     if (options?.selectDevice) {
       setSelectedDeviceId(device.id);
-      if (device.mode === "direct") {
-        setAgentUrl(device.agentUrl);
-        setToken(device.token);
-      }
       setDeviceName(device.name);
     }
     patchDeviceWorkspace(device.id, (workspace) => ({
@@ -1489,48 +1422,22 @@ export function useWebConsoleController() {
       : null;
     const existingByEndpoint = findSavedDevice(savedDevices, nextConnection);
     const existingDevice = existingBySelection ?? existingByEndpoint ?? null;
-    const nextDevice: SavedDevice =
-      nextConnection.mode === "relay"
-        ? {
-            id: existingDevice?.id ?? nextConnection.deviceId,
-            name:
-              options?.deviceName?.trim() ||
-              deviceName.trim() ||
-              existingDevice?.name ||
-              status.device?.defaultName ||
-              nextConnection.deviceId,
-            mode: "relay",
-            relayUrl: normalizeAgentUrl(nextConnection.relayUrl),
-            deviceId: nextConnection.deviceId,
-            online: true,
-            codexVersion: status.codex?.version ?? null,
-            lastConnectedAt: Date.now(),
-            ...((status.device?.hostname ??
-              (existingDevice?.mode === "relay" ? existingDevice.hostname : null)) !==
-            undefined
-              ? {
-                  hostname:
-                    status.device?.hostname ??
-                    (existingDevice?.mode === "relay"
-                      ? existingDevice.hostname ?? null
-                      : null)
-                }
-              : {})
-          }
-        : {
-            id: existingDevice?.id ?? createSavedDeviceId(),
-            name:
-              options?.deviceName?.trim() ||
-              deviceName.trim() ||
-              existingDevice?.name ||
-              status.device?.defaultName ||
-              defaultDeviceName(nextConnection.agentUrl),
-            mode: "direct",
-            agentUrl: normalizeAgentUrl(nextConnection.agentUrl),
-            token: nextConnection.token,
-            codexVersion: status.codex?.version ?? null,
-            lastConnectedAt: Date.now()
-          };
+    const nextDevice: SavedDevice = {
+      id: existingDevice?.id ?? createSavedDeviceId(),
+      name:
+        options?.deviceName?.trim() ||
+        deviceName.trim() ||
+        existingDevice?.name ||
+        status.device?.defaultName ||
+        nextConnection.deviceId,
+      mode: "relay",
+      relayUrl: normalizeAgentUrl(nextConnection.relayUrl),
+      deviceId: nextConnection.deviceId,
+      hostname: status.device?.hostname ?? existingDevice?.hostname ?? null,
+      online: true,
+      codexVersion: status.codex?.version ?? null,
+      lastConnectedAt: Date.now()
+    };
     persistDevices([
       nextDevice,
       ...savedDevices.filter(
@@ -1539,9 +1446,6 @@ export function useWebConsoleController() {
           !isSameSavedDeviceConnection(device, nextDevice)
       )
     ]);
-    if (nextDevice.mode === "direct") {
-      window.localStorage.setItem(deviceNameStorageKey(nextDevice.agentUrl), nextDevice.name);
-    }
     return nextDevice;
   }
 
@@ -2316,9 +2220,7 @@ export function useWebConsoleController() {
       setError(
         formatConnectionError(
           err,
-          nextConnection.mode === "direct"
-            ? nextConnection.agentUrl
-            : nextConnection.relayUrl
+          nextConnection.relayUrl
         )
       );
     }
@@ -2425,11 +2327,14 @@ export function useWebConsoleController() {
     setAttachments((previous) => previous.filter((item) => item !== attachment));
   }
 
+  function dismissMigrationNotice() {
+    setMigrationNotice(null);
+  }
+
   return {
     activeMenu,
     activeSheet,
     activeTurn,
-    agentUrl,
     attachments,
     chatItems,
     clearThreadHoverPreview,
@@ -2463,6 +2368,7 @@ export function useWebConsoleController() {
     handleClearGoal,
     handleConnect,
     handleDismissComposerGoal,
+    dismissMigrationNotice,
     handleInterrupt,
     handleLoadDirectories,
     handlePauseGoal,
@@ -2474,6 +2380,7 @@ export function useWebConsoleController() {
     hasCurrentGoal,
     healthStatus,
     historyLoadingKey,
+    migrationNotice,
     initialGoal,
     initialTokenBudget,
     model,
@@ -2528,7 +2435,6 @@ export function useWebConsoleController() {
     streamStatus,
     submitComposer,
     threadHoverPreview,
-    token,
     togglePinnedThread,
     archiveThread,
     deleteSavedDevice,

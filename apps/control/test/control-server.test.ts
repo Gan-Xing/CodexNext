@@ -836,8 +836,33 @@ describe("control server relay", () => {
     expect(reject.status).toBe(401);
   });
 
-  it("allows relay full-access by default", async () => {
+  it("blocks relay full-access by default", async () => {
     const { baseUrl } = await startServer();
+    const session = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ownerToken}`
+      }
+    });
+    const payload = (await session.json()) as { sessionToken: string };
+    const response = await fetch(`${baseUrl}/api/relay/devices/device_1/sessions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${payload.sessionToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        cwd: "/tmp",
+        permissionMode: "full-access"
+      })
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it("allows relay full-access when explicitly enabled", async () => {
+    const { baseUrl } = await startServer({
+      allowRelayFullAccess: true
+    });
     const session = await fetch(`${baseUrl}/api/auth/session`, {
       method: "POST",
       headers: {

@@ -1,36 +1,35 @@
 # Security
 
-CodexNext now has two operating modes:
+CodexNext is a relay-first control plane for Codex app-server.
 
-- direct mode: local development and localhost-only use
-- relay mode: multi-device remote control through `apps/control`
+Normal product usage is relay-only:
 
-Codex already owns command approvals, sandbox mode, and final permission enforcement. CodexNext security is responsible for:
+- users log in to the Web app
+- browsers/mobile connect to Web + control
+- machines connect outbound to control as agents
+- devices are added through pairing
 
-- who may access the public Web entry
-- which devices are trusted to join the relay
-- how relay/browser/device tokens are stored
-- how remote and direct entry points are exposed
-- how administrative actions are audited
+Codex itself still owns command approvals, sandbox mode, and final permission enforcement. CodexNext security is responsible for the public entry, relay sessions, device trust, and audit boundaries.
 
-## Phase 3B Guarantees
+## Phase 3B-R Guarantees
 
-- Public relay Web requires login.
-- Web login uses an HttpOnly cookie.
-- `ownerToken` is server-only.
-- Browser relay sessions are short-lived and hashed in control memory.
-- Relay browser session tokens are not persisted to `localStorage`.
+- Public Web requires login and uses an HttpOnly cookie.
+- `/api/relay/session` returns `401` when not logged in.
+- `ownerToken` is server-only and never belongs in browser URLs, `localStorage`, or React state.
+- Relay browser sessions are short-lived and control stores only `tokenHash` with TTL, idle timeout, revoke, and prune.
+- Relay session tokens are not persisted in browser storage.
 - Pairing approve/reject requires authenticated user access.
-- Pairing requests are rate-limited, expire after 5 minutes, and are pruned.
-- Control registry stores `deviceTokenHash`, not plaintext `deviceToken`.
-- Revoked devices cannot reconnect.
-- Direct remote mode requires explicit `--allow-remote-direct`.
-- Relay `full-access` remains available in relay mode by default so Codex permissions stay consistent across direct and relay entry points. Set `CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1` only if you intentionally want an extra relay-only gate.
-- Audit logs record login, pairing, session issue/revoke, device connect/revoke, relay RPC status, and approval decisions.
+- Pairing codes are rate-limited, one-time, fingerprinted, and pruned after expiry.
+- Device registry stores `deviceTokenHash`, not plaintext `deviceToken`, and supports migration from older files.
+- Revoked devices cannot reconnect and any live socket is disconnected immediately.
+- Production CORS must use explicit allowlists; `origin: true` is not used.
+- Relay `full-access` is disabled by default and requires `CODEXNEXT_ALLOW_RELAY_FULL_ACCESS=1` on the control server.
+- Direct mode is hidden dev-only and requires `CODEXNEXT_ENABLE_DEV_DIRECT=1`.
+- Audit logs record security-relevant actions without recording raw tokens, prompts, assistant content, or full command output.
 
 ## Secrets And Tokens
 
-Never expose these values to browser JS, URLs, query strings, or shared screenshots:
+Never expose these values to browser JS, URLs, query strings, screenshots, or client-side storage:
 
 - `CODEXNEXT_OWNER_TOKEN`
 - raw relay `sessionToken`
@@ -40,31 +39,32 @@ Never expose these values to browser JS, URLs, query strings, or shared screensh
 Persisted files:
 
 - `~/.codexnext/device.json`
-  - contains device identity and local device token
-  - written with restrictive permissions
+  - local device identity and device token
+  - written with restrictive file permissions
 - `~/.codexnext/control-devices.json`
-  - stores trusted device metadata
-  - stores `deviceTokenHash`, not plaintext token
+  - trusted device metadata
+  - `deviceTokenHash`, not plaintext token
 - `~/.codexnext/control-audit.log`
 - `~/.codexnext/web-audit.log`
 
-## Direct Mode
-
-Direct mode is for local development.
-
-- Default bind host is loopback.
-- Any non-loopback bind requires `--allow-remote-direct`.
-- Direct mode still uses token + Origin checks.
-- Direct mode should not be your public/mobile deployment path.
-
 ## Relay Mode
 
-Relay mode is the recommended remote/mobile path.
+Relay mode is the supported product path.
 
 - browsers/mobile connect only to Web + control
 - machines connect outbound to control over Socket.IO
 - device trust is established through pairing
 - device revoke disconnects the current machine socket and blocks future reconnects
+- recent thread pages may be cached in control for faster switching, but the source of truth remains Codex app-server on the machine
+
+## Hidden Dev-Only Direct Mode
+
+Direct mode remains only as a local troubleshooting path for development.
+
+- it is not part of normal product UX
+- it requires `CODEXNEXT_ENABLE_DEV_DIRECT=1`
+- non-loopback binding still requires `--allow-remote-direct`
+- it does not print tokenized Web URLs
 
 ## Emergency Response
 
@@ -79,9 +79,9 @@ If a relay deployment looks compromised:
 
 ## Future Work
 
-Still out of scope in Phase 3B:
+Still out of scope:
 
-- OAuth or passkeys
+- OAuth / passkeys
 - multi-user SaaS authorization
 - end-to-end encrypted relay payloads
 - non-Codex agents

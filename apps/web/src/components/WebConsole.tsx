@@ -25,7 +25,6 @@ export function WebConsole() {
     activeMenu,
     activeSheet,
     activeTurn,
-    agentUrl,
     attachments,
     chatItems,
     clearThreadHoverPreview,
@@ -56,6 +55,7 @@ export function WebConsole() {
     handleClearGoal,
     handleConnect,
     handleDismissComposerGoal,
+    dismissMigrationNotice,
     handleInterrupt,
     handleLoadDirectories,
     handleRemoveAttachment,
@@ -63,6 +63,7 @@ export function WebConsole() {
     hasCurrentGoal,
     healthStatus,
     historyLoadingKey,
+    migrationNotice,
     initialGoal,
     initialTokenBudget,
     model,
@@ -109,7 +110,6 @@ export function WebConsole() {
     streamStatus,
     submitComposer,
     threadHoverPreview,
-    token,
     togglePinnedThread,
     archiveThread,
     deleteSavedDevice,
@@ -386,7 +386,7 @@ export function WebConsole() {
             devicePresence={devicePresence}
             deviceName={deviceName}
             healthStatus={healthStatus}
-            relayEnabled={relayEnabled}
+            migrationNotice={migrationNotice}
             relayConnectionInfo={relayConnectionInfo}
             savedDevices={savedDevices}
             selectedDeviceId={selectedDeviceId}
@@ -394,6 +394,7 @@ export function WebConsole() {
             onClose={closeActiveSheet}
             onConnect={handleConnect}
             onDeleteDevice={deleteSavedDevice}
+            onDismissMigrationNotice={dismissMigrationNotice}
             onRefreshRelayDevices={refreshRelayDevices}
           />
         ) : null}

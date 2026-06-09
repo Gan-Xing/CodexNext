@@ -2,7 +2,7 @@ import { mkdtempSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertAllowedDirectHost } from "../src/commands/serve.js";
+import { assertAllowedDirectHost, assertDevDirectEnabled } from "../src/commands/serve.js";
 import { readOrCreateDeviceIdentity } from "../src/relay/device-identity.js";
 
 const originalHome = process.env.HOME;
@@ -17,6 +17,13 @@ describe("agent security guards", () => {
       /allow-remote-direct/
     );
     expect(() => assertAllowedDirectHost("127.0.0.1", false)).not.toThrow();
+  });
+
+  it("requires an explicit env opt-in for direct dev mode", () => {
+    delete process.env.CODEXNEXT_ENABLE_DEV_DIRECT;
+    expect(() => assertDevDirectEnabled()).toThrow(/CODEXNEXT_ENABLE_DEV_DIRECT=1/);
+    process.env.CODEXNEXT_ENABLE_DEV_DIRECT = "1";
+    expect(() => assertDevDirectEnabled()).not.toThrow();
   });
 
   it("writes device identity with restrictive permissions", async () => {

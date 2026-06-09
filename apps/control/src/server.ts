@@ -40,7 +40,11 @@ import {
   DeviceRegistry,
   type RegisteredMachineRecord
 } from "./device-registry.js";
-import { SidebarPrefsStore } from "./sidebar-prefs-store.js";
+import {
+  SidebarPrefsStore,
+  type StoredProjectSidebarPrefs,
+  type StoredThreadSidebarPrefs
+} from "./sidebar-prefs-store.js";
 
 interface RegisteredDevice {
   info: RelayDeviceRecord;
@@ -762,8 +766,12 @@ export function createControlServer(
       thread?: unknown;
     };
     const prefs = sidebarPrefs.upsert(params.deviceId, {
-      project: body.project,
-      thread: body.thread
+      ...(body.project !== undefined
+        ? { project: body.project as StoredProjectSidebarPrefs }
+        : {}),
+      ...(body.thread !== undefined
+        ? { thread: body.thread as StoredThreadSidebarPrefs }
+        : {})
     });
     audit.write({
       action: "sidebar-prefs.write",
@@ -1000,12 +1008,12 @@ export function createControlServer(
     }
     const { deviceId } = request.params as { deviceId: string };
     const params = {
-      id: query.id,
-      cwd: query.cwd,
-      cursor: query.cursor,
-      limit: query.limit ? Number(query.limit) : undefined,
-      sortDirection: query.sortDirection,
-      itemsView: query.itemsView
+      ...(query.id ? { id: query.id } : {}),
+      ...(query.cwd ? { cwd: query.cwd } : {}),
+      ...(query.cursor ? { cursor: query.cursor } : {}),
+      ...(query.limit ? { limit: Number(query.limit) } : {}),
+      ...(query.sortDirection ? { sortDirection: query.sortDirection } : {}),
+      ...(query.itemsView ? { itemsView: query.itemsView } : {})
     };
     try {
       const cached = readCachedHistoryPage(devices.get(deviceId) ?? null, params);
@@ -1319,13 +1327,7 @@ function resolveRelayFullAccessSetting(
   if (explicit !== undefined) {
     return explicit;
   }
-  if (process.env.CODEXNEXT_DISABLE_RELAY_FULL_ACCESS === "1") {
-    return false;
-  }
-  if (process.env.CODEXNEXT_ALLOW_RELAY_FULL_ACCESS === "0") {
-    return false;
-  }
-  return true;
+  return process.env.CODEXNEXT_ALLOW_RELAY_FULL_ACCESS === "1";
 }
 
 function pruneBrowserSessions(
