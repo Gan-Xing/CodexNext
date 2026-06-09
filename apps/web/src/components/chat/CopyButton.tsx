@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { copyText } from "../../lib/copy-text";
 
 export function CopyButton(props: {
   className?: string;
@@ -10,13 +11,13 @@ export function CopyButton(props: {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(props.value);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1_400);
-    } catch {
+    const success = await copyText(props.value);
+    if (!success) {
       setCopied(false);
+      return;
     }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1_400);
   }
 
   return (

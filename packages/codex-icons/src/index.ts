@@ -6,6 +6,7 @@ export type CodexUiIconName =
   | "back"
   | "browserUse"
   | "check"
+  | "copy"
   | "chevronDown"
   | "chevronLeft"
   | "chevronRight"
@@ -69,6 +70,7 @@ const codexUiIconSpecs = {
   back: { asset: "arrow-left-cy8p3y0c" },
   browserUse: { asset: "browser-use-b5flzyg6" },
   check: { asset: "check-md-bzlzxdm7" },
+  copy: { asset: "copy-d11cb-0i" },
   chevronDown: { asset: "chevron-aeenlp4g" },
   chevronLeft: { asset: "chevron-right-cqaqxhbx", rotateDegrees: 180 },
   chevronRight: { asset: "chevron-right-cqaqxhbx" },

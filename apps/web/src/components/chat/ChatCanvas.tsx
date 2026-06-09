@@ -7,8 +7,10 @@ import type { ResumeState } from "../../features/chat/chat-state";
 import { CommandOutputBlock } from "./CommandOutputBlock";
 import { DiffBlock } from "./DiffBlock";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { MessageCopyButton } from "./MessageCopyButton";
 import { PlanBlock } from "./PlanBlock";
 import { SystemStatusRow } from "./SystemStatusRow";
+import { ThinkingRow } from "./ThinkingRow";
 
 export function ChatCanvas(props: {
   active: boolean;
@@ -31,6 +33,8 @@ export function ChatCanvas(props: {
     [props.items]
   );
   const hiddenCount = Math.max(0, props.items.length - visibleItems.length);
+  const activeTurnId = props.active ? props.session.activeTurnId ?? null : null;
+  const showThinkingRow = shouldShowThinkingRow(visibleItems, activeTurnId, props.active);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -99,9 +103,20 @@ export function ChatCanvas(props: {
             <div className="cn-history-fold-chip">已折叠 {hiddenCount} 条更早消息</div>
           ) : null}
           <div className="cn-message-list">
-            {visibleItems.map((item) => (
-              <ChatMessageRow key={item.id} item={item} />
-            ))}
+            {visibleItems.flatMap((item) => {
+              const rows = [<ChatMessageRow key={item.id} item={item} />];
+              if (item.role === "user" && item.status === "failed") {
+                rows.push(
+                  <ThinkingRow
+                    key={`${item.id}:error`}
+                    tone="error"
+                    text={item.error ?? "发送失败"}
+                  />
+                );
+              }
+              return rows;
+            })}
+            {showThinkingRow ? <ThinkingRow key="thinking" text="正在思考" /> : null}
           </div>
         </>
       ) : null}
@@ -138,22 +153,10 @@ const ChatMessageRow = memo(function ChatMessageRow(props: {
     <article className={`cn-message ${messageClass(props.item)}`}>
       {props.item.role === "user" ? (
         <div className="cn-message-user-shell">
-          <MarkdownMessage text={props.item.text} />
-          {props.item.status && props.item.status !== "sent" ? (
-            props.item.status === "sending" ? (
-              <span className="cn-message-status sending" aria-label="发送中">
-                <span className="cn-pending-dots">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-              </span>
-            ) : (
-              <span className={`cn-message-status ${props.item.status}`}>
-                {statusCopy(props.item)}
-              </span>
-            )
-          ) : null}
+          <div className="cn-message-user-bubble">
+            <MarkdownMessage text={props.item.text} />
+          </div>
+          {props.item.status !== "sending" ? <MessageCopyButton value={props.item.text} /> : null}
         </div>
       ) : props.item.role === "assistant" ? (
         <MarkdownMessage text={props.item.text} />
@@ -169,13 +172,6 @@ const ChatMessageRow = memo(function ChatMessageRow(props: {
     </article>
   );
 });
-
-function statusCopy(item: ChatItem): string {
-  if (item.status === "failed") {
-    return item.error ? `发送失败 · ${item.error}` : "发送失败";
-  }
-  return "";
-}
 
 function messageClass(item: ChatItem): string {
   if (item.role === "assistant") {
@@ -194,4 +190,40 @@ function messageClass(item: ChatItem): string {
     return "user failed";
   }
   return "user";
+}
+
+function shouldShowThinkingRow(
+  items: ChatItem[],
+  activeTurnId: string | null,
+  active: boolean
+): boolean {
+  if (!active) {
+    return false;
+  }
+  const activeItems =
+    activeTurnId == null
+      ? items.slice(-4)
+      : items.filter((item) => item.turnId === activeTurnId);
+
+  if (activeItems.length === 0) {
+    return true;
+  }
+
+  const hasError = activeItems.some(
+    (item) =>
+      item.status === "failed" ||
+      (item.role === "system" && item.meta?.kind === "error")
+  );
+  if (hasError) {
+    return false;
+  }
+
+  return !activeItems.some(
+    (item) =>
+      (item.role === "assistant" ||
+        item.role === "command" ||
+        item.role === "diff" ||
+        item.role === "plan") &&
+      item.text.trim().length > 0
+  );
 }
