@@ -9,6 +9,8 @@ import type {
   ThreadGoalGetResponse,
   ThreadGoalSetParams,
   ThreadGoalSetResponse,
+  ThreadArchiveParams,
+  ThreadArchiveResponse,
   ThreadLoadedListResponse,
   ThreadListParams,
   ThreadListResponse,
@@ -128,6 +130,15 @@ export class CodexAppServerClient {
   public threadResume(params: ThreadResumeParams): Promise<ThreadResumeResponse> {
     return this.rpc.request<ThreadResumeResponse>(
       CodexClientMethod.ThreadResume,
+      params
+    );
+  }
+
+  public threadArchive(
+    params: ThreadArchiveParams
+  ): Promise<ThreadArchiveResponse> {
+    return this.rpc.request<ThreadArchiveResponse>(
+      CodexClientMethod.ThreadArchive,
       params
     );
   }

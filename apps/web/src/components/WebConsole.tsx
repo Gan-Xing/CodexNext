@@ -103,11 +103,7 @@ export function WebConsole() {
     submitComposer,
     threadHoverPreview,
     token,
-    togglePinnedProject,
     togglePinnedThread,
-    renameProject,
-    archiveProject,
-    removeProject,
     archiveThread,
     deleteSavedDevice,
     canLoadOlderHistory,
@@ -222,13 +218,9 @@ export function WebConsole() {
                   group={group}
                   historyLoadingKey={historyLoadingKey}
                   onArchiveThread={archiveThread}
-                  onArchiveProject={archiveProject}
                   onHideThreadPreview={clearThreadHoverPreview}
-                  onRemoveProject={removeProject}
-                  onRenameProject={renameProject}
                   onShowThreadPreview={showThreadHoverPreview}
                   onStartProjectSession={startProjectSession}
-                  onTogglePinnedProject={togglePinnedProject}
                   onTogglePinnedThread={togglePinnedThread}
                   onSelectHistory={(entry) => void selectHistory(entry)}
                   onSelectSession={selectSession}

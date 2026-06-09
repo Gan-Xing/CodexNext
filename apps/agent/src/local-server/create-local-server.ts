@@ -150,6 +150,11 @@ async function handleRequest(
           itemsView: url.searchParams.get("itemsView")?.trim() || undefined
         }));
         return;
+      case "codex-history.archive": {
+        const body = await readJson(request);
+        sendJson(response, 200, await runtime.invoke(RelayMethod.CodexHistoryArchive, body));
+        return;
+      }
       case "codex-history.resume": {
         const body = LocalResumeSessionSchema.parse(await readJson(request));
         sendJson(response, 201, await runtime.invoke(RelayMethod.CodexHistoryResume, body));
@@ -251,6 +256,7 @@ type Route =
   | { name: "codex-history.loaded"; public: false; params: Record<string, never> }
   | { name: "codex-history.detail"; public: false; params: Record<string, never> }
   | { name: "codex-history.turns"; public: false; params: Record<string, never> }
+  | { name: "codex-history.archive"; public: false; params: Record<string, never> }
   | { name: "codex-history.resume"; public: false; params: Record<string, never> }
   | { name: "sessions.list"; public: false; params: Record<string, never> }
   | { name: "sessions.create"; public: false; params: Record<string, never> }
@@ -304,6 +310,9 @@ function matchRoute(method: string, pathname: string): Route | null {
   }
   if (method === "GET" && pathname === "/api/codex-history/turns") {
     return { name: "codex-history.turns", public: false, params: {} };
+  }
+  if (method === "POST" && pathname === "/api/codex-history/archive") {
+    return { name: "codex-history.archive", public: false, params: {} };
   }
   if (method === "POST" && pathname === "/api/codex-history/resume") {
     return { name: "codex-history.resume", public: false, params: {} };

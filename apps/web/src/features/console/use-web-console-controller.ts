@@ -5,6 +5,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type { LocalReasoningEffort, ThreadGoal } from "@codexnext/protocol";
 import {
   agentFetch,
+  archiveCodexHistory,
   createSession,
   getLoadedCodexThreads,
   getCodexHistoryTurns,
@@ -77,7 +78,6 @@ import {
 } from "../devices/device-utils";
 import {
   codexHistoryKey,
-  getProjectSidebarPrefs,
   getThreadSidebarPrefs,
   groupProjectThreads,
   historyPreviewSessionId,
@@ -88,18 +88,12 @@ import {
   makeHistoryPreviewSession,
   makePendingSession,
   pendingSessionId,
-  projectSidebarPrefsStorageKey,
+  relayThreadPrefsScope,
   readThreadSidebarPrefs,
-  readProjectSidebarPrefs,
-  sanitizeProjectSidebarPrefs,
   sanitizeThreadSidebarPrefs,
   sessionSubtitle,
   sessionTitle,
-  shortPath,
-  threadPrefsScope,
   threadSidebarPrefsStorageKey,
-  type ProjectSidebarPrefs,
-  type ProjectThreadGroupData,
   type ThreadListItem,
   type ThreadSidebarPrefs
 } from "../sessions/session-utils";
@@ -184,7 +178,6 @@ export function useWebConsoleController() {
   const [autoConnect, setAutoConnect] = useState<AgentConnection | null>(null);
   const [savedDevices, setSavedDevices] = useState<SavedDevice[]>([]);
   const [threadSidebarPrefs, setThreadSidebarPrefs] = useState<Record<string, ThreadSidebarPrefs>>({});
-  const [projectSidebarPrefs, setProjectSidebarPrefs] = useState<Record<string, ProjectSidebarPrefs>>({});
   const [devicePresence, setDevicePresence] = useState<Record<string, DevicePresenceState>>({});
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [deviceName, setDeviceName] = useState("");
@@ -272,14 +265,17 @@ export function useWebConsoleController() {
       streamStatus !== "disconnected" &&
       streamStatus !== "error"
   );
+  const sidebarPrefsScopeKey =
+    connection.mode === "relay"
+      ? relayThreadPrefsScope(connection.relayUrl, connection.deviceId)
+      : agentUrl;
   const activeTurn = Boolean(currentSession?.activeTurnId);
   const currentGoal = currentSession?.goal ?? null;
   const hasCurrentGoal = Boolean(currentGoal?.objective?.trim());
   const selectedModel = modelOptions.find((option) => option.value === model) ?? modelOptions[0]!;
   const selectedReasoning =
     reasoningOptions.find((option) => option.value === reasoningEffort) ?? reasoningOptions[3]!;
-  const activeThreadPrefs = getThreadSidebarPrefs(threadSidebarPrefs, agentUrl);
-  const activeProjectPrefs = getProjectSidebarPrefs(projectSidebarPrefs, agentUrl);
+  const activeThreadPrefs = getThreadSidebarPrefs(threadSidebarPrefs, sidebarPrefsScopeKey);
   const relayEnabled =
     RELAY_CONFIGURED ||
     Boolean(relayBootstrap) ||
@@ -324,7 +320,6 @@ export function useWebConsoleController() {
     codexHistory,
     chatItems,
     activeThreadPrefs,
-    activeProjectPrefs,
     currentSessionId,
     selectedHistoryKey
   );
@@ -457,13 +452,11 @@ export function useWebConsoleController() {
     const storedDevices = readSavedDevices();
     const storedSidebarWidth = readSidebarWidth(clampSidebarWidth);
     const storedThreadPrefs = readThreadSidebarPrefs();
-    const storedProjectPrefs = readProjectSidebarPrefs();
     setSavedDevices(storedDevices);
     if (storedSidebarWidth !== null) {
       setSidebarWidth(storedSidebarWidth);
     }
     setThreadSidebarPrefs(storedThreadPrefs);
-    setProjectSidebarPrefs(storedProjectPrefs);
     setDeviceWorkspaces((previous) => {
       const next = { ...previous };
       for (const device of storedDevices) {
@@ -813,42 +806,19 @@ export function useWebConsoleController() {
     });
   }
 
-  function persistProjectSidebarPrefs(
-    updater:
-      | Record<string, ProjectSidebarPrefs>
-      | ((previous: Record<string, ProjectSidebarPrefs>) => Record<string, ProjectSidebarPrefs>)
-  ) {
-    setProjectSidebarPrefs((previous) => {
-      const next = resolveStateUpdater(previous, updater);
-      window.localStorage.setItem(projectSidebarPrefsStorageKey, JSON.stringify(next));
-      return next;
-    });
-  }
-
   function updateThreadSidebarPrefs(
-    scopeAgentUrl: string,
+    scopeKey: string,
     updater: (prefs: ThreadSidebarPrefs) => ThreadSidebarPrefs
   ) {
-    const scope = threadPrefsScope(scopeAgentUrl);
+    const scope = scopeKey;
     persistThreadSidebarPrefs((previous) => ({
       ...previous,
-      [scope]: sanitizeThreadSidebarPrefs(updater(getThreadSidebarPrefs(previous, scopeAgentUrl)))
-    }));
-  }
-
-  function updateProjectSidebarPrefs(
-    scopeAgentUrl: string,
-    updater: (prefs: ProjectSidebarPrefs) => ProjectSidebarPrefs
-  ) {
-    const scope = threadPrefsScope(scopeAgentUrl);
-    persistProjectSidebarPrefs((previous) => ({
-      ...previous,
-      [scope]: sanitizeProjectSidebarPrefs(updater(getProjectSidebarPrefs(previous, scopeAgentUrl)))
+      [scope]: sanitizeThreadSidebarPrefs(updater(previous[scope] ?? { pinned: [] }))
     }));
   }
 
   function togglePinnedThread(threadId: string) {
-    updateThreadSidebarPrefs(agentUrl, (prefs) => ({
+    updateThreadSidebarPrefs(sidebarPrefsScopeKey, (prefs) => ({
       ...prefs,
       pinned: prefs.pinned.includes(threadId)
         ? prefs.pinned.filter((value) => value !== threadId)
@@ -856,27 +826,49 @@ export function useWebConsoleController() {
     }));
   }
 
-  function archiveThread(item: ThreadListItem) {
-    updateThreadSidebarPrefs(agentUrl, (prefs) => ({
-      pinned: prefs.pinned.filter((value) => value !== item.threadId),
-      archived: [item.threadId, ...prefs.archived.filter((value) => value !== item.threadId)]
-    }));
-    if (item.kind === "session") {
-      if (currentSessionId === item.id) {
-        patchActiveWorkspace((workspace) => ({ ...workspace, currentSessionId: null }));
-      }
-      patchActiveWorkspace((workspace) => ({
-        ...workspace,
-        sessions: workspace.sessions.filter((session) => session.sessionId !== item.id)
+  async function archiveThread(item: ThreadListItem) {
+    try {
+      await archiveCodexHistory(connection, { id: item.threadId });
+      historyPageCacheRef.current.delete(item.id);
+      patchActiveWorkspace((workspace) => {
+        const nextSessions = workspace.sessions.filter(
+          (session) => session.threadId !== item.threadId
+        );
+        const nextHistory = workspace.codexHistory.filter((entry) => entry.id !== item.threadId);
+        const nextHistoryPages = { ...workspace.historyPages };
+        const nextOrigins = { ...workspace.sessionHistoryOrigins };
+
+        for (const session of workspace.sessions) {
+          if (session.threadId !== item.threadId) {
+            continue;
+          }
+          delete nextHistoryPages[session.sessionId];
+          delete nextOrigins[session.sessionId];
+        }
+
+        const selectedSessionMatches = workspace.sessions.some(
+          (session) =>
+            session.sessionId === workspace.currentSessionId &&
+            session.threadId === item.threadId
+        );
+
+        return {
+          ...workspace,
+          currentSessionId: selectedSessionMatches ? null : workspace.currentSessionId,
+          selectedHistoryKey:
+            workspace.selectedHistoryKey === item.id ? null : workspace.selectedHistoryKey,
+          sessions: nextSessions,
+          codexHistory: nextHistory,
+          historyPages: nextHistoryPages,
+          sessionHistoryOrigins: nextOrigins,
+          loadedThreadIds: workspace.loadedThreadIds.filter((value) => value !== item.threadId)
+        };
+      });
+      updateThreadSidebarPrefs(sidebarPrefsScopeKey, (prefs) => ({
+        pinned: prefs.pinned.filter((value) => value !== item.threadId)
       }));
-      return;
-    }
-    if (selectedHistoryKey === item.id) {
-      patchActiveWorkspace((workspace) => ({
-        ...workspace,
-        currentSessionId: null,
-        selectedHistoryKey: null
-      }));
+    } catch (archiveError) {
+      setError(formatError(archiveError));
     }
   }
 
@@ -893,101 +885,6 @@ export function useWebConsoleController() {
     setActiveSheet(null);
     setActiveMenu(null);
     revealMainOnMobile();
-  }
-
-  function togglePinnedProject(projectCwd: string) {
-    updateProjectSidebarPrefs(agentUrl, (prefs) => ({
-      ...prefs,
-      pinned: prefs.pinned.includes(projectCwd)
-        ? prefs.pinned.filter((value) => value !== projectCwd)
-        : [projectCwd, ...prefs.pinned.filter((value) => value !== projectCwd)]
-    }));
-  }
-
-  function renameProject(group: ProjectThreadGroupData) {
-    const nextName = window.prompt("重命名项目", group.name);
-    if (nextName === null) {
-      return;
-    }
-    const trimmed = nextName.trim();
-    updateProjectSidebarPrefs(agentUrl, (prefs) => {
-      const renamed = { ...prefs.renamed };
-      if (!trimmed || trimmed === shortPath(group.cwd)) {
-        delete renamed[group.cwd];
-      } else {
-        renamed[group.cwd] = trimmed;
-      }
-      return {
-        ...prefs,
-        renamed
-      };
-    });
-  }
-
-  function archiveProject(group: ProjectThreadGroupData) {
-    const threadIds = group.items.map((item) => item.threadId);
-    const sessionIds = new Set(group.sessions.map((session) => session.sessionId));
-    const historyPreviewIds = new Set(group.entries.map(historyPreviewSessionId));
-    const clearsSelection = group.items.some((item) => item.selected);
-
-    updateThreadSidebarPrefs(agentUrl, (prefs) => ({
-      pinned: prefs.pinned.filter((value) => !threadIds.includes(value)),
-      archived: [...new Set([...threadIds, ...prefs.archived])]
-    }));
-
-    patchActiveWorkspace((workspace) => ({
-      ...workspace,
-      currentSessionId:
-        clearsSelection && workspace.currentSessionId && sessionIds.has(workspace.currentSessionId)
-          ? null
-          : workspace.currentSessionId && historyPreviewIds.has(workspace.currentSessionId)
-            ? null
-            : workspace.currentSessionId,
-      selectedHistoryKey:
-        clearsSelection && group.entries.some((entry) => codexHistoryKey(entry) === workspace.selectedHistoryKey)
-          ? null
-          : workspace.selectedHistoryKey,
-      sessions: workspace.sessions.filter(
-        (session) =>
-          !sessionIds.has(session.sessionId) && !historyPreviewIds.has(session.sessionId)
-      )
-    }));
-  }
-
-  function removeProject(group: ProjectThreadGroupData) {
-    const sessionIds = new Set(group.sessions.map((session) => session.sessionId));
-    const historyPreviewIds = new Set(group.entries.map(historyPreviewSessionId));
-    const containsSelectedHistory = group.entries.some(
-      (entry) => codexHistoryKey(entry) === selectedHistoryKey
-    );
-    const containsSelectedSession = group.sessions.some(
-      (session) => session.sessionId === currentSessionId
-    );
-
-    updateProjectSidebarPrefs(agentUrl, (prefs) => {
-      const renamed = { ...prefs.renamed };
-      delete renamed[group.cwd];
-      return {
-        hidden: [group.cwd, ...prefs.hidden.filter((value) => value !== group.cwd)],
-        pinned: prefs.pinned.filter((value) => value !== group.cwd),
-        renamed
-      };
-    });
-
-    patchActiveWorkspace((workspace) => ({
-      ...workspace,
-      cwd: workspace.cwd === group.cwd ? "" : workspace.cwd,
-      currentSessionId:
-        containsSelectedSession ||
-        (workspace.currentSessionId ? historyPreviewIds.has(workspace.currentSessionId) : false)
-          ? null
-          : workspace.currentSessionId,
-      selectedHistoryKey: containsSelectedHistory ? null : workspace.selectedHistoryKey,
-      sessions: workspace.sessions.filter(
-        (session) =>
-          !sessionIds.has(session.sessionId) && !historyPreviewIds.has(session.sessionId)
-      )
-    }));
   }
 
   const clearThreadHoverPreview = useCallback(() => setThreadHoverPreview(null), []);
@@ -2309,11 +2206,7 @@ export function useWebConsoleController() {
     submitComposer,
     threadHoverPreview,
     token,
-    togglePinnedProject,
     togglePinnedThread,
-    renameProject,
-    archiveProject,
-    removeProject,
     archiveThread,
     deleteSavedDevice,
     visibleChatItems

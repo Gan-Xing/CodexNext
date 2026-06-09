@@ -50,6 +50,7 @@ export interface ManagedCodexClient {
   initialized: CodexAppServerClient["initialized"];
   threadStart: CodexAppServerClient["threadStart"];
   threadResume: CodexAppServerClient["threadResume"];
+  threadArchive: CodexAppServerClient["threadArchive"];
   threadUnarchive: CodexAppServerClient["threadUnarchive"];
   threadList: CodexAppServerClient["threadList"];
   threadLoadedList: CodexAppServerClient["threadLoadedList"];
@@ -165,6 +166,22 @@ export class SessionManager {
     params: ThreadTurnsListParams
   ): Promise<ThreadTurnsListResponse> {
     return this.withTemporaryClient((client) => client.threadTurnsList(params));
+  }
+
+  public async archiveThread(threadId: string): Promise<void> {
+    const normalizedThreadId = threadId.trim();
+    if (!normalizedThreadId) {
+      throw new Error("Missing thread id");
+    }
+
+    await this.withTemporaryClient((client) =>
+      client.threadArchive({ threadId: normalizedThreadId })
+    );
+
+    const matchingSessions = [...this.sessions.values()].filter(
+      (session) => session.threadId === normalizedThreadId
+    );
+    await Promise.all(matchingSessions.map((session) => this.closeSession(session)));
   }
 
   public async startSession(
@@ -595,19 +612,7 @@ export class SessionManager {
   }
 
   public async closeAll(): Promise<void> {
-    await Promise.all(
-      [...this.sessions.values()].map(async (session) => {
-        session.removeNotificationListener();
-        await session.client.close();
-        this.options.eventStore.append({
-          type: LocalEventType.SessionClosed,
-          sessionId: session.sessionId,
-          threadId: session.threadId,
-          payload: toSummary(session)
-        });
-      })
-    );
-    this.sessions.clear();
+    await Promise.all([...this.sessions.values()].map((session) => this.closeSession(session)));
   }
 
   private requireSession(sessionId: string): LocalSession {
@@ -634,6 +639,18 @@ export class SessionManager {
     } finally {
       await client.close();
     }
+  }
+
+  private async closeSession(session: LocalSession): Promise<void> {
+    this.sessions.delete(session.sessionId);
+    session.removeNotificationListener();
+    await session.client.close();
+    this.options.eventStore.append({
+      type: LocalEventType.SessionClosed,
+      sessionId: session.sessionId,
+      threadId: session.threadId,
+      payload: toSummary(session)
+    });
   }
 
   private handleNotification(

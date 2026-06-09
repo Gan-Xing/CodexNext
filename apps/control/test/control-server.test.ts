@@ -305,6 +305,49 @@ describe("control server relay", () => {
     expect(callCount).toBe(1);
   });
 
+  it("archives a thread over relay HTTP", async () => {
+    const { baseUrl } = await startServer();
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    machine.on("rpc:request", (payload, ack) => {
+      if (payload.method !== RelayMethodValue.CodexHistoryArchive) {
+        return;
+      }
+      expect(payload.params).toEqual({ id: "thread_1" });
+      ack({
+        ok: true,
+        result: {}
+      });
+    });
+
+    const response = await fetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/archive`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ownerToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ id: "thread_1" })
+      }
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({});
+  });
+
   it("accepts large relay rpc payloads for history detail", async () => {
     const { baseUrl } = await startServer();
     const machine = createMachineSocket(baseUrl, "device_1", {

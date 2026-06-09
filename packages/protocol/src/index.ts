@@ -52,6 +52,7 @@ export const CodexClientMethod = {
   Initialized: "initialized",
   ThreadStart: "thread/start",
   ThreadResume: "thread/resume",
+  ThreadArchive: "thread/archive",
   ThreadUnarchive: "thread/unarchive",
   ThreadList: "thread/list",
   ThreadLoadedList: "thread/loaded/list",
@@ -246,6 +247,12 @@ export interface ThreadResumeResponse extends ThreadStartResponse {
   reasoningEffort?: LocalReasoningEffort | "none" | "minimal" | null;
   instructionSources?: string[];
 }
+
+export interface ThreadArchiveParams {
+  threadId: string;
+}
+
+export type ThreadArchiveResponse = Record<string, never>;
 
 export interface ThreadUnarchiveParams {
   threadId: string;
@@ -819,6 +826,7 @@ export const RelayMethod = {
   CodexHistoryLoaded: "codexHistory.loaded",
   CodexHistoryDetail: "codexHistory.detail",
   CodexHistoryTurns: "codexHistory.turns",
+  CodexHistoryArchive: "codexHistory.archive",
   CodexHistoryResume: "codexHistory.resume"
 } as const;
 

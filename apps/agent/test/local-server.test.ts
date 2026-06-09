@@ -674,6 +674,7 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
   public lastTurnStartInput: LocalSendMessageInput | null = null;
   public threadStartParams: unknown[] = [];
   public threadResumeParams: unknown[] = [];
+  public threadArchiveParams: unknown[] = [];
   public threadUnarchiveParams: unknown[] = [];
   public threadListParams: unknown[] = [];
   public threadLoadedListCalls = 0;
@@ -749,6 +750,13 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
     params: Parameters<ManagedCodexClient["threadUnarchive"]>[0]
   ) => {
     this.threadUnarchiveParams.push(params);
+    return {};
+  };
+
+  public threadArchive = async (
+    params: Parameters<ManagedCodexClient["threadArchive"]>[0]
+  ) => {
+    this.threadArchiveParams.push(params);
     return {};
   };
 

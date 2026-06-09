@@ -139,6 +139,16 @@ export function getCodexHistoryTurns(
   return agentFetch(connection, `/api/codex-history/turns?${query.toString()}`);
 }
 
+export function archiveCodexHistory(
+  connection: AgentConnection,
+  input: { id: string }
+): Promise<Record<string, never>> {
+  return agentFetch(connection, "/api/codex-history/archive", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
 export function resumeCodexHistory(
   connection: AgentConnection,
   input: {
@@ -239,6 +249,10 @@ export function resolveAgentUrl(connection: AgentConnection, path: string): URL 
   }
   if (base.pathname === "/api/codex-history/turns") {
     base.pathname = `${prefix}/codex-history/turns`;
+    return base;
+  }
+  if (base.pathname === "/api/codex-history/archive") {
+    base.pathname = `${prefix}/codex-history/archive`;
     return base;
   }
   if (base.pathname === "/api/codex-history/resume") {

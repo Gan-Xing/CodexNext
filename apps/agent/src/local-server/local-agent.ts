@@ -129,6 +129,8 @@ export function createLocalAgentRuntime(
           return readCodexHistoryDetail(params, sessionManager);
         case RelayMethodValue.CodexHistoryTurns:
           return listCodexHistoryTurns(params, sessionManager);
+        case RelayMethodValue.CodexHistoryArchive:
+          return archiveCodexHistoryThread(params, sessionManager);
         case RelayMethodValue.CodexHistoryResume: {
           const body = LocalResumeSessionSchema.parse(params ?? {});
           const historyEntry = await readCodexHistoryEntryById(body.id, sessionManager);
@@ -330,6 +332,17 @@ async function listCodexHistoryTurns(
   });
 
   return historyPageFromTurns({ entry, turnsPage, sortDirection });
+}
+
+async function archiveCodexHistoryThread(
+  params: unknown,
+  sessionManager: SessionManager
+): Promise<Record<string, never>> {
+  if (!isPlainObject(params) || typeof params.id !== "string" || !params.id.trim()) {
+    throw new Error("Missing codex thread id");
+  }
+  await sessionManager.archiveThread(params.id);
+  return {};
 }
 
 async function readCodexHistoryDetailById(

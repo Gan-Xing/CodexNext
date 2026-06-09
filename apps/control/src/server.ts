@@ -987,6 +987,39 @@ export function createControlServer(
     }
   });
 
+  app.post("/api/relay/devices/:deviceId/codex-history/archive", async (request, reply) => {
+    if (!requireUserAccess(request, reply)) {
+      return { error: "Missing or invalid user token" };
+    }
+    const { deviceId } = request.params as { deviceId: string };
+    const body = isRecordLike(request.body) ? request.body : {};
+    try {
+      const result = await invokeMachineRpc(
+        devices,
+        deviceId,
+        RelayMethodValue.CodexHistoryArchive,
+        body,
+        rpcTimeoutMs
+      );
+      const threadId = typeof body.id === "string" ? body.id.trim() : "";
+      const device = devices.get(deviceId);
+      if (device && threadId) {
+        device.loadedThreadIds.delete(threadId);
+        dropCachedHistoryPagesForThread(device, threadId);
+      }
+      audit.write({
+        action: "relay.rpc",
+        at: Date.now(),
+        deviceId,
+        method: RelayMethodValue.CodexHistoryArchive,
+        outcome: "success"
+      });
+      return result;
+    } catch (error) {
+      return replyWithRpcError(reply, audit, deviceId, RelayMethodValue.CodexHistoryArchive, error);
+    }
+  });
+
   app.post("/api/relay/devices/:deviceId/codex-history/resume", async (request, reply) => {
     if (!requireUserAccess(request, reply)) {
       return { error: "Missing or invalid user token" };

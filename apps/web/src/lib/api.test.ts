@@ -40,6 +40,11 @@ describe("relay api url mapping", () => {
     ).toBe(
       "http://127.0.0.1:3002/api/relay/devices/device_1/codex-history/loaded"
     );
+    expect(
+      resolveAgentUrl(relayConnection, "/api/codex-history/archive").toString()
+    ).toBe(
+      "http://127.0.0.1:3002/api/relay/devices/device_1/codex-history/archive"
+    );
   });
 
   it("maps approval and goal paths without changing the tail segments", () => {
