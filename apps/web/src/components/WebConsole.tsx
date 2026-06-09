@@ -77,6 +77,10 @@ export function WebConsole() {
     relayEnabled,
     relayConnectionInfo,
     refreshRelayDevices,
+    togglePinnedProject,
+    renameProject,
+    archiveProject,
+    removeProject,
     savedDevices,
     startProjectSession,
     selectCwd,
@@ -229,9 +233,13 @@ export function WebConsole() {
                   group={group}
                   historyLoadingKey={historyLoadingKey}
                   onArchiveThread={archiveThread}
+                  onArchiveProject={archiveProject}
                   onHideThreadPreview={clearThreadHoverPreview}
+                  onRemoveProject={removeProject}
+                  onRenameProject={renameProject}
                   onShowThreadPreview={showThreadHoverPreview}
                   onStartProjectSession={startProjectSession}
+                  onTogglePinnedProject={togglePinnedProject}
                   onTogglePinnedThread={togglePinnedThread}
                   onSelectHistory={(entry) => void selectHistory(entry)}
                   onSelectSession={selectSession}

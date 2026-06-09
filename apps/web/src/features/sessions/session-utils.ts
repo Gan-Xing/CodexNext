@@ -13,6 +13,12 @@ export interface ThreadSidebarPrefs {
   pinned: string[];
 }
 
+export interface ProjectSidebarPrefs {
+  hidden: string[];
+  pinned: string[];
+  renamed: Record<string, string>;
+}
+
 export interface ThreadListItem {
   entry?: LocalCodexHistoryEntry;
   id: string;
@@ -29,23 +35,28 @@ export interface ProjectThreadGroupData {
   cwd: string;
   items: ThreadListItem[];
   name: string;
+  pinned: boolean;
   updatedAt: number;
   sessions: LocalSessionSummary[];
   entries: LocalCodexHistoryEntry[];
 }
 
 export const threadSidebarPrefsStorageKey = "codexnext.threadSidebarPrefs.v1";
+export const projectSidebarPrefsStorageKey = "codexnext.projectSidebarPrefs.v1";
 
 export function groupProjectThreads(
   sessions: LocalSessionSummary[],
   entries: LocalCodexHistoryEntry[],
   chatItems: ChatItem[],
   threadPrefs: ThreadSidebarPrefs,
+  projectPrefs: ProjectSidebarPrefs,
   activeSessionId: string | null,
   selectedHistoryKey: string | null
 ): ProjectThreadGroupData[] {
   const groups = new Map<string, ProjectThreadGroupData>();
   const pinned = new Set(threadPrefs.pinned);
+  const pinnedProjects = new Set(projectPrefs.pinned);
+  const hiddenProjects = new Set(projectPrefs.hidden);
   const sessionThreadIds = new Set(
     sessions
       .filter((session) => !isHistoryPreviewSessionId(session.sessionId))
@@ -65,6 +76,7 @@ export function groupProjectThreads(
         cwd: session.cwd,
         items: [],
         name: shortPath(session.cwd),
+        pinned: false,
         updatedAt: session.updatedAt,
         sessions: [session],
         entries: []
@@ -92,6 +104,7 @@ export function groupProjectThreads(
         cwd: entry.cwd,
         items: [],
         name: shortPath(entry.cwd),
+        pinned: false,
         updatedAt,
         sessions: [],
         entries: [entry]
@@ -100,6 +113,7 @@ export function groupProjectThreads(
   }
 
   return [...groups.values()]
+    .filter((group) => !hiddenProjects.has(group.cwd))
     .map((group) => {
       const items: ThreadListItem[] = [
         ...group.sessions.map((session) => ({
@@ -136,7 +150,8 @@ export function groupProjectThreads(
 
       return {
         ...group,
-        name: shortPath(group.cwd),
+        name: projectName(group.cwd, projectPrefs.renamed[group.cwd]),
+        pinned: pinnedProjects.has(group.cwd),
         items,
         sessions: group.sessions.sort((a, b) => b.updatedAt - a.updatedAt),
         entries: group.entries.sort(
@@ -145,6 +160,9 @@ export function groupProjectThreads(
       };
     })
     .sort((a, b) => {
+      if (a.pinned !== b.pinned) {
+        return a.pinned ? -1 : 1;
+      }
       return b.updatedAt - a.updatedAt;
     });
 }
@@ -376,6 +394,27 @@ export function readThreadSidebarPrefs(): Record<string, ThreadSidebarPrefs> {
   }
 }
 
+export function readProjectSidebarPrefs(): Record<string, ProjectSidebarPrefs> {
+  try {
+    const raw = window.localStorage.getItem(projectSidebarPrefsStorageKey);
+    if (!raw) {
+      return {};
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(parsed).map(([scope, value]) => [
+        scope,
+        sanitizeProjectSidebarPrefs(value)
+      ])
+    );
+  } catch {
+    return {};
+  }
+}
+
 export function sanitizeThreadSidebarPrefs(value: unknown): ThreadSidebarPrefs {
   if (!isRecord(value)) {
     return { pinned: [] };
@@ -385,6 +424,34 @@ export function sanitizeThreadSidebarPrefs(value: unknown): ThreadSidebarPrefs {
     : [];
   return {
     pinned: [...new Set(pinned)]
+  };
+}
+
+export function sanitizeProjectSidebarPrefs(value: unknown): ProjectSidebarPrefs {
+  if (!isRecord(value)) {
+    return { hidden: [], pinned: [], renamed: {} };
+  }
+  const pinned = Array.isArray(value.pinned)
+    ? value.pinned.filter((item): item is string => typeof item === "string" && item.length > 0)
+    : [];
+  const hidden = Array.isArray(value.hidden)
+    ? value.hidden.filter((item): item is string => typeof item === "string" && item.length > 0)
+    : [];
+  const renamed = isRecord(value.renamed)
+    ? Object.fromEntries(
+        Object.entries(value.renamed)
+          .filter(
+            (entry): entry is [string, string] =>
+              typeof entry[0] === "string" && typeof entry[1] === "string"
+          )
+          .map(([cwd, name]) => [cwd, name.trim()] as const)
+          .filter((entry) => entry[1].length > 0)
+      )
+    : {};
+  return {
+    hidden: [...new Set(hidden)],
+    pinned: [...new Set(pinned)],
+    renamed
   };
 }
 
@@ -401,6 +468,17 @@ export function getThreadSidebarPrefs(
   agentUrl: string
 ): ThreadSidebarPrefs {
   return prefsByScope[threadPrefsScope(agentUrl)] ?? { pinned: [] };
+}
+
+export function getProjectSidebarPrefs(
+  prefsByScope: Record<string, ProjectSidebarPrefs>,
+  scopeKey: string
+): ProjectSidebarPrefs {
+  return prefsByScope[threadPrefsScope(scopeKey)] ?? {
+    hidden: [],
+    pinned: [],
+    renamed: {}
+  };
 }
 
 export function threadKeyForHistory(entry: LocalCodexHistoryEntry): string {
@@ -429,4 +507,8 @@ function deriveSessionChatFallbackTitle(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function projectName(cwd: string, renamed: string | undefined): string {
+  return renamed?.trim() || shortPath(cwd);
 }

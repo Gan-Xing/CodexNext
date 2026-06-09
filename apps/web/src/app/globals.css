@@ -4529,9 +4529,10 @@ summary {
 }
 
 .cn-project-tree {
-  display: grid;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   gap: 0.35rem;
-  grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
   padding: 0.08rem 0 0;
@@ -4539,6 +4540,7 @@ summary {
 
 .cn-project-scroll {
   display: grid;
+  flex: 1 1 auto;
   gap: 0.28rem;
   min-height: 0;
   overflow: auto;
@@ -7181,7 +7183,7 @@ summary {
   }
 }
 
-@media (hover: none), (pointer: coarse) {
+@media (max-width: 900px) {
   .cn-project-header-actions {
     opacity: 1;
     pointer-events: auto;
@@ -7189,6 +7191,11 @@ summary {
 
   .cn-project-name {
     padding-right: 2.3rem;
+  }
+
+  .cn-project-header-action-menu,
+  .cn-project-menu {
+    display: none;
   }
 }
 

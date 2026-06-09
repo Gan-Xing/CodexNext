@@ -78,6 +78,7 @@ import {
 } from "../devices/device-utils";
 import {
   codexHistoryKey,
+  getProjectSidebarPrefs,
   getThreadSidebarPrefs,
   groupProjectThreads,
   historyPreviewSessionId,
@@ -88,12 +89,17 @@ import {
   makeHistoryPreviewSession,
   makePendingSession,
   pendingSessionId,
+  projectSidebarPrefsStorageKey,
   relayThreadPrefsScope,
+  readProjectSidebarPrefs,
   readThreadSidebarPrefs,
+  sanitizeProjectSidebarPrefs,
   sanitizeThreadSidebarPrefs,
   sessionSubtitle,
   sessionTitle,
   threadSidebarPrefsStorageKey,
+  type ProjectSidebarPrefs,
+  type ProjectThreadGroupData,
   type ThreadListItem,
   type ThreadSidebarPrefs
 } from "../sessions/session-utils";
@@ -178,6 +184,7 @@ export function useWebConsoleController() {
   const [autoConnect, setAutoConnect] = useState<AgentConnection | null>(null);
   const [savedDevices, setSavedDevices] = useState<SavedDevice[]>([]);
   const [threadSidebarPrefs, setThreadSidebarPrefs] = useState<Record<string, ThreadSidebarPrefs>>({});
+  const [projectSidebarPrefs, setProjectSidebarPrefs] = useState<Record<string, ProjectSidebarPrefs>>({});
   const [devicePresence, setDevicePresence] = useState<Record<string, DevicePresenceState>>({});
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [deviceName, setDeviceName] = useState("");
@@ -276,6 +283,7 @@ export function useWebConsoleController() {
   const selectedReasoning =
     reasoningOptions.find((option) => option.value === reasoningEffort) ?? reasoningOptions[3]!;
   const activeThreadPrefs = getThreadSidebarPrefs(threadSidebarPrefs, sidebarPrefsScopeKey);
+  const activeProjectPrefs = getProjectSidebarPrefs(projectSidebarPrefs, sidebarPrefsScopeKey);
   const relayEnabled =
     RELAY_CONFIGURED ||
     Boolean(relayBootstrap) ||
@@ -320,6 +328,7 @@ export function useWebConsoleController() {
     codexHistory,
     chatItems,
     activeThreadPrefs,
+    activeProjectPrefs,
     currentSessionId,
     selectedHistoryKey
   );
@@ -469,11 +478,13 @@ export function useWebConsoleController() {
     const storedDevices = readSavedDevices();
     const storedSidebarWidth = readSidebarWidth(clampSidebarWidth);
     const storedThreadPrefs = readThreadSidebarPrefs();
+    const storedProjectPrefs = readProjectSidebarPrefs();
     setSavedDevices(storedDevices);
     if (storedSidebarWidth !== null) {
       setSidebarWidth(storedSidebarWidth);
     }
     setThreadSidebarPrefs(storedThreadPrefs);
+    setProjectSidebarPrefs(storedProjectPrefs);
     setDeviceWorkspaces((previous) => {
       const next = { ...previous };
       for (const device of storedDevices) {
@@ -823,6 +834,18 @@ export function useWebConsoleController() {
     });
   }
 
+  function persistProjectSidebarPrefs(
+    updater:
+      | Record<string, ProjectSidebarPrefs>
+      | ((previous: Record<string, ProjectSidebarPrefs>) => Record<string, ProjectSidebarPrefs>)
+  ) {
+    setProjectSidebarPrefs((previous) => {
+      const next = resolveStateUpdater(previous, updater);
+      window.localStorage.setItem(projectSidebarPrefsStorageKey, JSON.stringify(next));
+      return next;
+    });
+  }
+
   function updateThreadSidebarPrefs(
     scopeKey: string,
     updater: (prefs: ThreadSidebarPrefs) => ThreadSidebarPrefs
@@ -831,6 +854,19 @@ export function useWebConsoleController() {
     persistThreadSidebarPrefs((previous) => ({
       ...previous,
       [scope]: sanitizeThreadSidebarPrefs(updater(previous[scope] ?? { pinned: [] }))
+    }));
+  }
+
+  function updateProjectSidebarPrefs(
+    scopeKey: string,
+    updater: (prefs: ProjectSidebarPrefs) => ProjectSidebarPrefs
+  ) {
+    const scope = scopeKey;
+    persistProjectSidebarPrefs((previous) => ({
+      ...previous,
+      [scope]: sanitizeProjectSidebarPrefs(
+        updater(previous[scope] ?? { hidden: [], pinned: [], renamed: {} })
+      )
     }));
   }
 
@@ -887,6 +923,136 @@ export function useWebConsoleController() {
     } catch (archiveError) {
       setError(formatError(archiveError));
     }
+  }
+
+  function togglePinnedProject(projectCwd: string) {
+    updateProjectSidebarPrefs(sidebarPrefsScopeKey, (prefs) => ({
+      ...prefs,
+      pinned: prefs.pinned.includes(projectCwd)
+        ? prefs.pinned.filter((value) => value !== projectCwd)
+        : [projectCwd, ...prefs.pinned.filter((value) => value !== projectCwd)]
+    }));
+  }
+
+  function renameProject(group: ProjectThreadGroupData) {
+    const nextName = window.prompt("重命名项目", group.name);
+    if (nextName === null) {
+      return;
+    }
+    const trimmed = nextName.trim();
+    updateProjectSidebarPrefs(sidebarPrefsScopeKey, (prefs) => {
+      const renamed = { ...prefs.renamed };
+      if (!trimmed || trimmed === group.cwd.split("/").filter(Boolean).at(-1)) {
+        delete renamed[group.cwd];
+      } else {
+        renamed[group.cwd] = trimmed;
+      }
+      return {
+        ...prefs,
+        renamed
+      };
+    });
+  }
+
+  async function archiveProject(group: ProjectThreadGroupData) {
+    const threadIds = [...new Set(group.items.map((item) => item.threadId))];
+    if (!threadIds.length) {
+      return;
+    }
+    try {
+      await Promise.all(threadIds.map((threadId) => archiveCodexHistory(connection, { id: threadId })));
+      for (const item of group.items) {
+        historyPageCacheRef.current.delete(item.id);
+      }
+      const threadIdSet = new Set(threadIds);
+      patchActiveWorkspace((workspace) => {
+        const nextSessions = workspace.sessions.filter(
+          (session) => !session.threadId || !threadIdSet.has(session.threadId)
+        );
+        const nextHistory = workspace.codexHistory.filter((entry) => !threadIdSet.has(entry.id));
+        const nextHistoryPages = { ...workspace.historyPages };
+        const nextOrigins = { ...workspace.sessionHistoryOrigins };
+
+        for (const session of workspace.sessions) {
+          if (!session.threadId || !threadIdSet.has(session.threadId)) {
+            continue;
+          }
+          delete nextHistoryPages[session.sessionId];
+          delete nextOrigins[session.sessionId];
+        }
+
+        const selectedSessionMatches = workspace.sessions.some(
+          (session) => {
+            const threadId = session.threadId;
+            return (
+              session.sessionId === workspace.currentSessionId &&
+              typeof threadId === "string" &&
+              threadIdSet.has(threadId)
+            );
+          }
+        );
+        const selectedHistoryEntry = workspace.selectedHistoryKey
+          ? workspace.codexHistory.find(
+              (entry) => codexHistoryKey(entry) === workspace.selectedHistoryKey
+            ) ?? null
+          : null;
+
+        return {
+          ...workspace,
+          currentSessionId: selectedSessionMatches ? null : workspace.currentSessionId,
+          selectedHistoryKey:
+            selectedHistoryEntry && threadIdSet.has(selectedHistoryEntry.id)
+              ? null
+              : workspace.selectedHistoryKey,
+          sessions: nextSessions,
+          codexHistory: nextHistory,
+          historyPages: nextHistoryPages,
+          sessionHistoryOrigins: nextOrigins,
+          loadedThreadIds: workspace.loadedThreadIds.filter((value) => !threadIdSet.has(value))
+        };
+      });
+      updateThreadSidebarPrefs(sidebarPrefsScopeKey, (prefs) => ({
+        pinned: prefs.pinned.filter((value) => !threadIdSet.has(value))
+      }));
+    } catch (archiveError) {
+      setError(formatError(archiveError));
+    }
+  }
+
+  function removeProject(group: ProjectThreadGroupData) {
+    const sessionIds = new Set(group.sessions.map((session) => session.sessionId));
+    const historyPreviewIds = new Set(group.entries.map(historyPreviewSessionId));
+    const containsSelectedHistory = group.entries.some(
+      (entry) => codexHistoryKey(entry) === selectedHistoryKey
+    );
+    const containsSelectedSession = group.sessions.some(
+      (session) => session.sessionId === currentSessionId
+    );
+
+    updateProjectSidebarPrefs(sidebarPrefsScopeKey, (prefs) => {
+      const renamed = { ...prefs.renamed };
+      delete renamed[group.cwd];
+      return {
+        hidden: [group.cwd, ...prefs.hidden.filter((value) => value !== group.cwd)],
+        pinned: prefs.pinned.filter((value) => value !== group.cwd),
+        renamed
+      };
+    });
+
+    patchActiveWorkspace((workspace) => ({
+      ...workspace,
+      cwd: workspace.cwd === group.cwd ? "" : workspace.cwd,
+      currentSessionId:
+        containsSelectedSession ||
+        (workspace.currentSessionId ? historyPreviewIds.has(workspace.currentSessionId) : false)
+          ? null
+          : workspace.currentSessionId,
+      selectedHistoryKey: containsSelectedHistory ? null : workspace.selectedHistoryKey,
+      sessions: workspace.sessions.filter(
+        (session) =>
+          !sessionIds.has(session.sessionId) && !historyPreviewIds.has(session.sessionId)
+      )
+    }));
   }
 
   function startProjectSession(projectCwd: string) {
@@ -2186,6 +2352,10 @@ export function useWebConsoleController() {
     planModeEnabled,
     pinnedThreadItems,
     projectGroups: visibleProjectGroups,
+    togglePinnedProject,
+    renameProject,
+    archiveProject,
+    removeProject,
     reasoningEffort,
     reasoningOptions,
     relayEnabled,
