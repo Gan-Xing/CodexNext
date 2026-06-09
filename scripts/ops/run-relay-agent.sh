@@ -9,6 +9,17 @@ DEVICE_NAME="${CODEXNEXT_DEVICE_NAME:-}"
 CODEX_BIN="${CODEXNEXT_CODEX_BIN:-codex}"
 APPROVAL_TIMEOUT_MS="${CODEXNEXT_APPROVAL_TIMEOUT_MS:-300000}"
 
+if [[ "$CODEX_BIN" == */* ]]; then
+  if [[ ! -x "$CODEX_BIN" ]]; then
+    echo "Configured CODEXNEXT_CODEX_BIN is not executable: $CODEX_BIN" >&2
+    exit 1
+  fi
+else
+  if ! command -v "$CODEX_BIN" >/dev/null 2>&1; then
+    CODEX_BIN="$("$ROOT_DIR/scripts/ops/detect-codex-bin.sh" "$CODEX_BIN")"
+  fi
+fi
+
 cd "$ROOT_DIR"
 
 args=(

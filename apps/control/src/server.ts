@@ -70,6 +70,7 @@ export interface ControlServerOptions {
   host: string;
   port: number;
   ownerToken: string;
+  publicWebOrigin?: string | null;
   eventLimit?: number;
   heartbeatIntervalMs?: number;
   rpcTimeoutMs?: number;
@@ -92,6 +93,8 @@ const DEFAULT_BROWSER_SESSION_TTL_MS = 8 * 60 * 60_000;
 const DEFAULT_BROWSER_SESSION_IDLE_MS = 2 * 60 * 60_000;
 const DEFAULT_PRUNE_INTERVAL_MS = 60_000;
 const DEFAULT_PAIRING_TTL_MS = 5 * 60_000;
+const DEFAULT_SLOW_RPC_TIMEOUT_MS = 90_000;
+const DEFAULT_SOCKET_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 
 export function createControlServer(
   input: ControlServerOptions
@@ -110,6 +113,7 @@ export function createControlServer(
   });
   const io = new SocketIoServer(app.server as HttpServer, {
     path: RelaySocketPath,
+    maxHttpBufferSize: DEFAULT_SOCKET_MAX_PAYLOAD_BYTES,
     cors: {
       origin(origin, callback) {
         callback(null, allowOrigin(origin));
@@ -536,7 +540,12 @@ export function createControlServer(
       pollToken: record.pollToken,
       code: record.code,
       codeDigits: record.codeDigits,
-      expiresAt: record.expiresAt
+      expiresAt: record.expiresAt,
+      approveUrl: buildPairApproveUrl(
+        options.publicWebOrigin ?? "",
+        allowedOrigins,
+        record.codeDigits
+      )
     } satisfies PairingCreateResponse;
   });
 
@@ -749,7 +758,7 @@ export function createControlServer(
       isUserAccessToken,
       method: RelayMethodValue.SessionsCreate,
       params: request.body,
-      timeoutMs: rpcTimeoutMs,
+      timeoutMs: routeRpcTimeout(RelayMethodValue.SessionsCreate, rpcTimeoutMs),
       audit,
       allowRelayFullAccess: options.allowRelayFullAccess
     })
@@ -875,7 +884,7 @@ export function createControlServer(
         id: query.id,
         cwd: query.cwd
       },
-      timeoutMs: rpcTimeoutMs,
+      timeoutMs: routeRpcTimeout(RelayMethodValue.CodexHistoryDetail, rpcTimeoutMs),
       audit,
       allowRelayFullAccess: options.allowRelayFullAccess
     });
@@ -887,7 +896,7 @@ export function createControlServer(
       isUserAccessToken,
       method: RelayMethodValue.CodexHistoryResume,
       params: request.body,
-      timeoutMs: rpcTimeoutMs,
+      timeoutMs: routeRpcTimeout(RelayMethodValue.CodexHistoryResume, rpcTimeoutMs),
       audit,
       allowRelayFullAccess: options.allowRelayFullAccess
     })
@@ -1026,11 +1035,13 @@ async function invokeMachineRpc(
 function normalizeControlOptions(options: ControlServerOptions) {
   const normalizedOrigins =
     options.allowedOrigins?.map((origin) => origin.trim()).filter(Boolean) ?? [];
+  const publicWebOrigin = options.publicWebOrigin?.trim() || "";
   if (options.production && normalizedOrigins.length === 0) {
     throw new Error("Production relay requires at least one explicit allowed origin.");
   }
   return {
     ...options,
+    publicWebOrigin,
     heartbeatIntervalMs: options.heartbeatIntervalMs ?? 15_000,
     rpcTimeoutMs: options.rpcTimeoutMs ?? 30_000,
     browserSessionTtlMs: options.browserSessionTtlMs ?? DEFAULT_BROWSER_SESSION_TTL_MS,
@@ -1042,6 +1053,38 @@ function normalizeControlOptions(options: ControlServerOptions) {
       options.allowMachineOwnerToken ?? !(options.production ?? false),
     allowRelayFullAccess: resolveRelayFullAccessSetting(options.allowRelayFullAccess)
   };
+}
+
+function routeRpcTimeout(
+  method: RelayMethod,
+  defaultTimeoutMs: number
+): number {
+  switch (method) {
+    case RelayMethodValue.SessionsCreate:
+    case RelayMethodValue.CodexHistoryDetail:
+    case RelayMethodValue.CodexHistoryResume:
+      return Math.max(defaultTimeoutMs, DEFAULT_SLOW_RPC_TIMEOUT_MS);
+    default:
+      return defaultTimeoutMs;
+  }
+}
+
+function buildPairApproveUrl(
+  publicWebOrigin: string,
+  allowedOrigins: string[],
+  codeDigits: string
+): string | null {
+  const baseOrigin = publicWebOrigin || allowedOrigins[0] || "";
+  if (!baseOrigin) {
+    return null;
+  }
+  try {
+    const url = new URL("/pair", baseOrigin);
+    url.searchParams.set("code", codeDigits);
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 function resolveRelayFullAccessSetting(

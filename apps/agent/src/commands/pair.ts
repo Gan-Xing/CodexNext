@@ -45,12 +45,15 @@ export async function runPair(options: PairOptions): Promise<void> {
     throw new Error(text || `Pairing failed: ${create.status}`);
   }
   const pairing = (await create.json()) as PairingCreateResponse;
-  const pairUrl = `${relayUrl}/pair?code=${encodeURIComponent(pairing.codeDigits)}`;
 
   printSection("codexnext pair", "pair this device");
   printLine(`Code: ${pairing.code}`);
   printLine(`Expires: ${new Date(pairing.expiresAt).toLocaleString()}`);
-  printLine(`Open: ${pairUrl}`);
+  if (pairing.approveUrl) {
+    printLine(`Open: ${pairing.approveUrl}`);
+  } else {
+    printLine(`Open your CodexNext Web page and visit /pair?code=${pairing.codeDigits}`);
+  }
 
   while (true) {
     await sleep(2_000);

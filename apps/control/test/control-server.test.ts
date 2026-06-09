@@ -14,7 +14,11 @@ import type {
   RelayErrorAck,
   RelayRpcRequest
 } from "@codexnext/protocol";
-import { RelayNamespace, RelaySocketPath } from "@codexnext/protocol";
+import {
+  RelayMethod as RelayMethodValue,
+  RelayNamespace,
+  RelaySocketPath
+} from "@codexnext/protocol";
 import { DeviceRegistry } from "../src/device-registry.js";
 import { createControlServer, type ControlServerHandle } from "../src/server.js";
 
@@ -155,6 +159,100 @@ describe("control server relay", () => {
       `${baseUrl}/api/relay/devices/device_1/health`
     );
     expect(response.status).toBe(504);
+  });
+
+  it("allows longer timeout for slow history detail rpc", async () => {
+    const { baseUrl } = await startServer({ rpcTimeoutMs: 50 });
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    machine.on("rpc:request", (payload, ack) => {
+      if (payload.method !== RelayMethodValue.CodexHistoryDetail) {
+        return;
+      }
+      setTimeout(() => {
+        ack({
+          ok: true,
+          result: {
+            entry: { id: "thread_1", cwd: "/tmp", title: "Thread", createdAt: "", updatedAt: "" },
+            messages: []
+          }
+        });
+      }, 80);
+    });
+
+    const response = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/detail?id=thread_1`
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it("accepts large relay rpc payloads for history detail", async () => {
+    const { baseUrl } = await startServer();
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    const largeText = "x".repeat(2 * 1024 * 1024);
+    machine.on("rpc:request", (payload, ack) => {
+      if (payload.method !== RelayMethodValue.CodexHistoryDetail) {
+        return;
+      }
+      ack({
+        ok: true,
+        result: {
+          entry: {
+            id: "thread_big",
+            cwd: "/tmp",
+            cwdExists: true,
+            title: "Big Thread",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            source: "cli"
+          },
+          messages: [
+            {
+              id: "msg_big",
+              role: "assistant",
+              text: largeText,
+              ts: "2026-01-01T00:00:00.000Z"
+            }
+          ]
+        }
+      });
+    });
+
+    const response = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/detail?id=thread_big`
+    );
+    expect(response.status).toBe(200);
+    const payload = await response.json() as {
+      messages: Array<{ text: string }>;
+    };
+    expect(payload.messages[0]?.text.length).toBe(largeText.length);
   });
 
   it("stores machine events and replays them to browser clients after seq", async () => {

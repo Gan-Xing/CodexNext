@@ -828,6 +828,7 @@ export interface PairingCreateResponse {
   code: string;
   codeDigits: string;
   expiresAt: number;
+  approveUrl?: string | null;
 }
 
 export interface PairingRequestView {

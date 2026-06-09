@@ -20,6 +20,9 @@ Included:
 - `apps/agent`
 - `apps/web`
 - `apps/control`
+- local Web console
+- relay Web console
+- device pairing
 - docs and ADR
 - `codexnext doctor`
 - `codexnext goal-smoke --cwd <path> --goal <text> [--model <model>] [--token-budget <number>]`
@@ -29,10 +32,8 @@ Included:
 
 Not included:
 
-- Web UI
 - React Native
 - NestJS server
-- pairing
 - multi-device sync
 - non-Codex CLIs
 - Codex TUI parsing
@@ -150,6 +151,69 @@ For long-running multi-device deployment with Linux `systemd` and macOS `launchd
 
 - [docs/RELAY_DEPLOYMENT.md](/Users/ganxing/Desktop/Dev/codexnext/docs/RELAY_DEPLOYMENT.md)
 
+### Long-Running Deployment Scripts
+
+Think in terms of service roles, not operating systems:
+
+- `control`
+  - relay control plane
+  - device presence, RPC relay, event replay, pairing, revoke
+- `web`
+  - browser/mobile UI
+  - login gate, cookie session, relay session bootstrap
+- `agent`
+  - one controllable Codex machine
+  - outbound relay connection, local Codex execution, approvals delegated to Codex
+
+Any machine can run any combination of these roles if the runtime dependencies are present.
+The current bundled service-manager helpers cover the most common cases:
+
+- Linux `systemd`
+  - any subset of `control,web,agent`
+- macOS `launchd`
+  - bundled helper currently targets `agent`
+- Windows
+  - no bundled service-manager script yet
+  - roles still apply; run the same commands under your preferred service manager
+
+Linux, install all three roles by default:
+
+```bash
+./scripts/ops/install-linux-services.sh
+```
+
+Linux, install only a node agent:
+
+```bash
+./scripts/ops/install-linux-services.sh --roles agent
+```
+
+Linux, install any explicit subset:
+
+```bash
+./scripts/ops/install-linux-services.sh --roles control,web
+./scripts/ops/install-linux-services.sh --roles web,agent
+```
+
+macOS, install the relay agent as a launchd service:
+
+```bash
+./scripts/ops/install-macos-agent.sh
+```
+
+The agent startup script now auto-discovers a usable `codex` binary from common paths such as:
+
+- `PATH`
+- `~/.local/bin`
+- `~/bin`
+- `~/.nvm/versions/node/*/bin`
+
+You can still force an exact binary with:
+
+```bash
+CODEXNEXT_CODEX_BIN=/absolute/path/to/codex
+```
+
 Relay security notes:
 
 - public relay Web requires login
@@ -220,6 +284,12 @@ If relay devices do not appear, check:
 - control server `--allow-origin` includes the Web origin
 - the machine has completed `codexnext pair`
 - the device was not revoked
+
+If a relay device appears briefly and then disconnects, check:
+
+- the agent host can execute `codex app-server`
+- `CODEXNEXT_CODEX_BIN` points at a valid executable, or leave it unset and let the startup script auto-detect it
+- `sudo journalctl -u codexnext-agent -n 100 --no-pager` on Linux
 
 ## Package Layout
 

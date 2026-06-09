@@ -1,58 +1,55 @@
 # Relay Deployment
 
-This is the recommended long-running deployment model for CodexNext:
+CodexNext deployment should be described by **service roles**, not by a fixed OS topology.
 
-- one Linux server hosts the public relay control plane
-- each machine you want to control runs one outbound relay agent
-- browser and mobile only open the public Web URL
-
-## Your Target Topology
-
-For the setup you described:
-
-- `144` Linux server:
-  - `control`
-  - `web`
-  - `agent` for the Linux machine itself
-- `Macmini`:
-  - one relay `agent`
-- `MacBook Air`:
-  - optional later
-- `phone`:
-  - only opens the Linux Web page
-
-That means:
-
-- yes, the Linux server should run **three long-running services** if you want to control the Linux box itself
-- yes, the `Macmini` only needs **one long-running relay agent service**
-
-## Why Linux Needs 3 Services
+## Service Roles
 
 `control`:
-- the relay control plane
+- relay control plane
 - keeps device presence
 - relays RPC and event replay
+- handles pairing, revoke, and relay-side security gate
 
 `web`:
-- the public browser/mobile UI
+- public browser/mobile UI
 - handles login cookie
 - bootstraps relay sessions
 
 `agent`:
-- represents the Linux server itself as a controllable Codex machine
-- without this third service, the Linux server hosts the control plane but does not appear as a device
+- represents one controllable Codex machine
+- runs locally next to Codex
+- keeps one outbound relay connection
+- delegates approvals, sandbox, and permissions to Codex itself
 
-## Why Macmini Needs 1 Service
+Any host can run any subset of these roles if the dependencies are available.
 
-The `Macmini` does not need to expose Web or control:
+## Common Deployment Shapes
 
-- it does not need a public HTTP agent port
-- it only needs one outbound relay agent connection
-- after first pairing, it reconnects with its persisted local device identity
+Typical public control plane:
+
+- one host runs `control + web`
+- each controllable machine runs `agent`
+
+If the control-plane host should also be controllable, add `agent` there too:
+
+- `control + web + agent`
+
+Typical node-only machine:
+
+- `agent`
+
+These are examples, not platform restrictions.
+
+You may choose to run:
+
+- all three roles on Linux
+- all three roles on macOS
+- only `agent` on Linux/macOS/Windows
+- `control + web` on one host and `agent` on many others
 
 ## Recommended Ports
 
-On Linux:
+Example public control-plane ports:
 
 - Web: `3002`
 - Control: `3922`
@@ -61,13 +58,62 @@ Browser/mobile should only need:
 
 - `http://144.217.243.161:3002`
 
-Machines pair/connect to:
+Agent nodes pair/connect to:
 
 - `http://144.217.243.161:3922`
 
 ## Long-Running Process Model
 
-### Linux
+## Recommended Installers
+
+Use the bundled install scripts when they match your platform and service manager.
+
+### Linux `systemd`
+
+Default install:
+
+```bash
+./scripts/ops/install-linux-services.sh
+```
+
+This installs:
+
+- `codexnext-control`
+- `codexnext-web`
+- `codexnext-agent`
+
+Agent-only install:
+
+```bash
+./scripts/ops/install-linux-services.sh --roles agent
+```
+
+You can also choose a subset explicitly:
+
+```bash
+./scripts/ops/install-linux-services.sh --roles control,web
+./scripts/ops/install-linux-services.sh --roles web,agent
+```
+
+### macOS `launchd`
+
+Bundled helper for the outbound relay agent:
+
+```bash
+./scripts/ops/install-macos-agent.sh
+```
+
+This writes a `launchd` plist and an editable env file under `~/.codexnext/relay-agent.env`.
+
+Today the bundled macOS installer targets `agent`. That is a tooling coverage choice, not a product restriction.
+If you want to run `control` and `web` on macOS too, use the same runtime commands and wire them into your preferred process manager.
+
+### Windows
+
+There is no bundled Windows service-manager installer yet.
+The same three roles still apply; run them with your preferred Windows process manager.
+
+### Linux `systemd`
 
 Use `systemd` with:
 
@@ -92,9 +138,11 @@ Runtime scripts:
 - [scripts/ops/run-control.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/run-control.sh)
 - [scripts/ops/run-web.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/run-web.sh)
 - [scripts/ops/run-relay-agent.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/run-relay-agent.sh)
+- [scripts/ops/install-linux-services.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/install-linux-services.sh)
+- [scripts/ops/detect-codex-bin.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/detect-codex-bin.sh)
 - [scripts/ops/build-web.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/build-web.sh)
 
-### macOS
+### macOS `launchd`
 
 Use `launchd` with `KeepAlive`.
 
@@ -103,10 +151,11 @@ Templates are in:
 - [ops/launchd/com.codexnext.relay-agent.plist.template](/Users/ganxing/Desktop/Dev/codexnext/ops/launchd/com.codexnext.relay-agent.plist.template)
 - [ops/launchd/relay-agent.env.example](/Users/ganxing/Desktop/Dev/codexnext/ops/launchd/relay-agent.env.example)
 - [ops/launchd/run-relay-agent.sh](/Users/ganxing/Desktop/Dev/codexnext/ops/launchd/run-relay-agent.sh)
+- [scripts/ops/install-macos-agent.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/install-macos-agent.sh)
 
 ## Deploy Order
 
-### 1. Linux server
+### 1. Prepare the host that will expose the public Web and relay
 
 Clone/update the repo, then:
 
@@ -133,6 +182,8 @@ Install env files:
 - `/etc/codexnext/web.env`
 - `/etc/codexnext/agent.env`
 
+The install script will create them from examples if they do not exist yet.
+
 Install service units from the templates, replacing:
 
 - `__CODEXNEXT_ROOT__`
@@ -147,32 +198,29 @@ sudo systemctl enable --now codexnext-web
 sudo systemctl enable --now codexnext-agent
 ```
 
-### 2. Pair the Linux machine once
-
-If the Linux agent has not been paired yet, run once on the Linux server:
+If you use the installer instead, the shorter form is:
 
 ```bash
-pnpm --filter @codexnext/agent dev -- pair --relay http://144.217.243.161:3922 --device-name Linux
+./scripts/ops/install-linux-services.sh
 ```
 
-Approve it from the Web UI. After that, the systemd `codexnext-agent` service can reconnect by itself.
+### 2. Pair any machine that should appear as a controllable device
 
-### 3. Pair the Macmini once
-
-Run once on the `Macmini`:
+Run once on that machine:
 
 ```bash
-pnpm --filter @codexnext/agent dev -- pair --relay http://144.217.243.161:3922 --device-name Macmini
+pnpm --filter @codexnext/agent dev -- pair --relay http://144.217.243.161:3922 --device-name YourDeviceName
 ```
 
-Approve it from the phone or browser using the Linux Web page.
+Approve it from the Web UI. After that, the long-running `agent` service can reconnect by itself.
 
-After pairing succeeds:
+If the machine is macOS and you want the bundled launchd flow:
 
-- copy `ops/launchd/relay-agent.env.example` to `~/.codexnext/relay-agent.env`
-- fill in the real relay URL and device name
-- install the launchd plist template with the real repo path
-- load it with `launchctl`
+Or use the installer:
+
+```bash
+./scripts/ops/install-macos-agent.sh
+```
 
 ## What The Phone Should Do
 
@@ -180,7 +228,7 @@ The phone only needs:
 
 - open `http://144.217.243.161:3002`
 - log in
-- choose `Linux` or `Macmini`
+- choose whichever paired device is online
 
 The phone should **not** need:
 
@@ -191,7 +239,7 @@ The phone should **not** need:
 
 ## Updating Later
 
-On Linux:
+On a `systemd` host:
 
 ```bash
 git pull
@@ -202,7 +250,7 @@ pnpm test
 sudo systemctl restart codexnext-control codexnext-web codexnext-agent
 ```
 
-On Macmini:
+On a macOS host using the bundled launchd helper:
 
 ```bash
 git pull
@@ -215,25 +263,18 @@ launchctl kickstart -k gui/$(id -u)/com.codexnext.relay-agent
 - `control` and `agent` currently run from source through `tsx`
 - `web` runs as `next start` from a built production bundle
 - this is fine for long-running service management as long as `systemd`/`launchd` owns restart policy
+- `run-relay-agent.sh` auto-discovers `codex` from common install paths if `CODEXNEXT_CODEX_BIN` is unset or not on `PATH`
+- for locked-down environments, set `CODEXNEXT_CODEX_BIN` to an absolute binary path in the env file
 
-## Recommended Final Shape For You
+## Example Topology
 
-For your exact setup, the deployment should be:
+One valid example is:
 
-### Linux 144
-
-- `codexnext-control`
-- `codexnext-web`
-- `codexnext-agent`
-
-### Macmini
-
-- `codexnext-relay-agent`
-
-### MacBook Air
-
-- nothing yet
-
-### Phone
-
-- only `http://144.217.243.161:3002`
+- public host:
+  - `control + web`
+- public host, if also controllable:
+  - add `agent`
+- each additional machine:
+  - `agent`
+- phone/browser:
+  - only the public Web URL

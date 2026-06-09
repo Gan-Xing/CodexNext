@@ -14,6 +14,10 @@ program
   .option("--host <host>", "Host to bind.", "127.0.0.1")
   .option("--port <port>", "Port to bind.", parsePositiveInteger, 3002)
   .option(
+    "--public-web-origin <origin>",
+    "Public Web origin used to build approval links shown to users."
+  )
+  .option(
     "--allow-origin <origin>",
     "Allowed browser origin. Repeat for multiple origins.",
     collectString,
@@ -49,6 +53,7 @@ program
       ownerToken: string;
       host: string;
       port: number;
+      publicWebOrigin?: string;
       allowOrigin: string[];
       production?: boolean;
       allowMachineOwnerToken?: boolean;
@@ -61,6 +66,9 @@ program
         ownerToken: options.ownerToken,
         host: options.host,
         port: options.port,
+        ...(options.publicWebOrigin
+          ? { publicWebOrigin: options.publicWebOrigin }
+          : {}),
         allowedOrigins: options.allowOrigin,
         ...(options.production !== undefined ? { production: options.production } : {}),
         ...(options.allowMachineOwnerToken !== undefined
