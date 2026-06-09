@@ -1327,7 +1327,10 @@ function resolveRelayFullAccessSetting(
   if (explicit !== undefined) {
     return explicit;
   }
-  return process.env.CODEXNEXT_ALLOW_RELAY_FULL_ACCESS === "1";
+  if (process.env.CODEXNEXT_DISABLE_RELAY_FULL_ACCESS === "1") {
+    return false;
+  }
+  return true;
 }
 
 function pruneBrowserSessions(

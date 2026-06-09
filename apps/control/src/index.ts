@@ -30,11 +30,11 @@ program
   )
   .option(
     "--allow-relay-full-access",
-    "Allow relay requests to ask for full-access. Disabled by default."
+    "Allow relay requests to ask for full-access. Usually not needed because relay full-access is enabled by default."
   )
   .option(
     "--disable-relay-full-access",
-    "Force relay requests to reject full-access even if the allow flag or env is set."
+    "Disable relay requests from asking for full-access even though the product default is enabled."
   )
   .option(
     "--heartbeat-interval-ms <number>",

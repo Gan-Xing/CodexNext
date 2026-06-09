@@ -35,7 +35,7 @@ Normal product entry becomes:
 - device tokens are hashed at rest.
 - revoked devices are disconnected immediately and cannot reconnect.
 - production CORS uses explicit allowlists.
-- relay `full-access` is disabled unless `CODEXNEXT_ALLOW_RELAY_FULL_ACCESS=1` is set.
+- relay `full-access` follows Codex by default; set `CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1` only if an operator intentionally wants an extra relay-only safety gate.
 
 ## UX Rules
 

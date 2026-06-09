@@ -836,7 +836,7 @@ describe("control server relay", () => {
     expect(reject.status).toBe(401);
   });
 
-  it("blocks relay full-access by default", async () => {
+  it("allows relay full-access by default", async () => {
     const { baseUrl } = await startServer();
     const session = await fetch(`${baseUrl}/api/auth/session`, {
       method: "POST",
@@ -856,7 +856,7 @@ describe("control server relay", () => {
         permissionMode: "full-access"
       })
     });
-    expect(response.status).toBe(403);
+    expect(response.status).not.toBe(403);
   });
 
   it("allows relay full-access when explicitly enabled", async () => {

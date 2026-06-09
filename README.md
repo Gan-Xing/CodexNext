@@ -142,7 +142,7 @@ The agent startup helpers auto-discover a usable `codex` binary from common loca
 - public relay Web requires login
 - `ownerToken` is server-only
 - relay session tokens are issued after login and should not be persisted client-side
-- relay full-access is disabled by default; set `CODEXNEXT_ALLOW_RELAY_FULL_ACCESS=1` on the control server only if you explicitly want relay users to request Codex `full-access`
+- relay full-access follows Codex by default; set `CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1` on the control server only if you intentionally want an extra relay-only safety gate
 - approvals and sandbox enforcement remain Codex-native
 
 ## Hidden Dev-Only Direct Mode

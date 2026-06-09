@@ -23,7 +23,7 @@ Codex itself still owns command approvals, sandbox mode, and final permission en
 - Device registry stores `deviceTokenHash`, not plaintext `deviceToken`, and supports migration from older files.
 - Revoked devices cannot reconnect and any live socket is disconnected immediately.
 - Production CORS must use explicit allowlists; `origin: true` is not used.
-- Relay `full-access` is disabled by default and requires `CODEXNEXT_ALLOW_RELAY_FULL_ACCESS=1` on the control server.
+- Relay `full-access` follows Codex by default. Set `CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1` on the control server only if you intentionally want an extra relay-only safety gate.
 - Direct mode is hidden dev-only and requires `CODEXNEXT_ENABLE_DEV_DIRECT=1`.
 - Audit logs record security-relevant actions without recording raw tokens, prompts, assistant content, or full command output.
 

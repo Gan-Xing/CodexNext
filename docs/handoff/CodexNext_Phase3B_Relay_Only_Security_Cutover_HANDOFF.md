@@ -130,7 +130,7 @@ pnpm --filter @codexnext/agent dev -- connect \
 5. **deviceToken 不明文保存在 control registry。**
 6. **pairing approve/reject 必须登录。**
 7. **direct remote mode 默认禁止。**
-8. **Relay 下 full-access 默认禁止，除非显式配置 `CODEXNEXT_ALLOW_RELAY_FULL_ACCESS=1`。**
+8. **Relay 下 full-access 默认允许，只有显式配置 `CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1` 时才禁止。**
 9. **Codex app-server 权限系统继续作为最后一层，不在 CodexNext 重写。**
 10. **审计日志不记录 prompt、token、完整命令输出，只记录 metadata。**
 
@@ -343,7 +343,7 @@ apps/agent/src/local-server/local-agent.ts
 - 如果 request 来自 relay，且 `permissionMode === "full-access"` 或 `sandbox === "danger-full-access"` 或 `approvalPolicy === "never"`：
   - 默认拒绝。
   - 返回清晰错误：
-    “Relay full-access is disabled. Set CODEXNEXT_ALLOW_RELAY_FULL_ACCESS=1 on the agent to opt in.”
+    “Relay full-access follows Codex by default. Set CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1 on the control server only if you intentionally want to block it.”
 - 本地 dev-only direct/harness 可不受此限制，但用户路径 relay 默认必须限制。
 - 不重写 Codex approval/sandbox，只是防止远程默认选择最危险模式。
 
@@ -488,8 +488,8 @@ pnpm test
 11. Web 不再解析 `?agent=` / `?token=`。
 12. Web 不再保存 direct devices。
 13. direct `serve/dev-serve` 未设置 env 时拒绝启动。
-14. relay full-access 默认被拒绝。
-15. 设置 `CODEXNEXT_ALLOW_RELAY_FULL_ACCESS=1` 后允许 full-access。
+14. relay full-access 默认允许。
+15. 设置 `CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1` 后拒绝 full-access。
 
 ### 手动验收
 
@@ -569,7 +569,7 @@ CodexNext 产品层从 direct/relay 混合彻底切换为 relay-only。用户不
 11. 新增 device revoke endpoint，revoked device 不能重连，已连接 socket 断开。
 12. pairing approve/reject 必须登录，pairing code 加 TTL、rate limit、one-time use、fingerprint。
 13. production CORS 禁止 origin:true，必须配置 allowed origins。
-14. relay full-access 默认禁用，除非 CODEXNEXT_ALLOW_RELAY_FULL_ACCESS=1。
+14. relay full-access 默认允许，只有 CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1 时才禁用。
 15. agent serve 改为 hidden dev-only 或 dev-serve，必须 CODEXNEXT_ENABLE_DEV_DIRECT=1，不再打印 token URL。
 16. 新增 audit log，不能记录 token、prompt、assistant content、完整命令输出。
 17. 更新 README、SECURITY.md、docs/PHASE3B_RELAY_ONLY_SECURITY_CUTOVER.md、docs/ADR/0004-relay-only-security-gate.md。
@@ -590,7 +590,7 @@ pnpm typecheck
 pnpm test
 
 手动验收：
-未登录公网 Web 只能看到登录页；未登录 POST /api/relay/session 返回 401；登录后才能看到设备；pair 设备后才能控制；Web 不出现 direct endpoint；URL/localStorage 不含 ownerToken/sessionToken/direct token；revoke device 后不能重连；relay full-access 默认被拒绝。
+未登录公网 Web 只能看到登录页；未登录 POST /api/relay/session 返回 401；登录后才能看到设备；pair 设备后才能控制；Web 不出现 direct endpoint；URL/localStorage 不含 ownerToken/sessionToken/direct token；revoke device 后不能重连；relay full-access 默认允许。
 ```
 
 ## 9. 实施顺序建议

@@ -42,5 +42,5 @@ CodexNext product UX is relay-only.
 
 - `ownerToken` is server-only
 - device registry stores `deviceTokenHash`, not plaintext token
-- relay `full-access` is disabled by default and requires explicit opt-in
+- relay `full-access` follows Codex by default; operators may still explicitly disable it
 - Codex approvals and sandbox enforcement remain Codex-native

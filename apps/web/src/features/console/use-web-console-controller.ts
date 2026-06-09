@@ -165,7 +165,7 @@ const MAX_SIDEBAR_WIDTH = 620;
 const HISTORY_PAGE_CACHE_TTL_MS = 15_000;
 const RELAY_CONFIGURED = Boolean(process.env.NEXT_PUBLIC_CODEXNEXT_RELAY_URL);
 const RELAY_FULL_ACCESS_ENABLED =
-  process.env.NEXT_PUBLIC_CODEXNEXT_ALLOW_RELAY_FULL_ACCESS === "1";
+  process.env.NEXT_PUBLIC_CODEXNEXT_DISABLE_RELAY_FULL_ACCESS !== "1";
 
 interface RelayBootstrapConfig {
   sessionToken: string;
