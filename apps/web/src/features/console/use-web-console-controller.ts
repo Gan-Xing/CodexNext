@@ -6,7 +6,8 @@ import type { LocalReasoningEffort, ThreadGoal } from "@codexnext/protocol";
 import {
   agentFetch,
   createSession,
-  getCodexHistoryDetail,
+  getLoadedCodexThreads,
+  getCodexHistoryTurns,
   health,
   interruptSessionTurn,
   listCodexHistory,
@@ -29,8 +30,8 @@ import {
 import type {
   ChatItem,
   LocalApprovalDecision,
-  LocalCodexHistoryDetailResponse,
   LocalCodexHistoryEntry,
+  LocalCodexHistoryPageResponse,
   LocalEvent,
   LocalHealthResponse,
   LocalPermissionMode,
@@ -44,9 +45,12 @@ import {
   ingestEventsIntoWorkspace,
   markOptimisticMessageFailed,
   markOptimisticMessageSent,
+  prependSessionHistoryMessages,
   reassignSessionChatItems,
   rememberSessionHistoryOrigin,
   resolveStateUpdater,
+  setLoadedThreadIds,
+  setSessionHistoryPageState,
   type AttachmentDraft,
   type DeviceWorkspace,
   type ResumeState,
@@ -160,6 +164,7 @@ export const permissionOptions: Array<{
 const DEFAULT_SIDEBAR_WIDTH = 292;
 const MIN_SIDEBAR_WIDTH = 272;
 const MAX_SIDEBAR_WIDTH = 620;
+const HISTORY_PAGE_CACHE_TTL_MS = 15_000;
 const RELAY_CONFIGURED = Boolean(process.env.NEXT_PUBLIC_CODEXNEXT_RELAY_URL);
 const RELAY_FULL_ACCESS_ENABLED =
   process.env.NEXT_PUBLIC_CODEXNEXT_DISABLE_RELAY_FULL_ACCESS !== "1" &&
@@ -210,7 +215,9 @@ export function useWebConsoleController() {
   const queuedEventsRef = useRef(new Map<string, LocalEvent[]>());
   const queuedSelectRef = useRef(new Map<string, boolean>());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const historyDetailCacheRef = useRef(new Map<string, LocalCodexHistoryDetailResponse>());
+  const historyPageCacheRef = useRef(
+    new Map<string, { fetchedAt: number; page: LocalCodexHistoryPageResponse }>()
+  );
   const pendingHistoryHydrationsRef = useRef(new Set<string>());
   const desktopFrameRef = useRef<HTMLDivElement | null>(null);
   const sessionSidebarRef = useRef<HTMLElement | null>(null);
@@ -245,12 +252,17 @@ export function useWebConsoleController() {
   const directoryLoading = activeWorkspace?.directoryLoading ?? false;
   const resumeStates = activeWorkspace?.resumeStates ?? {};
   const historyLoadingKey = activeWorkspace?.historyLoadingKey ?? null;
+  const historyPages = activeWorkspace?.historyPages ?? {};
+  const loadedThreadIds = activeWorkspace?.loadedThreadIds ?? [];
   const currentSession = currentSessionId
     ? sessions.find((session) => session.sessionId === currentSessionId) ?? null
     : null;
   const visibleChatItems = currentSession
     ? chatItems.filter((item) => item.sessionId === currentSession.sessionId)
     : [];
+  const currentHistoryPageState = currentSession
+    ? historyPages[currentSession.sessionId] ?? null
+    : null;
   const currentResumeState = currentSession ? resumeStates[currentSession.sessionId] ?? null : null;
   const selectedHistoryEntry = selectedHistoryKey
     ? codexHistory.find((entry) => codexHistoryKey(entry) === selectedHistoryKey) ?? null
@@ -391,13 +403,17 @@ export function useWebConsoleController() {
           workspace.codexHistory.find((item) => item.id === historyThreadId) ??
           null;
         const cacheKey = entry ? codexHistoryKey(entry) : `${historyThreadId}::${session.cwd}`;
-        const detail =
-          historyDetailCacheRef.current.get(cacheKey) ??
-          (await getCodexHistoryDetail(workspace.connection, {
+        const cachedPage = historyPageCacheRef.current.get(cacheKey)?.page;
+        const page =
+          cachedPage ??
+          (await getCodexHistoryTurns(workspace.connection, {
             id: historyThreadId,
             cwd: entry?.cwd ?? session.cwd
           }));
-        historyDetailCacheRef.current.set(cacheKey, detail);
+        historyPageCacheRef.current.set(cacheKey, {
+          fetchedAt: Date.now(),
+          page
+        });
         patchDeviceWorkspace(deviceId, (currentWorkspace) => {
           const hasHistory = currentWorkspace.chatItems.some(
             (item) =>
@@ -407,7 +423,15 @@ export function useWebConsoleController() {
           if (hasHistory) {
             return currentWorkspace;
           }
-          return hydrateSessionFromHistory(currentWorkspace, sessionId, detail.messages);
+          return setSessionHistoryPageState(
+            hydrateSessionFromHistory(currentWorkspace, sessionId, page.messages),
+            sessionId,
+            {
+              loadingOlder: false,
+              olderCursor: page.nextCursor,
+              sourceKey: cacheKey
+            }
+          );
         });
       } catch {
         return;
@@ -1146,21 +1170,34 @@ export function useWebConsoleController() {
       ingestEventsIntoWorkspace(workspace, replay.events, { selectSessions: false })
     );
 
-    const [loadedSessions, history] = await Promise.all([
+    const [loadedSessions, history, loadedThreads] = await Promise.all([
       listSessions(deviceConnection),
-      listCodexHistory(deviceConnection)
+      listCodexHistory(deviceConnection),
+      getLoadedCodexThreads(deviceConnection).catch(() => ({ threadIds: [] }))
     ]);
     const latestSession = [...loadedSessions.sessions].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    const loadedSet = new Set(loadedThreads.threadIds);
 
-    patchDeviceWorkspace(device.id, (workspace) => ({
-      ...workspace,
-      codexHistory: history.entries,
-      currentSessionId: workspace.currentSessionId ?? latestSession?.sessionId ?? null,
-      cwd: workspace.cwd || latestSession?.cwd || "",
-      directoryError: null,
-      directoryLoading: true,
-      sessions: loadedSessions.sessions
-    }));
+    patchDeviceWorkspace(device.id, (workspace) =>
+      setLoadedThreadIds(
+        {
+          ...workspace,
+          codexHistory: history.entries.map((entry) => ({
+            ...entry,
+            loaded: entry.loaded || loadedSet.has(entry.id),
+            threadStatus:
+              entry.threadStatus ??
+              (loadedSet.has(entry.id) ? "loaded" : "notLoaded")
+          })),
+          currentSessionId: workspace.currentSessionId ?? latestSession?.sessionId ?? null,
+          cwd: workspace.cwd || latestSession?.cwd || "",
+          directoryError: null,
+          directoryLoading: true,
+          sessions: loadedSessions.sessions
+        },
+        loadedThreads.threadIds
+      )
+    );
 
     const directoryPath = activeWorkspace?.cwd || latestSession?.cwd || undefined;
     try {
@@ -1347,54 +1384,118 @@ export function useWebConsoleController() {
     }
     const key = codexHistoryKey(entry);
     const previewSession = makeHistoryPreviewSession(entry);
+    const threadIsLoaded = entry.loaded || loadedThreadIds.includes(entry.id);
     setError(null);
     patchActiveWorkspace((workspace) =>
-      upsertSessionInWorkspace(
-        {
-          ...workspace,
-          selectedHistoryKey: key,
-          historyLoadingKey: key,
-          currentSessionId: previewSession.sessionId,
-          cwd: entry.cwd,
-          resumeStates: {
-            ...workspace.resumeStates,
-            [previewSession.sessionId]: isPreviewOnlyHistoryEntry(entry) ? "missing" : "history"
-          }
-        },
-        previewSession
+      rememberSessionHistoryOrigin(
+        upsertSessionInWorkspace(
+          {
+            ...workspace,
+            selectedHistoryKey: key,
+            historyLoadingKey: threadIsLoaded ? null : key,
+            currentSessionId: previewSession.sessionId,
+            cwd: entry.cwd,
+            resumeStates: {
+              ...workspace.resumeStates,
+              [previewSession.sessionId]: isPreviewOnlyHistoryEntry(entry) ? "missing" : "history"
+            }
+          },
+          previewSession
+        ),
+        previewSession.sessionId,
+        entry.id
       )
     );
     setActiveSheet(null);
     revealMainOnMobile();
+    let showedCachedPage = false;
     try {
-      const cachedDetail = historyDetailCacheRef.current.get(key);
-      const detail =
-        cachedDetail ?? (await getCodexHistoryDetail(connection, { id: entry.id, cwd: entry.cwd }));
-      historyDetailCacheRef.current.set(key, detail);
-      patchActiveWorkspace((workspace) =>
-        hydrateSessionFromHistory(
-          {
-            ...workspace,
-            historyLoadingKey: null,
-            resumeStates: {
-              ...workspace.resumeStates,
-              [previewSession.sessionId]: isPreviewOnlyHistoryEntry(detail.entry) ? "missing" : "history"
+      const cachedRecord = historyPageCacheRef.current.get(key) ?? null;
+      const hasFreshCache =
+        cachedRecord !== null && Date.now() - cachedRecord.fetchedAt < HISTORY_PAGE_CACHE_TTL_MS;
+
+      if (cachedRecord) {
+        showedCachedPage = true;
+        patchActiveWorkspace((workspace) =>
+          setSessionHistoryPageState(
+            hydrateSessionFromHistory(
+              {
+                ...workspace,
+                historyLoadingKey: null,
+                resumeStates: {
+                  ...workspace.resumeStates,
+                  [previewSession.sessionId]: isPreviewOnlyHistoryEntry(cachedRecord.page.entry)
+                    ? "missing"
+                    : "history"
+                }
+              },
+              previewSession.sessionId,
+              cachedRecord.page.messages
+            ),
+            previewSession.sessionId,
+            {
+              loadingOlder: false,
+              olderCursor: cachedRecord.page.nextCursor,
+              sourceKey: key
             }
-          },
+          )
+        );
+      }
+
+      if (hasFreshCache) {
+        return;
+      }
+
+      const page = await getCodexHistoryTurns(connection, {
+        id: entry.id,
+        cwd: entry.cwd,
+        limit: 40
+      });
+      historyPageCacheRef.current.set(key, {
+        fetchedAt: Date.now(),
+        page
+      });
+      patchActiveWorkspace((workspace) =>
+        setSessionHistoryPageState(
+          hydrateSessionFromHistory(
+            {
+              ...workspace,
+              historyLoadingKey: null,
+              resumeStates: {
+                ...workspace.resumeStates,
+                [previewSession.sessionId]: isPreviewOnlyHistoryEntry(page.entry) ? "missing" : "history"
+              }
+            },
+            previewSession.sessionId,
+            page.messages
+          ),
           previewSession.sessionId,
-          detail.messages
+          {
+            loadingOlder: false,
+            olderCursor: page.nextCursor,
+            sourceKey: key
+          }
         )
       );
     } catch (err) {
-      patchActiveWorkspace((workspace) => ({
-        ...workspace,
-        historyLoadingKey: null,
-        resumeStates: {
-          ...workspace.resumeStates,
-          [previewSession.sessionId]: isMissingHistoryCwdError(err) ? "missing" : "failed"
-        }
-      }));
-      setError(formatError(err));
+      patchActiveWorkspace((workspace) =>
+        showedCachedPage
+          ? {
+              ...workspace,
+              historyLoadingKey: null
+            }
+          : {
+              ...workspace,
+              historyLoadingKey: null,
+              resumeStates: {
+                ...workspace.resumeStates,
+                [previewSession.sessionId]: isMissingHistoryCwdError(err) ? "missing" : "failed"
+              }
+            }
+      );
+      if (!showedCachedPage) {
+        setError(formatError(err));
+      }
     }
   }
 
@@ -1431,6 +1532,10 @@ export function useWebConsoleController() {
         permissionMode,
         reasoningEffort
       });
+      historyPageCacheRef.current.set(codexHistoryKey(result.history.entry), {
+        fetchedAt: Date.now(),
+        page: result.history
+      });
       patchActiveWorkspace((workspace) => {
         let next = upsertSessionInWorkspace(workspace, result.session);
         next = rememberSessionHistoryOrigin(
@@ -1440,6 +1545,11 @@ export function useWebConsoleController() {
         );
         next = reassignSessionChatItems(next, previewSession.sessionId, result.session.sessionId);
         next = hydrateSessionFromHistory(next, result.session.sessionId, result.history.messages);
+        next = setSessionHistoryPageState(next, result.session.sessionId, {
+          loadingOlder: false,
+          olderCursor: result.history.nextCursor,
+          sourceKey: codexHistoryKey(result.history.entry)
+        });
         return {
           ...next,
           currentSessionId: result.session.sessionId,
@@ -1519,6 +1629,10 @@ export function useWebConsoleController() {
         permissionMode,
         reasoningEffort
       });
+      historyPageCacheRef.current.set(codexHistoryKey(result.history.entry), {
+        fetchedAt: Date.now(),
+        page: result.history
+      });
       patchActiveWorkspace((workspace) => {
         let next = upsertSessionInWorkspace(workspace, result.session);
         next = rememberSessionHistoryOrigin(
@@ -1528,6 +1642,11 @@ export function useWebConsoleController() {
         );
         next = reassignSessionChatItems(next, previewSession.sessionId, result.session.sessionId);
         next = hydrateSessionFromHistory(next, result.session.sessionId, result.history.messages);
+        next = setSessionHistoryPageState(next, result.session.sessionId, {
+          loadingOlder: false,
+          olderCursor: result.history.nextCursor,
+          sourceKey: codexHistoryKey(result.history.entry)
+        });
         return {
           ...next,
           currentSessionId: result.session.sessionId,
@@ -1753,6 +1872,57 @@ export function useWebConsoleController() {
       return;
     }
     await interruptSessionTurn(connection, currentSession.sessionId, currentSession.activeTurnId);
+  }
+
+  async function loadOlderHistory() {
+    if (!currentSession || !currentHistoryPageState?.olderCursor || currentHistoryPageState.loadingOlder) {
+      return;
+    }
+
+    const sessionId = currentSession.sessionId;
+    const sourceKey = currentHistoryPageState.sourceKey;
+    const historyThreadId = sessionHistoryOrigins[sessionId];
+    const sourceEntry =
+      (sourceKey
+        ? codexHistory.find((entry) => codexHistoryKey(entry) === sourceKey) ?? null
+        : null) ??
+      (historyThreadId
+        ? codexHistory.find((entry) => entry.id === historyThreadId && entry.cwd === currentSession.cwd) ??
+          codexHistory.find((entry) => entry.id === historyThreadId) ??
+          null
+        : null);
+    const historyId = sourceEntry?.id ?? historyThreadId;
+    if (!historyId) {
+      return;
+    }
+
+    patchActiveWorkspace((workspace) =>
+      setSessionHistoryPageState(workspace, sessionId, { loadingOlder: true })
+    );
+
+    try {
+      const page = await getCodexHistoryTurns(connection, {
+        id: historyId,
+        cwd: sourceEntry?.cwd ?? currentSession.cwd,
+        cursor: currentHistoryPageState.olderCursor,
+        limit: 40
+      });
+      const nextSourceKey = codexHistoryKey(page.entry);
+      patchActiveWorkspace((workspace) => {
+        let next = rememberSessionHistoryOrigin(workspace, sessionId, page.entry.id);
+        next = prependSessionHistoryMessages(next, sessionId, page.messages);
+        return setSessionHistoryPageState(next, sessionId, {
+          loadingOlder: false,
+          olderCursor: page.nextCursor,
+          sourceKey: nextSourceKey
+        });
+      });
+    } catch (err) {
+      patchActiveWorkspace((workspace) =>
+        setSessionHistoryPageState(workspace, sessionId, { loadingOlder: false })
+      );
+      setError(formatError(err));
+    }
   }
 
   async function setGoalForSession(
@@ -2118,6 +2288,9 @@ export function useWebConsoleController() {
     selectedPermission,
     selectedReasoning,
     sessionSidebarRef,
+    canLoadOlderHistory: Boolean(currentSession && currentHistoryPageState?.olderCursor),
+    loadingOlderHistory: currentHistoryPageState?.loadingOlder ?? false,
+    loadOlderHistory,
     setActiveMenu,
     setDraft,
     setGoalObjective,

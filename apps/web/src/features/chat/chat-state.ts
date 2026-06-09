@@ -2,6 +2,7 @@ import type { AgentConnection } from "../../lib/api";
 import type {
   ChatItem,
   LocalCodexHistoryDetailResponse,
+  LocalCodexHistoryMessage,
   LocalDirectoryListResponse,
   LocalEvent,
   LocalHealthResponse,
@@ -34,6 +35,8 @@ export interface DeviceWorkspace {
   events: LocalEvent[];
   healthStatus: LocalHealthResponse | null;
   historyLoadingKey: string | null;
+  historyPages: Record<string, SessionHistoryPageState>;
+  loadedThreadIds: string[];
   pendingApprovals: PendingApprovalView[];
   resumeStates: Record<string, ResumeState>;
   selectedHistoryKey: string | null;
@@ -43,6 +46,12 @@ export interface DeviceWorkspace {
 }
 
 type LocalCodexHistoryEntryLike = LocalCodexHistoryDetailResponse["entry"];
+
+export interface SessionHistoryPageState {
+  loadingOlder: boolean;
+  olderCursor: string | null;
+  sourceKey: string | null;
+}
 
 export function createDeviceWorkspace(connection: AgentConnection): DeviceWorkspace {
   return {
@@ -57,6 +66,8 @@ export function createDeviceWorkspace(connection: AgentConnection): DeviceWorksp
     events: [],
     healthStatus: null,
     historyLoadingKey: null,
+    historyPages: {},
+    loadedThreadIds: [],
     pendingApprovals: [],
     resumeStates: {},
     selectedHistoryKey: null,
@@ -192,6 +203,11 @@ export function reassignSessionChatItems(
           }
         : item
     ),
+    historyPages: reassignHistoryPageState(
+      workspace.historyPages,
+      fromSessionId,
+      toSessionId
+    ),
     sessionHistoryOrigins: nextHistoryOrigins
   };
 }
@@ -213,7 +229,7 @@ export function rememberSessionHistoryOrigin(
 export function hydrateSessionFromHistory(
   workspace: DeviceWorkspace,
   sessionId: string,
-  messages: LocalCodexHistoryDetailResponse["messages"]
+  messages: LocalCodexHistoryMessage[]
 ): DeviceWorkspace {
   const historyItems = dedupeChatItemsById(
     messages
@@ -234,6 +250,68 @@ export function hydrateSessionFromHistory(
       ...historyItems,
       ...preservedSessionItems.slice(overlap)
     ].slice(-500)
+  };
+}
+
+export function prependSessionHistoryMessages(
+  workspace: DeviceWorkspace,
+  sessionId: string,
+  messages: LocalCodexHistoryMessage[]
+): DeviceWorkspace {
+  const olderHistoryItems = dedupeChatItemsById(
+    messages
+      .filter((message) => isRenderableHistoryRole(message.role))
+      .map((message) => historyMessageToChatItem(sessionId, message))
+  );
+  const sessionItems = workspace.chatItems.filter((item) => item.sessionId === sessionId);
+  const existingHistoryItems = sessionItems.filter((item) =>
+    item.id.startsWith(`history-${sessionId}-`)
+  );
+  const preservedSessionItems = sessionItems.filter(
+    (item) => !item.id.startsWith(`history-${sessionId}-`)
+  );
+  const otherItems = workspace.chatItems.filter((item) => item.sessionId !== sessionId);
+
+  return {
+    ...workspace,
+    chatItems: [
+      ...otherItems,
+      ...dedupeChatItemsById([...olderHistoryItems, ...existingHistoryItems]),
+      ...preservedSessionItems
+    ].slice(-500)
+  };
+}
+
+export function setSessionHistoryPageState(
+  workspace: DeviceWorkspace,
+  sessionId: string,
+  state: Partial<SessionHistoryPageState> | null
+): DeviceWorkspace {
+  const nextPages = { ...workspace.historyPages };
+  if (state === null) {
+    delete nextPages[sessionId];
+  } else {
+    nextPages[sessionId] = {
+      loadingOlder: false,
+      olderCursor: null,
+      sourceKey: null,
+      ...(workspace.historyPages[sessionId] ?? {}),
+      ...state
+    };
+  }
+  return {
+    ...workspace,
+    historyPages: nextPages
+  };
+}
+
+export function setLoadedThreadIds(
+  workspace: DeviceWorkspace,
+  threadIds: string[]
+): DeviceWorkspace {
+  return {
+    ...workspace,
+    loadedThreadIds: [...new Set(threadIds.filter(Boolean))].sort()
   };
 }
 
@@ -311,6 +389,8 @@ function applyEventToWorkspace(
           (approval) => approval.approvalId !== resolvedApprovalId
         )
       };
+    case "thread.status.changed":
+      return applyThreadStatusChanged(workspace, event);
     case "chat.user":
       return applyServerChatUser(workspace, event);
     case "chat.assistant.delta":
@@ -405,6 +485,33 @@ function applyAgentError(
       kind: "error"
     }
   });
+}
+
+function applyThreadStatusChanged(
+  workspace: DeviceWorkspace,
+  event: LocalEvent
+): DeviceWorkspace {
+  const payload = isRecord(event.payload) ? event.payload : null;
+  const threadId =
+    typeof payload?.threadId === "string"
+      ? payload.threadId
+      : typeof event.threadId === "string"
+        ? event.threadId
+        : null;
+  if (!threadId) {
+    return workspace;
+  }
+  const loaded = payload?.loaded !== false;
+  const next = new Set(workspace.loadedThreadIds);
+  if (loaded) {
+    next.add(threadId);
+  } else {
+    next.delete(threadId);
+  }
+  return {
+    ...workspace,
+    loadedThreadIds: [...next].sort()
+  };
 }
 
 function upsertTurnScopedItem(
@@ -506,6 +613,20 @@ function dedupeChatItemsById(items: ChatItem[]): ChatItem[] {
     seen.add(item.id);
     next.push(item);
   }
+  return next;
+}
+
+function reassignHistoryPageState(
+  pages: Record<string, SessionHistoryPageState>,
+  fromSessionId: string,
+  toSessionId: string
+): Record<string, SessionHistoryPageState> {
+  if (!(fromSessionId in pages)) {
+    return pages;
+  }
+  const next = { ...pages };
+  next[toSessionId] = pages[fromSessionId]!;
+  delete next[fromSessionId];
   return next;
 }
 

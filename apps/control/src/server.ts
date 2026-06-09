@@ -9,6 +9,8 @@ import type { Server as HttpServer } from "node:http";
 import { Server as SocketIoServer, type Socket } from "socket.io";
 import type {
   DeviceEventPayload,
+  LocalCodexHistoryPageResponse,
+  LocalLoadedThreadsResponse,
   MachineEventPayload,
   MachineHeartbeatPayload,
   MachineHelloAck,
@@ -43,6 +45,13 @@ interface RegisteredDevice {
   info: RelayDeviceRecord;
   socket: Socket | null;
   store: DeviceEventStore;
+  loadedThreadIds: Set<string>;
+  recentHistoryPages: Map<string, CachedHistoryPageRecord>;
+}
+
+interface CachedHistoryPageRecord {
+  fetchedAt: number;
+  page: LocalCodexHistoryPageResponse;
 }
 
 interface BrowserSessionRecord {
@@ -95,6 +104,7 @@ const DEFAULT_PRUNE_INTERVAL_MS = 60_000;
 const DEFAULT_PAIRING_TTL_MS = 5 * 60_000;
 const DEFAULT_SLOW_RPC_TIMEOUT_MS = 90_000;
 const DEFAULT_SOCKET_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
+const DEFAULT_RECENT_HISTORY_CACHE_TTL_MS = 30_000;
 
 export function createControlServer(
   input: ControlServerOptions
@@ -320,7 +330,9 @@ export function createControlServer(
             existing?.store ??
             new DeviceEventStore(
               options.eventLimit !== undefined ? { limit: options.eventLimit } : {}
-            )
+            ),
+          loadedThreadIds: existing?.loadedThreadIds ?? new Set<string>(),
+          recentHistoryPages: existing?.recentHistoryPages ?? new Map<string, CachedHistoryPageRecord>()
         };
         devices.set(deviceId, next);
         if (registryRecord) {
@@ -389,6 +401,7 @@ export function createControlServer(
         devices.get(payload.deviceId) ??
         registerEventOnlyDevice(devices, payload.deviceId, socket, options.eventLimit);
       device.store.append(payload.event);
+      applyMachineEventState(device, payload.event);
       device.info = {
         ...device.info,
         lastSeenAt: Date.now(),
@@ -874,6 +887,36 @@ export function createControlServer(
     });
   });
 
+  app.get("/api/relay/devices/:deviceId/codex-history/loaded", async (request, reply) => {
+    if (!requireUserAccess(request, reply)) {
+      return { error: "Missing or invalid user token" };
+    }
+    const { deviceId } = request.params as { deviceId: string };
+    try {
+      const result = (await invokeMachineRpc(
+        devices,
+        deviceId,
+        RelayMethodValue.CodexHistoryLoaded,
+        undefined,
+        rpcTimeoutMs
+      )) as LocalLoadedThreadsResponse;
+      const device = devices.get(deviceId);
+      if (device) {
+        device.loadedThreadIds = new Set(result.threadIds);
+      }
+      audit.write({
+        action: "relay.rpc",
+        at: Date.now(),
+        deviceId,
+        method: RelayMethodValue.CodexHistoryLoaded,
+        outcome: "success"
+      });
+      return result;
+    } catch (error) {
+      return replyWithRpcError(reply, audit, deviceId, RelayMethodValue.CodexHistoryLoaded, error);
+    }
+  });
+
   app.get("/api/relay/devices/:deviceId/codex-history/detail", async (request, reply) => {
     const query = request.query as { id?: string; cwd?: string };
     return handleRpcRequest(request, reply, {
@@ -890,17 +933,113 @@ export function createControlServer(
     });
   });
 
-  app.post("/api/relay/devices/:deviceId/codex-history/resume", async (request, reply) =>
-    handleRpcRequest(request, reply, {
-      devices,
-      isUserAccessToken,
-      method: RelayMethodValue.CodexHistoryResume,
-      params: request.body,
-      timeoutMs: routeRpcTimeout(RelayMethodValue.CodexHistoryResume, rpcTimeoutMs),
-      audit,
-      allowRelayFullAccess: options.allowRelayFullAccess
-    })
-  );
+  app.get("/api/relay/devices/:deviceId/codex-history/turns", async (request, reply) => {
+    const query = request.query as {
+      id?: string;
+      cwd?: string;
+      cursor?: string;
+      limit?: string;
+      sortDirection?: string;
+      itemsView?: string;
+    };
+    if (!requireUserAccess(request, reply)) {
+      return { error: "Missing or invalid user token" };
+    }
+    const { deviceId } = request.params as { deviceId: string };
+    const params = {
+      id: query.id,
+      cwd: query.cwd,
+      cursor: query.cursor,
+      limit: query.limit ? Number(query.limit) : undefined,
+      sortDirection: query.sortDirection,
+      itemsView: query.itemsView
+    };
+    try {
+      const cached = readCachedHistoryPage(devices.get(deviceId) ?? null, params);
+      if (cached) {
+        audit.write({
+          action: "relay.rpc.cache_hit",
+          at: Date.now(),
+          deviceId,
+          method: RelayMethodValue.CodexHistoryTurns,
+          outcome: "success"
+        });
+        return cached.page;
+      }
+      const result = (await invokeMachineRpc(
+        devices,
+        deviceId,
+        RelayMethodValue.CodexHistoryTurns,
+        params,
+        routeRpcTimeout(RelayMethodValue.CodexHistoryTurns, rpcTimeoutMs)
+      )) as LocalCodexHistoryPageResponse;
+      writeCachedHistoryPage(devices.get(deviceId) ?? null, params, result);
+      audit.write({
+        action: "relay.rpc",
+        at: Date.now(),
+        deviceId,
+        method: RelayMethodValue.CodexHistoryTurns,
+        outcome: "success"
+      });
+      return result;
+    } catch (error) {
+      return replyWithRpcError(reply, audit, deviceId, RelayMethodValue.CodexHistoryTurns, error);
+    }
+  });
+
+  app.post("/api/relay/devices/:deviceId/codex-history/resume", async (request, reply) => {
+    if (!requireUserAccess(request, reply)) {
+      return { error: "Missing or invalid user token" };
+    }
+    if (!options.allowRelayFullAccess && requestsRelayFullAccess(RelayMethodValue.CodexHistoryResume, request.body)) {
+      audit.write({
+        action: "relay.rpc",
+        at: Date.now(),
+        method: RelayMethodValue.CodexHistoryResume,
+        outcome: "denied",
+        reason: "relay_full_access_disabled"
+      });
+      reply.code(403);
+      return { error: "Relay full-access is disabled by operator policy." };
+    }
+    const { deviceId } = request.params as { deviceId: string };
+    try {
+      const result = await invokeMachineRpc(
+        devices,
+        deviceId,
+        RelayMethodValue.CodexHistoryResume,
+        request.body,
+        routeRpcTimeout(RelayMethodValue.CodexHistoryResume, rpcTimeoutMs)
+      );
+      if (isHistoryResumeResult(result)) {
+        writeCachedHistoryPage(
+          devices.get(deviceId) ?? null,
+          {
+            id: result.history.entry.id,
+            cwd: result.history.entry.cwd,
+            limit: 40,
+            sortDirection: "desc",
+            itemsView: "summary"
+          },
+          result.history
+        );
+        const device = devices.get(deviceId);
+        if (device) {
+          device.loadedThreadIds.add(result.history.entry.id);
+        }
+      }
+      audit.write({
+        action: "relay.rpc",
+        at: Date.now(),
+        deviceId,
+        method: RelayMethodValue.CodexHistoryResume,
+        outcome: "success"
+      });
+      return result;
+    } catch (error) {
+      return replyWithRpcError(reply, audit, deviceId, RelayMethodValue.CodexHistoryResume, error);
+    }
+  });
 
   return {
     app,
@@ -1062,6 +1201,7 @@ function routeRpcTimeout(
   switch (method) {
     case RelayMethodValue.SessionsCreate:
     case RelayMethodValue.CodexHistoryDetail:
+    case RelayMethodValue.CodexHistoryTurns:
     case RelayMethodValue.CodexHistoryResume:
       return Math.max(defaultTimeoutMs, DEFAULT_SLOW_RPC_TIMEOUT_MS);
     default:
@@ -1234,6 +1374,153 @@ function approvalDecisionMeta(method: RelayMethod, params: unknown): Record<stri
   return { decision: params.body.decision };
 }
 
+function applyMachineEventState(device: RegisteredDevice, event: { type?: string; threadId?: string; payload?: unknown }): void {
+  if (event.type !== "thread.status.changed") {
+    return;
+  }
+  const payload = isRecordLike(event.payload) ? event.payload : null;
+  const threadId =
+    typeof payload?.threadId === "string"
+      ? payload.threadId
+      : typeof event.threadId === "string"
+        ? event.threadId
+        : null;
+  if (!threadId) {
+    return;
+  }
+  const loaded = payload?.loaded !== false;
+  if (loaded) {
+    device.loadedThreadIds.add(threadId);
+  } else {
+    device.loadedThreadIds.delete(threadId);
+    dropCachedHistoryPagesForThread(device, threadId);
+  }
+}
+
+function readCachedHistoryPage(
+  device: RegisteredDevice | null,
+  params: {
+    id?: string;
+    cwd?: string;
+    cursor?: string;
+    limit?: number;
+    sortDirection?: string;
+    itemsView?: string;
+  }
+): CachedHistoryPageRecord | null {
+  if (!device) {
+    return null;
+  }
+  const cacheKey = buildRecentHistoryPageCacheKey(params);
+  if (!cacheKey) {
+    return null;
+  }
+  const record = device.recentHistoryPages.get(cacheKey) ?? null;
+  if (!record) {
+    return null;
+  }
+  if (Date.now() - record.fetchedAt > DEFAULT_RECENT_HISTORY_CACHE_TTL_MS) {
+    device.recentHistoryPages.delete(cacheKey);
+    return null;
+  }
+  return record;
+}
+
+function writeCachedHistoryPage(
+  device: RegisteredDevice | null,
+  params: {
+    id?: string;
+    cwd?: string;
+    cursor?: string;
+    limit?: number;
+    sortDirection?: string;
+    itemsView?: string;
+  },
+  page: LocalCodexHistoryPageResponse
+): void {
+  if (!device) {
+    return;
+  }
+  const cacheKey = buildRecentHistoryPageCacheKey(params);
+  if (!cacheKey) {
+    return;
+  }
+  device.recentHistoryPages.set(cacheKey, {
+    fetchedAt: Date.now(),
+    page
+  });
+}
+
+function buildRecentHistoryPageCacheKey(params: {
+  id?: string;
+  cwd?: string;
+  cursor?: string;
+  limit?: number;
+  sortDirection?: string;
+  itemsView?: string;
+}): string | null {
+  if (!params.id || (params.cursor && params.cursor.trim())) {
+    return null;
+  }
+  const limit =
+    typeof params.limit === "number" && Number.isFinite(params.limit)
+      ? Math.max(1, Math.floor(params.limit))
+      : 40;
+  const sortDirection = params.sortDirection === "asc" ? "asc" : "desc";
+  const itemsView = params.itemsView === "full" ? "full" : "summary";
+  const cwd = params.cwd?.trim() || "";
+  return `${params.id}::${cwd}::${sortDirection}::${itemsView}::${limit}`;
+}
+
+function dropCachedHistoryPagesForThread(device: RegisteredDevice, threadId: string): void {
+  for (const key of device.recentHistoryPages.keys()) {
+    if (key.startsWith(`${threadId}::`)) {
+      device.recentHistoryPages.delete(key);
+    }
+  }
+}
+
+function replyWithRpcError(
+  reply: FastifyReply,
+  audit: AuditLogger,
+  deviceId: string,
+  method: RelayMethod,
+  error: unknown
+) {
+  const message = error instanceof Error ? error.message : String(error);
+  audit.write({
+    action: "relay.rpc",
+    at: Date.now(),
+    deviceId,
+    method,
+    outcome: "failure",
+    reason: message
+  });
+  const statusCode =
+    message.includes("timeout")
+      ? 504
+      : message.includes("not connected") || message.includes("offline")
+        ? 503
+        : message.includes("not found")
+          ? 404
+          : 400;
+  reply.code(statusCode);
+  return { error: message };
+}
+
+function isHistoryResumeResult(value: unknown): value is { history: LocalCodexHistoryPageResponse } {
+  return (
+    isRecordLike(value) &&
+    isRecordLike(value.history) &&
+    Array.isArray(value.history.messages) &&
+    isRecordLike(value.history.entry)
+  );
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function registerEventOnlyDevice(
   devices: Map<string, RegisteredDevice>,
   deviceId: string,
@@ -1256,7 +1543,9 @@ function registerEventOnlyDevice(
       activeSessions: 0
     },
     socket,
-    store: new DeviceEventStore(limit !== undefined ? { limit } : {})
+    store: new DeviceEventStore(limit !== undefined ? { limit } : {}),
+    loadedThreadIds: new Set<string>(),
+    recentHistoryPages: new Map<string, CachedHistoryPageRecord>()
   };
   devices.set(deviceId, created);
   return created;

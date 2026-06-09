@@ -6170,15 +6170,33 @@ summary {
   gap: 1rem;
 }
 
-.cn-history-fold-chip {
-  align-self: center;
-  background: #f4f7fa;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+.cn-history-pagination {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 0.5rem;
+}
+
+.cn-history-load-more {
+  appearance: none;
+  background: transparent;
+  border: 0;
   color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 700;
-  padding: 0.45rem 0.8rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.83rem;
+  font-weight: 600;
+  padding: 0.2rem 0.6rem;
+  transition: color 160ms ease, opacity 160ms ease;
+}
+
+.cn-history-load-more:hover,
+.cn-history-load-more:focus-visible {
+  color: var(--ink);
+}
+
+.cn-history-load-more:disabled {
+  cursor: progress;
+  opacity: 0.68;
 }
 
 .cn-live-console .cn-message.user {

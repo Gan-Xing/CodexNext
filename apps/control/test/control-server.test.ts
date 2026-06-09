@@ -134,6 +134,43 @@ describe("control server relay", () => {
     });
   });
 
+  it("returns loaded thread ids over relay HTTP", async () => {
+    const { baseUrl } = await startServer();
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    machine.on("rpc:request", (request, ack) => {
+      if (request.method !== RelayMethodValue.CodexHistoryLoaded) {
+        return;
+      }
+      ack({
+        ok: true,
+        result: {
+          threadIds: ["thread_hot", "thread_warm"]
+        }
+      });
+    });
+
+    const response = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/loaded`
+    );
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as { threadIds: string[] };
+    expect(payload.threadIds).toEqual(["thread_hot", "thread_warm"]);
+  });
+
   it("returns 504-style errors when relay rpc times out", async () => {
     const { baseUrl } = await startServer({ rpcTimeoutMs: 50 });
     const machine = createMachineSocket(baseUrl, "device_1", {
@@ -197,6 +234,75 @@ describe("control server relay", () => {
       `${baseUrl}/api/relay/devices/device_1/codex-history/detail?id=thread_1`
     );
     expect(response.status).toBe(200);
+  });
+
+  it("relays paged history turns over HTTP", async () => {
+    const { baseUrl } = await startServer({ rpcTimeoutMs: 50 });
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    let callCount = 0;
+    machine.on("rpc:request", (payload, ack) => {
+      if (payload.method !== RelayMethodValue.CodexHistoryTurns) {
+        return;
+      }
+      callCount += 1;
+      setTimeout(() => {
+        ack({
+          ok: true,
+          result: {
+            entry: {
+              id: "thread_1",
+              cwd: "/tmp",
+              cwdExists: true,
+              title: "Thread",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+              source: "cli"
+            },
+            messages: [
+              {
+                id: "msg_1",
+                role: "assistant",
+                text: "recent page",
+                ts: "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            nextCursor: "cursor_older",
+            backwardsCursor: null
+          }
+        });
+      }, 80);
+    });
+
+    const response = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/turns?id=thread_1&limit=20`
+    );
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      messages: Array<{ text: string }>;
+      nextCursor: string | null;
+    };
+    expect(payload.messages[0]?.text).toBe("recent page");
+    expect(payload.nextCursor).toBe("cursor_older");
+
+    const cachedResponse = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/turns?id=thread_1&limit=20`
+    );
+    expect(cachedResponse.status).toBe(200);
+    expect(callCount).toBe(1);
   });
 
   it("accepts large relay rpc payloads for history detail", async () => {

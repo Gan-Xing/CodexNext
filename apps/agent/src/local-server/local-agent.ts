@@ -9,10 +9,12 @@ import type {
   LocalCodexHistoryDetailResponse,
   LocalCodexHistoryEntry,
   LocalCodexHistoryMessage,
+  LocalCodexHistoryPageResponse,
   LocalCodexHistoryResponse,
   LocalDirectoryListResponse,
   LocalEvent,
   LocalHealthResponse,
+  LocalLoadedThreadsResponse,
   LocalResumeSessionResponse,
   LocalSessionSummary,
   RelayMethod,
@@ -121,19 +123,27 @@ export function createLocalAgentRuntime(
           return listDirectories(readOptionalPath(params));
         case RelayMethodValue.CodexHistoryList:
           return listCodexHistory(params, sessionManager);
+        case RelayMethodValue.CodexHistoryLoaded:
+          return listLoadedCodexHistoryThreads(sessionManager);
         case RelayMethodValue.CodexHistoryDetail:
           return readCodexHistoryDetail(params, sessionManager);
+        case RelayMethodValue.CodexHistoryTurns:
+          return listCodexHistoryTurns(params, sessionManager);
         case RelayMethodValue.CodexHistoryResume: {
           const body = LocalResumeSessionSchema.parse(params ?? {});
-          const history = await readCodexHistoryDetailById(body.id, sessionManager);
-          const session = await sessionManager.resumeSession({
+          const historyEntry = await readCodexHistoryEntryById(body.id, sessionManager);
+          const resumed = await sessionManager.resumeSessionWithInitialTurns({
             ...body,
-            threadId: history.entry.id,
-            cwd: history.entry.cwd,
-            title: history.entry.title
+            threadId: historyEntry.id,
+            cwd: body.cwd ?? historyEntry.cwd,
+            title: body.title ?? historyEntry.title
+          });
+          const history = historyPageFromTurns({
+            entry: historyEntry,
+            turnsPage: resumed.initialTurnsPage
           });
           return {
-            session,
+            session: resumed.session,
             history
           } satisfies LocalResumeSessionResponse;
         }
@@ -251,10 +261,38 @@ async function listCodexHistory(
     useStateDbOnly: true,
     searchTerm
   });
+  const loadedThreadIds = new Set<string>();
+  try {
+    const loaded = await sessionManager.listLoadedThreads();
+    for (const thread of loaded.data) {
+      loadedThreadIds.add(thread.id);
+    }
+  } catch {
+    // Older app-server builds may not expose thread/loaded/list yet.
+  }
   const entries = await Promise.all(
     response.data.map((thread) => threadToHistoryEntry(thread, response.data))
   );
+  for (const entry of entries) {
+    if (loadedThreadIds.has(entry.id)) {
+      entry.loaded = true;
+      entry.threadStatus = entry.threadStatus ?? "loaded";
+    }
+  }
   return { root: "codex app-server thread/list", entries };
+}
+
+async function listLoadedCodexHistoryThreads(
+  sessionManager: SessionManager
+): Promise<LocalLoadedThreadsResponse> {
+  try {
+    const response = await sessionManager.listLoadedThreads();
+    return {
+      threadIds: response.data.map((thread) => thread.id)
+    };
+  } catch {
+    return { threadIds: [] };
+  }
 }
 
 async function readCodexHistoryDetail(
@@ -265,6 +303,32 @@ async function readCodexHistoryDetail(
     throw new Error("Missing codex thread id");
   }
   return readCodexHistoryDetailById(params.id, sessionManager);
+}
+
+async function listCodexHistoryTurns(
+  params: unknown,
+  sessionManager: SessionManager
+): Promise<LocalCodexHistoryPageResponse> {
+  if (!isPlainObject(params) || typeof params.id !== "string" || !params.id.trim()) {
+    throw new Error("Missing codex thread id");
+  }
+
+  const limit =
+    typeof params.limit === "number"
+      ? Math.max(1, Math.min(100, Math.floor(params.limit)))
+      : 40;
+  const sortDirection = params.sortDirection === "asc" ? "asc" : "desc";
+  const itemsView = params.itemsView === "full" ? "full" : "summary";
+  const entry = await readCodexHistoryEntryById(params.id, sessionManager);
+  const turnsPage = await sessionManager.listThreadTurns({
+    threadId: params.id,
+    cursor: typeof params.cursor === "string" && params.cursor.trim() ? params.cursor : null,
+    limit,
+    sortDirection,
+    itemsView
+  });
+
+  return historyPageFromTurns({ entry, turnsPage, sortDirection });
 }
 
 async function readCodexHistoryDetailById(
@@ -279,6 +343,17 @@ async function readCodexHistoryDetailById(
     entry: await threadToHistoryEntry(response.thread),
     messages: threadToHistoryMessages(response.thread)
   };
+}
+
+async function readCodexHistoryEntryById(
+  id: string,
+  sessionManager: SessionManager
+): Promise<LocalCodexHistoryEntry> {
+  const response = await sessionManager.readThread({
+    threadId: id,
+    includeTurns: false
+  });
+  return threadToHistoryEntry(response.thread);
 }
 
 async function threadToHistoryEntry(
@@ -296,7 +371,9 @@ async function threadToHistoryEntry(
     title,
     createdAt: timestampToIso(thread.createdAt),
     updatedAt: timestampToIso(thread.updatedAt),
-    source: formatThreadSource(thread.source)
+    source: formatThreadSource(thread.source),
+    loaded: isLoadedThreadStatus(thread.status),
+    threadStatus: readThreadStatusType(thread.status)
   };
 }
 
@@ -308,6 +385,42 @@ function threadToHistoryMessages(
     const ts = timestampToIso(
       turn.completedAt ?? turn.startedAt ?? thread.updatedAt ?? thread.createdAt
     );
+    turn.items.forEach((item, index) => {
+      const message = threadItemToHistoryMessage(item, ts, `${turn.id}-${index}`);
+      if (message) {
+        messages.push(message);
+      }
+    });
+  }
+  return messages;
+}
+
+function historyPageFromTurns(input: {
+  entry: LocalCodexHistoryEntry;
+  turnsPage: { data: CodexThread["turns"]; nextCursor: string | null; backwardsCursor: string | null } | null | undefined;
+  sortDirection?: "asc" | "desc";
+}): LocalCodexHistoryPageResponse {
+  const turns = input.turnsPage?.data ?? [];
+  const orderedTurns =
+    input.sortDirection === "asc" ? turns : [...turns].reverse();
+
+  return {
+    entry: input.entry,
+    messages: turnsToHistoryMessages(orderedTurns),
+    nextCursor: input.turnsPage?.nextCursor ?? null,
+    backwardsCursor: input.turnsPage?.backwardsCursor ?? null
+  };
+}
+
+function turnsToHistoryMessages(
+  turns: CodexThread["turns"] = []
+): LocalCodexHistoryMessage[] {
+  const messages: LocalCodexHistoryMessage[] = [];
+  for (const turn of turns) {
+    if (!turn) {
+      continue;
+    }
+    const ts = timestampToIso(turn.completedAt ?? turn.startedAt ?? Date.now());
     turn.items.forEach((item, index) => {
       const message = threadItemToHistoryMessage(item, ts, `${turn.id}-${index}`);
       if (message) {
@@ -356,6 +469,21 @@ function historyMessage(
     return null;
   }
   return { id, role, text: trimmed.slice(0, 16_000), ts };
+}
+
+function readThreadStatusType(status: unknown): string | null {
+  if (isPlainObject(status) && typeof status.type === "string") {
+    return status.type;
+  }
+  if (typeof status === "string") {
+    return status;
+  }
+  return null;
+}
+
+function isLoadedThreadStatus(status: unknown): boolean {
+  const type = readThreadStatusType(status);
+  return type !== null && type !== "notLoaded";
 }
 
 function extractUserMessageText(content: unknown): string {

@@ -2,7 +2,9 @@ import type {
   AgentConnection,
   LocalApprovalDecision,
   LocalCodexHistoryDetailResponse,
+  LocalCodexHistoryPageResponse,
   LocalCodexHistoryResponse,
+  LocalLoadedThreadsResponse,
   LocalDirectoryListResponse,
   LocalEvent,
   LocalHealthResponse,
@@ -92,6 +94,12 @@ export function listCodexHistory(
   return agentFetch(connection, `/api/codex-history?limit=${limit}`);
 }
 
+export function getLoadedCodexThreads(
+  connection: AgentConnection
+): Promise<LocalLoadedThreadsResponse> {
+  return agentFetch(connection, "/api/codex-history/loaded");
+}
+
 export function getCodexHistoryDetail(
   connection: AgentConnection,
   input: { id: string; cwd?: string }
@@ -103,6 +111,32 @@ export function getCodexHistoryDetail(
     query.set("cwd", input.cwd);
   }
   return agentFetch(connection, `/api/codex-history/detail?${query.toString()}`);
+}
+
+export function getCodexHistoryTurns(
+  connection: AgentConnection,
+  input: {
+    id: string;
+    cwd?: string;
+    cursor?: string | null;
+    limit?: number;
+  }
+): Promise<LocalCodexHistoryPageResponse> {
+  const query = new URLSearchParams({
+    id: input.id
+  });
+  if (input.cwd) {
+    query.set("cwd", input.cwd);
+  }
+  if (input.cursor) {
+    query.set("cursor", input.cursor);
+  }
+  if (typeof input.limit === "number" && Number.isFinite(input.limit)) {
+    query.set("limit", String(Math.floor(input.limit)));
+  }
+  query.set("sortDirection", "desc");
+  query.set("itemsView", "summary");
+  return agentFetch(connection, `/api/codex-history/turns?${query.toString()}`);
 }
 
 export function resumeCodexHistory(
@@ -195,8 +229,16 @@ export function resolveAgentUrl(connection: AgentConnection, path: string): URL 
     base.pathname = `${prefix}/codex-history`;
     return base;
   }
+  if (base.pathname === "/api/codex-history/loaded") {
+    base.pathname = `${prefix}/codex-history/loaded`;
+    return base;
+  }
   if (base.pathname === "/api/codex-history/detail") {
     base.pathname = `${prefix}/codex-history/detail`;
+    return base;
+  }
+  if (base.pathname === "/api/codex-history/turns") {
+    base.pathname = `${prefix}/codex-history/turns`;
     return base;
   }
   if (base.pathname === "/api/codex-history/resume") {

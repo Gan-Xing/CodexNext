@@ -27,6 +27,19 @@ describe("relay api url mapping", () => {
     ).toBe(
       "http://127.0.0.1:3002/api/relay/devices/device_1/codex-history/detail?id=thread_1&cwd=%2Ftmp"
     );
+    expect(
+      resolveAgentUrl(
+        relayConnection,
+        "/api/codex-history/turns?id=thread_1&cursor=older"
+      ).toString()
+    ).toBe(
+      "http://127.0.0.1:3002/api/relay/devices/device_1/codex-history/turns?id=thread_1&cursor=older"
+    );
+    expect(
+      resolveAgentUrl(relayConnection, "/api/codex-history/loaded").toString()
+    ).toBe(
+      "http://127.0.0.1:3002/api/relay/devices/device_1/codex-history/loaded"
+    );
   });
 
   it("maps approval and goal paths without changing the tail segments", () => {

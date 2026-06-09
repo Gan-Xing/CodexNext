@@ -283,7 +283,13 @@ describe("SessionManager messages", () => {
     expect(fake.threadResumeParams[0]).toMatchObject({
       threadId: "history_1",
       cwd: process.cwd(),
-      model: "gpt-5.5"
+      model: "gpt-5.5",
+      excludeTurns: true,
+      initialTurnsPage: {
+        limit: 40,
+        sortDirection: "desc",
+        itemsView: "summary"
+      }
     });
     expect(fake.threadReadParams[0]).toEqual({
       threadId: "history_1",
@@ -433,6 +439,22 @@ describe("local HTTP server guards", () => {
       nextCursor: null,
       backwardsCursor: null
     };
+    fake.threadLoadedListResponse = {
+      data: [
+        {
+          id: "thread_1",
+          sessionId: "session_1",
+          preview: "检查这个项目",
+          createdAt: 1_786_000_000,
+          updatedAt: 1_786_000_060,
+          cwd: process.cwd(),
+          status: { type: "idle" },
+          source: "cli",
+          name: "官方 Codex 标题",
+          turns: []
+        }
+      ]
+    };
 
     const handle = createLocalServer({
       host: "127.0.0.1",
@@ -467,9 +489,16 @@ describe("local HTTP server guards", () => {
           id: "thread_1",
           cwd: process.cwd(),
           cwdExists: true,
-          title: "官方 Codex 标题"
+          title: "官方 Codex 标题",
+          loaded: true
         })
       ]);
+
+      const loaded = await fetch(`${base}/api/codex-history/loaded?token=secret`);
+      const loadedBody = await loaded.json() as { threadIds: string[] };
+      expect(loaded.status).toBe(200);
+      expect(fake.threadLoadedListCalls).toBe(2);
+      expect(loadedBody.threadIds).toEqual(["thread_1"]);
     } finally {
       await handle.close();
     }
@@ -508,6 +537,29 @@ describe("local HTTP server guards", () => {
         ]
       }
     };
+    fake.threadTurnsListResponse = {
+      data: [
+        {
+          id: "turn_1",
+          startedAt: 1_786_000_010,
+          completedAt: 1_786_000_020,
+          items: [
+            {
+              id: "item_user",
+              type: "userMessage",
+              content: [{ type: "text", text: "继续这个项目" }]
+            },
+            {
+              id: "item_agent",
+              type: "agentMessage",
+              text: "我会先查看文件结构。"
+            }
+          ]
+        }
+      ],
+      nextCursor: "cursor_older",
+      backwardsCursor: null
+    };
     const handle = createLocalServer({
       host: "127.0.0.1",
       port: 0,
@@ -541,6 +593,27 @@ describe("local HTTP server guards", () => {
         { role: "assistant", text: "我会先查看文件结构。" }
       ]);
 
+      const turns = await fetch(
+        `${base}/api/codex-history/turns?token=secret&id=thread_1&limit=20&sortDirection=desc&itemsView=summary`
+      );
+      const turnsBody = await turns.json() as {
+        messages: Array<{ role: string; text: string }>;
+        nextCursor: string | null;
+      };
+      expect(turns.status).toBe(200);
+      expect(fake.threadTurnsListParams[0]).toEqual({
+        threadId: "thread_1",
+        cursor: null,
+        limit: 20,
+        sortDirection: "desc",
+        itemsView: "summary"
+      });
+      expect(turnsBody.messages).toMatchObject([
+        { role: "user", text: "继续这个项目" },
+        { role: "assistant", text: "我会先查看文件结构。" }
+      ]);
+      expect(turnsBody.nextCursor).toBe("cursor_older");
+
       const response = await fetch(`${base}/api/codex-history/resume?token=secret`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -557,9 +630,16 @@ describe("local HTTP server guards", () => {
       expect(response.status).toBe(201);
       expect(body.session.threadId).toBe("thread_1");
       expect(body.history.messages[0]?.text).toBe("继续这个项目");
+      expect(body.history.nextCursor).toBe("cursor_older");
       expect(fake.threadResumeParams[0]).toMatchObject({
         threadId: "thread_1",
-        cwd: process.cwd()
+        cwd: process.cwd(),
+        excludeTurns: true,
+        initialTurnsPage: {
+          limit: 40,
+          sortDirection: "desc",
+          itemsView: "summary"
+        }
       });
     } finally {
       await handle.close();
@@ -584,7 +664,9 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
   public threadResumeParams: unknown[] = [];
   public threadUnarchiveParams: unknown[] = [];
   public threadListParams: unknown[] = [];
+  public threadLoadedListCalls = 0;
   public threadReadParams: unknown[] = [];
+  public threadTurnsListParams: unknown[] = [];
   public failNextResumeAsArchived = false;
   public failNextTurnStart: Error | null = null;
   public failNextTurnSteer: Error | null = null;
@@ -603,6 +685,14 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
       cwd: process.cwd(),
       turns: []
     }
+  };
+  public threadTurnsListResponse: Awaited<ReturnType<ManagedCodexClient["threadTurnsList"]>> = {
+    data: [],
+    nextCursor: null,
+    backwardsCursor: null
+  };
+  public threadLoadedListResponse: Awaited<ReturnType<ManagedCodexClient["threadLoadedList"]>> = {
+    data: []
   };
 
   public initialize = async () => ({
@@ -637,7 +727,9 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
       thread: { id: params.threadId },
       model: params.model ?? "gpt-5.5",
       modelProvider: "openai",
-      cwd: params.cwd ?? process.cwd()
+      cwd: params.cwd ?? process.cwd(),
+      initialTurnsPage:
+        params.initialTurnsPage == null ? null : this.threadTurnsListResponse
     };
   };
 
@@ -655,11 +747,23 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
     return this.threadListResponse;
   };
 
+  public threadLoadedList = async () => {
+    this.threadLoadedListCalls += 1;
+    return this.threadLoadedListResponse;
+  };
+
   public threadRead = async (
     params: Parameters<ManagedCodexClient["threadRead"]>[0]
   ) => {
     this.threadReadParams.push(params);
     return this.threadReadResponse;
+  };
+
+  public threadTurnsList = async (
+    params: Parameters<ManagedCodexClient["threadTurnsList"]>[0]
+  ) => {
+    this.threadTurnsListParams.push(params);
+    return this.threadTurnsListResponse;
   };
 
   public setGoal = async () => ({

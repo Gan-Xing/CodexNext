@@ -54,6 +54,8 @@ export const CodexClientMethod = {
   ThreadResume: "thread/resume",
   ThreadUnarchive: "thread/unarchive",
   ThreadList: "thread/list",
+  ThreadLoadedList: "thread/loaded/list",
+  ThreadTurnsList: "thread/turns/list",
   ThreadRead: "thread/read",
   ThreadGoalSet: "thread/goal/set",
   ThreadGoalGet: "thread/goal/get",
@@ -222,6 +224,8 @@ export interface ThreadResumeParams {
   modelProvider?: string | null;
   serviceTier?: string | null;
   cwd?: string | null;
+  excludeTurns?: boolean | null;
+  initialTurnsPage?: Omit<ThreadTurnsListParams, "threadId"> | null;
   approvalPolicy?: AskForApproval | null;
   approvalsReviewer?: ApprovalsReviewer | null;
   sandbox?: SandboxMode | null;
@@ -236,6 +240,7 @@ export interface ThreadResumeResponse extends ThreadStartResponse {
   modelProvider?: string;
   serviceTier?: string | null;
   cwd?: string;
+  initialTurnsPage?: ThreadTurnsListResponse | null;
   approvalPolicy?: AskForApproval;
   approvalsReviewer?: ApprovalsReviewer;
   reasoningEffort?: LocalReasoningEffort | "none" | "minimal" | null;
@@ -319,6 +324,10 @@ export interface ThreadListResponse {
   backwardsCursor: string | null;
 }
 
+export interface ThreadLoadedListResponse {
+  data: CodexThread[];
+}
+
 export interface ThreadReadParams {
   threadId: string;
   includeTurns?: boolean;
@@ -326,6 +335,22 @@ export interface ThreadReadParams {
 
 export interface ThreadReadResponse {
   thread: CodexThread;
+}
+
+export type ThreadTurnItemsView = "summary" | "full";
+
+export interface ThreadTurnsListParams {
+  threadId: string;
+  cursor?: string | null;
+  limit?: number | null;
+  sortDirection?: SortDirection | null;
+  itemsView?: ThreadTurnItemsView | null;
+}
+
+export interface ThreadTurnsListResponse {
+  data: CodexThreadTurn[];
+  nextCursor: string | null;
+  backwardsCursor: string | null;
 }
 
 export type UserInput =
@@ -442,6 +467,7 @@ export const LocalEventType = {
   SessionCreated: "session.created",
   SessionUpdated: "session.updated",
   SessionClosed: "session.closed",
+  ThreadStatusChanged: "thread.status.changed",
   GoalUpdated: "goal.updated",
   GoalCleared: "goal.cleared",
   TurnStarted: "turn.started",
@@ -542,6 +568,7 @@ export type LocalStartSessionInput = z.infer<typeof LocalStartSessionSchema>;
 export const LocalResumeSessionSchema = z.object({
   id: z.string().min(1),
   cwd: z.string().min(1).optional(),
+  title: z.string().min(1).optional(),
   model: z.string().min(1).nullable().optional(),
   permissionMode: z
     .enum(["request-approval", "auto-approve", "full-access", "custom-config"])
@@ -593,6 +620,8 @@ export interface LocalCodexHistoryEntry {
   createdAt: string;
   updatedAt: string;
   source: string;
+  loaded?: boolean;
+  threadStatus?: string | null;
 }
 
 export type LocalCodexHistoryMessageRole =
@@ -614,14 +643,25 @@ export interface LocalCodexHistoryResponse {
   entries: LocalCodexHistoryEntry[];
 }
 
+export interface LocalLoadedThreadsResponse {
+  threadIds: string[];
+}
+
 export interface LocalCodexHistoryDetailResponse {
   entry: LocalCodexHistoryEntry;
   messages: LocalCodexHistoryMessage[];
 }
 
+export interface LocalCodexHistoryPageResponse {
+  entry: LocalCodexHistoryEntry;
+  messages: LocalCodexHistoryMessage[];
+  nextCursor: string | null;
+  backwardsCursor: string | null;
+}
+
 export interface LocalResumeSessionResponse {
   session: LocalSessionSummary;
-  history: LocalCodexHistoryDetailResponse;
+  history: LocalCodexHistoryPageResponse;
 }
 
 export const LocalSetGoalSchema = z.object({
@@ -776,7 +816,9 @@ export const RelayMethod = {
   ApprovalDecision: "approval.decision",
   DirectoriesList: "directories.list",
   CodexHistoryList: "codexHistory.list",
+  CodexHistoryLoaded: "codexHistory.loaded",
   CodexHistoryDetail: "codexHistory.detail",
+  CodexHistoryTurns: "codexHistory.turns",
   CodexHistoryResume: "codexHistory.resume"
 } as const;
 

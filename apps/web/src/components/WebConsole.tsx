@@ -110,6 +110,9 @@ export function WebConsole() {
     removeProject,
     archiveThread,
     deleteSavedDevice,
+    canLoadOlderHistory,
+    loadOlderHistory,
+    loadingOlderHistory,
     visibleChatItems
   } = useWebConsoleController();
 
@@ -314,7 +317,10 @@ export function WebConsole() {
           {currentSession ? (
             <ChatCanvas
               active={activeTurn}
+              canLoadOlderHistory={canLoadOlderHistory}
               items={visibleChatItems}
+              loadingOlderHistory={loadingOlderHistory}
+              onLoadOlderHistory={() => void loadOlderHistory()}
               pendingApprovals={pendingApprovals.length}
               resumeState={currentResumeState}
               session={currentSession}

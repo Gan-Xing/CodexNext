@@ -9,10 +9,13 @@ import type {
   ThreadGoalGetResponse,
   ThreadGoalSetParams,
   ThreadGoalSetResponse,
+  ThreadLoadedListResponse,
   ThreadListParams,
   ThreadListResponse,
   ThreadReadParams,
   ThreadReadResponse,
+  ThreadTurnsListParams,
+  ThreadTurnsListResponse,
   ThreadResumeParams,
   ThreadResumeResponse,
   ThreadStartParams,
@@ -145,9 +148,25 @@ export class CodexAppServerClient {
     );
   }
 
+  public threadLoadedList(): Promise<ThreadLoadedListResponse> {
+    return this.rpc.request<ThreadLoadedListResponse>(
+      CodexClientMethod.ThreadLoadedList,
+      {}
+    );
+  }
+
   public threadRead(params: ThreadReadParams): Promise<ThreadReadResponse> {
     return this.rpc.request<ThreadReadResponse>(
       CodexClientMethod.ThreadRead,
+      params
+    );
+  }
+
+  public threadTurnsList(
+    params: ThreadTurnsListParams
+  ): Promise<ThreadTurnsListResponse> {
+    return this.rpc.request<ThreadTurnsListResponse>(
+      CodexClientMethod.ThreadTurnsList,
       params
     );
   }

@@ -14,7 +14,10 @@ import { ThinkingRow } from "./ThinkingRow";
 
 export function ChatCanvas(props: {
   active: boolean;
+  canLoadOlderHistory?: boolean;
   items: ChatItem[];
+  loadingOlderHistory?: boolean;
+  onLoadOlderHistory?: () => void;
   pendingApprovals: number;
   resumeState: ResumeState | null;
   session: LocalSessionSummary;
@@ -25,14 +28,12 @@ export function ChatCanvas(props: {
   const pinnedRef = useRef(true);
   const previousSessionRef = useRef<string | null>(null);
   const previousTailRef = useRef("");
+  const previousHeightRef = useRef(0);
+  const previousLengthRef = useRef(0);
   const [showJumpButton, setShowJumpButton] = useState(false);
 
   const tailSignature = buildChatTailSignature(props.items.at(-1));
-  const visibleItems = useMemo(
-    () => (props.items.length > 150 ? props.items.slice(-150) : props.items),
-    [props.items]
-  );
-  const hiddenCount = Math.max(0, props.items.length - visibleItems.length);
+  const visibleItems = useMemo(() => props.items, [props.items]);
   const activeTurnId = props.active ? props.session.activeTurnId ?? null : null;
   const showThinkingRow = shouldShowThinkingRow(visibleItems, activeTurnId, props.active);
 
@@ -66,12 +67,19 @@ export function ChatCanvas(props: {
       viewport.scrollTop = viewport.scrollHeight;
       pinnedRef.current = true;
       setShowJumpButton(false);
+    } else if (!tailChanged && visibleItems.length > previousLengthRef.current) {
+      const delta = viewport.scrollHeight - previousHeightRef.current;
+      if (delta > 0) {
+        viewport.scrollTop += delta;
+      }
     } else if (tailChanged && !pinnedRef.current) {
       setShowJumpButton(true);
     }
 
     previousSessionRef.current = props.session.sessionId;
     previousTailRef.current = tailSignature;
+    previousHeightRef.current = viewport.scrollHeight;
+    previousLengthRef.current = visibleItems.length;
   }, [props.session.sessionId, tailSignature, visibleItems.length]);
 
   const showStatusStrip = Boolean(
@@ -99,8 +107,17 @@ export function ChatCanvas(props: {
 
       {props.items.length > 0 ? (
         <>
-          {hiddenCount > 0 ? (
-            <div className="cn-history-fold-chip">已折叠 {hiddenCount} 条更早消息</div>
+          {props.canLoadOlderHistory || props.loadingOlderHistory ? (
+            <div className="cn-history-pagination">
+              <button
+                className="cn-history-load-more"
+                type="button"
+                onClick={props.onLoadOlderHistory}
+                disabled={props.loadingOlderHistory}
+              >
+                {props.loadingOlderHistory ? "正在加载更早消息…" : "加载更早消息"}
+              </button>
+            </div>
           ) : null}
           <div className="cn-message-list">
             {visibleItems.flatMap((item) => {

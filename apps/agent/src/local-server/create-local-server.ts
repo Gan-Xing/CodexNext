@@ -131,10 +131,23 @@ async function handleRequest(
           search: url.searchParams.get("search")?.trim() || null
         }));
         return;
+      case "codex-history.loaded":
+        sendJson(response, 200, await runtime.invoke(RelayMethod.CodexHistoryLoaded));
+        return;
       case "codex-history.detail":
         sendJson(response, 200, await runtime.invoke(RelayMethod.CodexHistoryDetail, {
           id: url.searchParams.get("id")?.trim(),
           cwd: url.searchParams.get("cwd")?.trim() || undefined
+        }));
+        return;
+      case "codex-history.turns":
+        sendJson(response, 200, await runtime.invoke(RelayMethod.CodexHistoryTurns, {
+          id: url.searchParams.get("id")?.trim(),
+          cwd: url.searchParams.get("cwd")?.trim() || undefined,
+          cursor: url.searchParams.get("cursor")?.trim() || undefined,
+          limit: Number(url.searchParams.get("limit") ?? "40") || 40,
+          sortDirection: url.searchParams.get("sortDirection")?.trim() || undefined,
+          itemsView: url.searchParams.get("itemsView")?.trim() || undefined
         }));
         return;
       case "codex-history.resume": {
@@ -235,7 +248,9 @@ type Route =
   | { name: "health"; public: true; params: Record<string, never> }
   | { name: "directories.list"; public: false; params: Record<string, never> }
   | { name: "codex-history.list"; public: false; params: Record<string, never> }
+  | { name: "codex-history.loaded"; public: false; params: Record<string, never> }
   | { name: "codex-history.detail"; public: false; params: Record<string, never> }
+  | { name: "codex-history.turns"; public: false; params: Record<string, never> }
   | { name: "codex-history.resume"; public: false; params: Record<string, never> }
   | { name: "sessions.list"; public: false; params: Record<string, never> }
   | { name: "sessions.create"; public: false; params: Record<string, never> }
@@ -281,8 +296,14 @@ function matchRoute(method: string, pathname: string): Route | null {
   if (method === "GET" && pathname === "/api/codex-history") {
     return { name: "codex-history.list", public: false, params: {} };
   }
+  if (method === "GET" && pathname === "/api/codex-history/loaded") {
+    return { name: "codex-history.loaded", public: false, params: {} };
+  }
   if (method === "GET" && pathname === "/api/codex-history/detail") {
     return { name: "codex-history.detail", public: false, params: {} };
+  }
+  if (method === "GET" && pathname === "/api/codex-history/turns") {
+    return { name: "codex-history.turns", public: false, params: {} };
   }
   if (method === "POST" && pathname === "/api/codex-history/resume") {
     return { name: "codex-history.resume", public: false, params: {} };

@@ -23,10 +23,13 @@ import type {
   SandboxMode,
   ThreadGoal,
   ThreadGoalSetResponse,
+  ThreadLoadedListResponse,
   ThreadListParams,
   ThreadListResponse,
   ThreadReadParams,
   ThreadReadResponse,
+  ThreadTurnsListParams,
+  ThreadTurnsListResponse,
   ThreadResumeResponse,
   ThreadStartResponse,
   TurnStartResponse
@@ -49,7 +52,9 @@ export interface ManagedCodexClient {
   threadResume: CodexAppServerClient["threadResume"];
   threadUnarchive: CodexAppServerClient["threadUnarchive"];
   threadList: CodexAppServerClient["threadList"];
+  threadLoadedList: CodexAppServerClient["threadLoadedList"];
   threadRead: CodexAppServerClient["threadRead"];
+  threadTurnsList: CodexAppServerClient["threadTurnsList"];
   setGoal: CodexAppServerClient["setGoal"];
   getGoal: CodexAppServerClient["getGoal"];
   clearGoal: CodexAppServerClient["clearGoal"];
@@ -146,10 +151,20 @@ export class SessionManager {
     return this.withTemporaryClient((client) => client.threadList(params));
   }
 
+  public async listLoadedThreads(): Promise<ThreadLoadedListResponse> {
+    return this.withTemporaryClient((client) => client.threadLoadedList());
+  }
+
   public async readThread(
     params: ThreadReadParams
   ): Promise<ThreadReadResponse> {
     return this.withTemporaryClient((client) => client.threadRead(params));
+  }
+
+  public async listThreadTurns(
+    params: ThreadTurnsListParams
+  ): Promise<ThreadTurnsListResponse> {
+    return this.withTemporaryClient((client) => client.threadTurnsList(params));
   }
 
   public async startSession(
@@ -274,6 +289,16 @@ export class SessionManager {
   public async resumeSession(
     input: ResumeSessionInput
   ): Promise<LocalSessionSummary> {
+    const result = await this.resumeSessionWithInitialTurns(input);
+    return result.session;
+  }
+
+  public async resumeSessionWithInitialTurns(
+    input: ResumeSessionInput
+  ): Promise<{
+    session: LocalSessionSummary;
+    initialTurnsPage: ThreadTurnsListResponse | null;
+  }> {
     const cwd = path.resolve(input.cwd);
     await assertDirectory(cwd);
     const permissions = resolvePermissions(input);
@@ -308,6 +333,12 @@ export class SessionManager {
       const resumeParams = {
         threadId: input.threadId,
         cwd,
+        excludeTurns: true,
+        initialTurnsPage: {
+          limit: 40,
+          sortDirection: "desc" as const,
+          itemsView: "summary" as const
+        },
         model: input.model ?? null,
         ...permissions.threadParams
       };
@@ -355,7 +386,10 @@ export class SessionManager {
         payload: { ...toSummary(session), resumedFrom: input.threadId }
       });
 
-      return toSummary(session);
+      return {
+        session: toSummary(session),
+        initialTurnsPage: thread.initialTurnsPage ?? null
+      };
     } catch (error) {
       removeNotificationListener();
       await client.close();
@@ -619,6 +653,21 @@ export class SessionManager {
     });
 
     switch (notification.method) {
+      case CodexNotificationMethod.ThreadStatusChanged: {
+        const statusType = extractThreadStatusType(notification.params);
+        this.options.eventStore.append({
+          type: LocalEventType.ThreadStatusChanged,
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          payload: {
+            threadId,
+            statusType,
+            loaded: statusType !== "notLoaded"
+          }
+        });
+        return;
+      }
       case CodexNotificationMethod.TurnStarted:
         if (ids.turnId) {
           session.activeTurnId = ids.turnId;
@@ -883,6 +932,25 @@ function extractTurnStatus(params: unknown): string | undefined {
     return undefined;
   }
   return typeof params.turn.status === "string" ? params.turn.status : undefined;
+}
+
+function extractThreadStatusType(params: unknown): string | null {
+  if (!isRecord(params)) {
+    return null;
+  }
+  const status =
+    isRecord(params.status)
+      ? params.status
+      : isRecord(params.thread) && isRecord(params.thread.status)
+        ? params.thread.status
+        : null;
+  if (status && typeof status.type === "string") {
+    return status.type;
+  }
+  if (typeof params.status === "string") {
+    return params.status;
+  }
+  return null;
 }
 
 function mapTurnStatus(status: string | undefined): LocalSessionStatus {
