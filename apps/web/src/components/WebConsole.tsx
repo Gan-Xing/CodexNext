@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { CSSProperties } from "react";
 import { sessionTitle } from "../features/sessions/session-utils";
 import {
@@ -19,6 +20,7 @@ import { SummarySheet } from "./sheets/SummarySheet";
 import { SessionSetupSheet } from "./sheets/SessionSetupSheet";
 
 export function WebConsole() {
+  const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const {
     activeMenu,
     activeSheet,
@@ -203,13 +205,6 @@ export function WebConsole() {
               <span className={connected ? "cn-live-dot" : "cn-live-dot offline"} />
               <span className="cn-device-copy compact">
                 <strong>{deviceDisplayName}</strong>
-                <small>
-                  {connected
-                    ? connection.mode === "direct"
-                      ? connection.agentUrl.replace(/^https?:\/\//, "")
-                      : connection.deviceId
-                    : "未连接"}
-                </small>
               </span>
             </button>
           </div>
@@ -225,32 +220,41 @@ export function WebConsole() {
               onSelectHistory={(entry) => void selectHistory(entry)}
               onSelectSession={selectSession}
             />
-            <span className="cn-project-tree-title">项目</span>
-            <div className="cn-project-scroll" onScroll={clearThreadHoverPreview}>
-              {projectGroups.map((group) => (
-                <ProjectThreadGroup
-                  key={group.cwd}
-                  group={group}
-                  historyLoadingKey={historyLoadingKey}
-                  onArchiveThread={archiveThread}
-                  onArchiveProject={archiveProject}
-                  onHideThreadPreview={clearThreadHoverPreview}
-                  onRemoveProject={removeProject}
-                  onRenameProject={renameProject}
-                  onShowThreadPreview={showThreadHoverPreview}
-                  onStartProjectSession={startProjectSession}
-                  onTogglePinnedProject={togglePinnedProject}
-                  onTogglePinnedThread={togglePinnedThread}
-                  onSelectHistory={(entry) => void selectHistory(entry)}
-                  onSelectSession={selectSession}
-                />
-              ))}
-              {projectGroups.length === 0 && pinnedThreadItems.length === 0 ? (
-                <div className="cn-empty-sidebar">
-                  {connected ? "还没有对话" : "先连接设备"}
-                </div>
-              ) : null}
-            </div>
+            <button
+              className="cn-project-tree-toggle"
+              type="button"
+              onClick={() => setProjectsCollapsed((value) => !value)}
+            >
+              <span>项目</span>
+              <CodexIcon name={projectsCollapsed ? "chevronRight" : "chevronDown"} />
+            </button>
+            {projectsCollapsed ? null : (
+              <div className="cn-project-scroll" onScroll={clearThreadHoverPreview}>
+                {projectGroups.map((group) => (
+                  <ProjectThreadGroup
+                    key={group.cwd}
+                    group={group}
+                    historyLoadingKey={historyLoadingKey}
+                    onArchiveThread={archiveThread}
+                    onArchiveProject={archiveProject}
+                    onHideThreadPreview={clearThreadHoverPreview}
+                    onRemoveProject={removeProject}
+                    onRenameProject={renameProject}
+                    onShowThreadPreview={showThreadHoverPreview}
+                    onStartProjectSession={startProjectSession}
+                    onTogglePinnedProject={togglePinnedProject}
+                    onTogglePinnedThread={togglePinnedThread}
+                    onSelectHistory={(entry) => void selectHistory(entry)}
+                    onSelectSession={selectSession}
+                  />
+                ))}
+                {projectGroups.length === 0 && pinnedThreadItems.length === 0 ? (
+                  <div className="cn-empty-sidebar">
+                    {connected ? "还没有对话" : "先连接设备"}
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
 
           <div className="cn-sidebar-footer">
