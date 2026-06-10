@@ -48,6 +48,7 @@ pnpm install
 pnpm typecheck
 pnpm test
 pnpm --filter @codexnext/agent dev -- doctor
+pnpm --filter @codexnext/agent dev -- doctor --relay https://<your-relay-host>
 ```
 
 ## Relay-Only Product Topology
@@ -58,6 +59,7 @@ Think in service roles, not in one fixed machine layout:
   - device presence
   - relay RPC
   - event replay
+  - stale presence
   - pairing / revoke
   - audit log
 - `web`
@@ -100,7 +102,7 @@ CODEXNEXT_RELAY_URL=http://127.0.0.1:3922 CODEXNEXT_OWNER_TOKEN="$CODEXNEXT_OWNE
 Pair a machine into the relay:
 
 ```bash
-pnpm --filter @codexnext/agent dev -- pair --relay http://relay-host:3922
+pnpm --filter @codexnext/agent dev -- pair --relay https://<your-relay-host>
 ```
 
 After pairing, the machine appears in the Web UI automatically.
@@ -137,12 +139,24 @@ macOS agent install example:
 
 The agent startup helpers auto-discover a usable `codex` binary from common locations such as `PATH`, `~/.local/bin`, `~/bin`, and `~/.nvm/versions/node/*/bin`.
 
+## Diagnostics
+
+Use doctor before and after deployment:
+
+```bash
+pnpm --filter @codexnext/agent dev -- doctor
+pnpm --filter @codexnext/agent dev -- doctor --relay https://<your-relay-host>
+```
+
+Doctor checks Node, pnpm, Codex CLI, device identity file permissions, relay health, Web/control env presence, production origin risks, and hidden direct-mode env state. It reports secret presence and risk without printing raw token values.
+
 ## Security Notes
 
 - public relay Web requires login
 - `ownerToken` is server-only
 - relay session tokens are issued after login and should not be persisted client-side
 - relay full-access follows Codex by default; set `CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1` on the control server only if you intentionally want an extra relay-only safety gate
+- relay reconnect uses `device:replay` initial batches and `device:event` live events
 - approvals and sandbox enforcement remain Codex-native
 
 ## Hidden Dev-Only Direct Mode

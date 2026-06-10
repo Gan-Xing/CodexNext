@@ -16,15 +16,18 @@ Codex itself still owns command approvals, sandbox mode, and final permission en
 - Public Web requires login and uses an HttpOnly cookie.
 - `/api/relay/session` returns `401` when not logged in.
 - `ownerToken` is server-only and never belongs in browser URLs, `localStorage`, or React state.
-- Relay browser sessions are short-lived and control stores only `tokenHash` with TTL, idle timeout, revoke, and prune.
+- Relay browser sessions are short-lived and control stores only `tokenHash` with 8 hour TTL, 2 hour idle timeout, revoke, and prune.
 - Relay session tokens are not persisted in browser storage.
 - Pairing approve/reject requires authenticated user access.
-- Pairing codes are rate-limited, one-time, fingerprinted, and pruned after expiry.
+- Pairing codes are rate-limited, one-time, fingerprinted, and expire after 15 minutes.
 - Device registry stores `deviceTokenHash`, not plaintext `deviceToken`, and supports migration from older files.
 - Revoked devices cannot reconnect and any live socket is disconnected immediately.
 - Production CORS must use explicit allowlists; `origin: true` is not used.
 - Relay `full-access` follows Codex by default. Set `CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1` on the control server only if you intentionally want an extra relay-only safety gate.
 - Direct mode is hidden dev-only and requires `CODEXNEXT_ENABLE_DEV_DIRECT=1`.
+- Event replay uses `device:replay` for initial reconnect batches and `device:event` for live events.
+- Stale heartbeat timeout marks a device offline without deleting device workspace state.
+- `/api/control/health` returns safe operational status only.
 - Audit logs record security-relevant actions without recording raw tokens, prompts, assistant content, or full command output.
 
 ## Secrets And Tokens
@@ -55,6 +58,7 @@ Relay mode is the supported product path.
 - machines connect outbound to control over Socket.IO
 - device trust is established through pairing
 - device revoke disconnects the current machine socket and blocks future reconnects
+- reconnect replay is scoped by `lastSeqByDevice`
 - recent thread pages may be cached in control for faster switching, but the source of truth remains Codex app-server on the machine
 
 ## Hidden Dev-Only Direct Mode
@@ -76,6 +80,17 @@ If a relay deployment looks compromised:
 4. Revoke affected devices from the registry.
 5. Invalidate old pairings by restarting control.
 6. Review `control-audit.log` and `web-audit.log`.
+
+## Diagnostics
+
+Use doctor for local and relay diagnostics:
+
+```bash
+pnpm --filter @codexnext/agent dev -- doctor
+pnpm --filter @codexnext/agent dev -- doctor --relay https://<your-relay-host>
+```
+
+Doctor reports presence and risk, not raw secret values. It warns if hidden direct mode is enabled, if production origin settings look incomplete, or if the device identity file permissions are broad.
 
 ## Future Work
 

@@ -1,241 +1,197 @@
 # Relay Deployment
 
-CodexNext deployment should be described by **service roles**, not by a fixed OS topology.
+CodexNext deployment is described by service roles, not by a fixed OS topology.
 
 ## Service Roles
 
-`control`:
-- relay control plane
-- keeps device presence
-- relays RPC and event replay
-- handles pairing, revoke, and relay-side security gate
+`control`
 
-`web`:
+- Fastify + Socket.IO relay control plane
+- browser relay sessions
+- device presence, event replay, and relay RPC
+- pairing, revoke, registry, and audit
+
+`web`
+
 - public browser/mobile UI
-- handles login cookie
-- bootstraps relay sessions
+- Web login and HttpOnly cookie
+- server-side relay session bootstrap
 
-`agent`:
-- represents one controllable Codex machine
-- runs locally next to Codex
-- keeps one outbound relay connection
-- delegates approvals, sandbox, and permissions to Codex itself
+`agent`
 
-Any host can run any subset of these roles if the dependencies are available.
+- runs next to a local Codex installation
+- keeps one outbound relay connection to control
+- delegates approvals, sandboxing, and command enforcement to Codex app-server
 
-## Common Deployment Shapes
+Any host can run any subset of these roles.
 
-Typical public control plane:
+## Common Topologies
+
+Public control plane:
 
 - one host runs `control + web`
 - each controllable machine runs `agent`
 
-If the control-plane host should also be controllable, add `agent` there too:
+Self-controlling public host:
 
-- `control + web + agent`
+- one host runs `control + web + agent`
+- additional machines run `agent`
 
-Typical node-only machine:
+Agent-only machine:
 
-- `agent`
+- one machine runs only `agent`
 
-These are examples, not platform restrictions.
+Browser and future mobile clients open only the Web origin, for example:
 
-You may choose to run:
+```txt
+https://<your-web-origin>
+```
 
-- all three roles on Linux
-- all three roles on macOS
-- only `agent` on Linux/macOS/Windows
-- `control + web` on one host and `agent` on many others
+Agents pair/connect to the control origin, for example:
 
-## Recommended Ports
+```txt
+https://<your-relay-host>
+```
 
-Example public control-plane ports:
+For local development or private LAN testing, HTTP is acceptable:
+
+```txt
+http://127.0.0.1:3002
+http://127.0.0.1:3922
+```
+
+For public production, put Web and control behind HTTPS. If control is exposed through a reverse proxy path or subdomain, use that HTTPS URL consistently for `CODEXNEXT_RELAY_URL` and agent `--relay`.
+
+## Ports
+
+Default examples:
 
 - Web: `3002`
 - Control: `3922`
 
-Browser/mobile should only need:
+These ports are examples. Reverse proxies may expose standard `443` public origins while forwarding to local service ports.
 
-- `http://144.217.243.161:3002`
+## Environment Matrix
 
-Agent nodes pair/connect to:
+| Role | Variable | Dev example | Production example | Notes |
+| --- | --- | --- | --- | --- |
+| control | `CODEXNEXT_OWNER_TOKEN` | `dev-owner-token` | long random secret | Server-only. Do not put in URLs or browser storage. |
+| control | `CODEXNEXT_CONTROL_HOST` | `127.0.0.1` | `0.0.0.0` behind firewall/proxy | Bind address. |
+| control | `CODEXNEXT_CONTROL_PORT` | `3922` | `3922` | Internal service port. |
+| control | `CODEXNEXT_PRODUCTION` | unset or `0` | `1` | Enables production checks. |
+| control | `CODEXNEXT_PUBLIC_WEB_ORIGIN` | `http://127.0.0.1:3002` | `https://<your-web-origin>` | Used for pairing approve links. |
+| control | `CODEXNEXT_ALLOWED_ORIGINS` | optional | `https://<your-web-origin>` | Required in production. Comma-separated for multiple origins. |
+| control | `CODEXNEXT_ALLOW_MACHINE_OWNER_TOKEN` | optional `1` | default `0` | Production machines should use paired device tokens. |
+| control | `CODEXNEXT_DISABLE_RELAY_FULL_ACCESS` | optional `0` | optional `0` or `1` | Default is follows Codex / allowed. |
+| control | `CODEXNEXT_HEARTBEAT_INTERVAL_MS` | `15000` | `15000` | Agent heartbeat interval. |
+| control | `CODEXNEXT_STALE_DEVICE_TIMEOUT_MS` | unset | unset or explicit ms | Defaults to four heartbeat intervals. |
+| control | `CODEXNEXT_RPC_TIMEOUT_MS` | `30000` | `30000` | Default relay RPC timeout. |
+| web | `CODEXNEXT_RELAY_URL` | `http://127.0.0.1:3922` | `https://<your-relay-host>` | Server-side Web to control URL. |
+| web | `CODEXNEXT_OWNER_TOKEN` | same as control | same as control | Used only server-side to mint relay sessions. |
+| web | `CODEXNEXT_PUBLIC_ORIGIN` | `http://127.0.0.1:3002` | `https://<your-web-origin>` | Controls secure cookie behavior and public links. |
+| web | `CODEXNEXT_WEB_AUTH_PASSWORD_HASH` | scrypt hash | scrypt hash | Generate with the README command. |
+| web | `CODEXNEXT_WEB_SESSION_SECRET` | random secret | long random secret | Signs HttpOnly Web cookies. |
+| agent | `CODEXNEXT_RELAY_URL` | `http://127.0.0.1:3922` | `https://<your-relay-host>` | Control URL used by pair/connect. |
+| agent | `CODEXNEXT_DEVICE_NAME` | optional | optional | Display name. |
+| agent | `CODEXNEXT_CODEX_BIN` | `codex` | explicit path if needed | Startup helper auto-discovers common paths if unset. |
+| agent | `CODEXNEXT_APPROVAL_TIMEOUT_MS` | `300000` | `300000` | Local approval timeout. |
 
-- `http://144.217.243.161:3922`
+## Installers And Runtime Scripts
 
-## Long-Running Process Model
-
-## Recommended Installers
-
-Use the bundled install scripts when they match your platform and service manager.
-
-### Linux `systemd`
-
-Default install:
+Linux `systemd` helper:
 
 ```bash
 ./scripts/ops/install-linux-services.sh
-```
-
-This installs:
-
-- `codexnext-control`
-- `codexnext-web`
-- `codexnext-agent`
-
-Agent-only install:
-
-```bash
 ./scripts/ops/install-linux-services.sh --roles agent
-```
-
-You can also choose a subset explicitly:
-
-```bash
 ./scripts/ops/install-linux-services.sh --roles control,web
-./scripts/ops/install-linux-services.sh --roles web,agent
 ```
 
-### macOS `launchd`
-
-Bundled helper for the outbound relay agent:
+macOS `launchd` helper for the outbound relay agent:
 
 ```bash
 ./scripts/ops/install-macos-agent.sh
 ```
 
-This writes a `launchd` plist and an editable env file under `~/.codexnext/relay-agent.env`.
+Windows has no bundled service-manager installer yet. The same roles apply; run the scripts with your preferred process manager.
 
-Today the bundled macOS installer targets `agent`. That is a tooling coverage choice, not a product restriction.
-If you want to run `control` and `web` on macOS too, use the same runtime commands and wire them into your preferred process manager.
+Templates and scripts:
 
-### Windows
-
-There is no bundled Windows service-manager installer yet.
-The same three roles still apply; run them with your preferred Windows process manager.
-
-### Linux `systemd`
-
-Use `systemd` with:
-
-- `Restart=always`
-- `After=network-online.target`
-- env files in `/etc/codexnext/*.env`
-
-Templates are in:
-
-- [ops/systemd/codexnext-control.service.example](/Users/ganxing/Desktop/Dev/codexnext/ops/systemd/codexnext-control.service.example)
-- [ops/systemd/codexnext-web.service.example](/Users/ganxing/Desktop/Dev/codexnext/ops/systemd/codexnext-web.service.example)
-- [ops/systemd/codexnext-agent.service.example](/Users/ganxing/Desktop/Dev/codexnext/ops/systemd/codexnext-agent.service.example)
-
-Env examples:
-
-- [ops/systemd/control.env.example](/Users/ganxing/Desktop/Dev/codexnext/ops/systemd/control.env.example)
-- [ops/systemd/web.env.example](/Users/ganxing/Desktop/Dev/codexnext/ops/systemd/web.env.example)
-- [ops/systemd/agent.env.example](/Users/ganxing/Desktop/Dev/codexnext/ops/systemd/agent.env.example)
-
-Runtime scripts:
-
-- [scripts/ops/run-control.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/run-control.sh)
-- [scripts/ops/run-web.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/run-web.sh)
-- [scripts/ops/run-relay-agent.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/run-relay-agent.sh)
-- [scripts/ops/install-linux-services.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/install-linux-services.sh)
-- [scripts/ops/detect-codex-bin.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/detect-codex-bin.sh)
-- [scripts/ops/build-web.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/build-web.sh)
-
-### macOS `launchd`
-
-Use `launchd` with `KeepAlive`.
-
-Templates are in:
-
-- [ops/launchd/com.codexnext.relay-agent.plist.template](/Users/ganxing/Desktop/Dev/codexnext/ops/launchd/com.codexnext.relay-agent.plist.template)
-- [ops/launchd/relay-agent.env.example](/Users/ganxing/Desktop/Dev/codexnext/ops/launchd/relay-agent.env.example)
-- [ops/launchd/run-relay-agent.sh](/Users/ganxing/Desktop/Dev/codexnext/ops/launchd/run-relay-agent.sh)
-- [scripts/ops/install-macos-agent.sh](/Users/ganxing/Desktop/Dev/codexnext/scripts/ops/install-macos-agent.sh)
+- [ops/systemd/codexnext-control.service.example](../ops/systemd/codexnext-control.service.example)
+- [ops/systemd/codexnext-web.service.example](../ops/systemd/codexnext-web.service.example)
+- [ops/systemd/codexnext-agent.service.example](../ops/systemd/codexnext-agent.service.example)
+- [ops/systemd/control.env.example](../ops/systemd/control.env.example)
+- [ops/systemd/web.env.example](../ops/systemd/web.env.example)
+- [ops/systemd/agent.env.example](../ops/systemd/agent.env.example)
+- [ops/launchd/com.codexnext.relay-agent.plist.template](../ops/launchd/com.codexnext.relay-agent.plist.template)
+- [ops/launchd/relay-agent.env.example](../ops/launchd/relay-agent.env.example)
+- [scripts/ops/run-control.sh](../scripts/ops/run-control.sh)
+- [scripts/ops/run-web.sh](../scripts/ops/run-web.sh)
+- [scripts/ops/run-relay-agent.sh](../scripts/ops/run-relay-agent.sh)
+- [scripts/ops/build-web.sh](../scripts/ops/build-web.sh)
 
 ## Deploy Order
 
-### 1. Prepare the host that will expose the public Web and relay
-
-Clone/update the repo, then:
+1. Prepare the host that exposes Web and control:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
+pnpm --filter @codexnext/agent dev -- doctor
 ```
 
-Build the Web with production env:
+2. Generate a Web password hash:
 
 ```bash
-export CODEXNEXT_RELAY_URL=http://144.217.243.161:3922
-export CODEXNEXT_OWNER_TOKEN=...
-export CODEXNEXT_PUBLIC_ORIGIN=http://144.217.243.161:3002
-export CODEXNEXT_WEB_AUTH_PASSWORD_HASH=...
-export CODEXNEXT_WEB_SESSION_SECRET=...
+node -e 'const {randomBytes,scryptSync}=require("node:crypto");const password=process.argv[1];const salt=randomBytes(16);const hash=scryptSync(password,salt,64);console.log(`scrypt$${salt.toString("base64url")}$${hash.toString("base64url")}`)' "your-password"
+```
+
+3. Configure `control` and `web` env files from the examples.
+
+4. Build Web with production env:
+
+```bash
+export CODEXNEXT_RELAY_URL=https://<your-relay-host>
+export CODEXNEXT_OWNER_TOKEN=<long-random-owner-token>
+export CODEXNEXT_PUBLIC_ORIGIN=https://<your-web-origin>
+export CODEXNEXT_WEB_AUTH_PASSWORD_HASH=<scrypt-hash>
+export CODEXNEXT_WEB_SESSION_SECRET=<long-random-session-secret>
 ./scripts/ops/build-web.sh
 ```
 
-Install env files:
+5. Start services through `systemd`, `launchd`, or your process manager.
 
-- `/etc/codexnext/control.env`
-- `/etc/codexnext/web.env`
-- `/etc/codexnext/agent.env`
-
-The install script will create them from examples if they do not exist yet.
-
-Install service units from the templates, replacing:
-
-- `__CODEXNEXT_ROOT__`
-- `__CODEXNEXT_USER__`
-
-Then:
+6. Pair each controllable machine:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now codexnext-control
-sudo systemctl enable --now codexnext-web
-sudo systemctl enable --now codexnext-agent
+pnpm --filter @codexnext/agent dev -- pair --relay https://<your-relay-host> --device-name <device-name>
 ```
 
-If you use the installer instead, the shorter form is:
+Approve the code from the Web UI. After approval, the long-running agent can reconnect using its device identity.
+
+## Diagnostics
+
+Local prerequisite check:
 
 ```bash
-./scripts/ops/install-linux-services.sh
+pnpm --filter @codexnext/agent dev -- doctor
 ```
 
-### 2. Pair any machine that should appear as a controllable device
-
-Run once on that machine:
+Relay health and deployment diagnostics:
 
 ```bash
-pnpm --filter @codexnext/agent dev -- pair --relay http://144.217.243.161:3922 --device-name YourDeviceName
+pnpm --filter @codexnext/agent dev -- doctor --relay https://<your-relay-host>
 ```
 
-Approve it from the Web UI. After that, the long-running `agent` service can reconnect by itself.
+The doctor checks Node, pnpm, Codex CLI, device identity file permissions, relay health, Web/control env presence, production origin risks, and whether hidden direct mode is enabled. It reports secret presence and risk without printing raw token values.
 
-If the machine is macOS and you want the bundled launchd flow:
-
-Or use the installer:
+The control health endpoint is intentionally safe:
 
 ```bash
-./scripts/ops/install-macos-agent.sh
+curl https://<your-relay-host>/api/control/health
 ```
 
-## What The Phone Should Do
-
-The phone only needs:
-
-- open `http://144.217.243.161:3002`
-- log in
-- choose whichever paired device is online
-
-The phone should **not** need:
-
-- agent token
-- direct endpoint
-- `web-origin`
-- Tailscale access to each machine
+It returns operational counts and uptime, not owner tokens, session tokens, device tokens, prompts, assistant content, or command output.
 
 ## Updating Later
 
@@ -258,23 +214,8 @@ pnpm install --frozen-lockfile
 launchctl kickstart -k gui/$(id -u)/com.codexnext.relay-agent
 ```
 
-## Operational Notes
+## Product Boundary
 
-- `control` and `agent` currently run from source through `tsx`
-- `web` runs as `next start` from a built production bundle
-- this is fine for long-running service management as long as `systemd`/`launchd` owns restart policy
-- `run-relay-agent.sh` auto-discovers `codex` from common install paths if `CODEXNEXT_CODEX_BIN` is unset or not on `PATH`
-- for locked-down environments, set `CODEXNEXT_CODEX_BIN` to an absolute binary path in the env file
+Users should only need the Web origin. They should not need an agent URL, direct endpoint, access token, owner token, `?agent=`, `?token=`, `?ownerToken=`, or per-machine VPN/Tailscale access.
 
-## Example Topology
-
-One valid example is:
-
-- public host:
-  - `control + web`
-- public host, if also controllable:
-  - add `agent`
-- each additional machine:
-  - `agent`
-- phone/browser:
-  - only the public Web URL
+Direct mode remains hidden dev-only troubleshooting and requires `CODEXNEXT_ENABLE_DEV_DIRECT=1`.

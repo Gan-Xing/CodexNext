@@ -32,6 +32,10 @@ export class DeviceEventStore extends EventEmitter {
     return this.events.filter((event) => event.seq > seq);
   }
 
+  public hasSeq(seq: number): boolean {
+    return this.events.some((event) => event.seq === seq);
+  }
+
   public lastSeq(): number {
     return this.lastSeenSeq;
   }

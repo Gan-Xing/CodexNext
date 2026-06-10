@@ -6,7 +6,7 @@ import Fastify, {
   type FastifyRequest
 } from "fastify";
 import type { Server as HttpServer } from "node:http";
-import { Server as SocketIoServer, type Socket } from "socket.io";
+import { Server as SocketIoServer, type Namespace, type Socket } from "socket.io";
 import type {
   DeviceEventPayload,
   LocalCodexHistoryPageResponse,
@@ -91,6 +91,8 @@ export interface ControlServerOptions {
   browserSessionTtlMs?: number;
   browserSessionIdleMs?: number;
   pruneIntervalMs?: number;
+  staleDeviceTimeoutMs?: number;
+  recentHistoryCacheTtlMs?: number;
   allowedOrigins?: string[];
   production?: boolean;
   allowMachineOwnerToken?: boolean;
@@ -110,6 +112,7 @@ const DEFAULT_PAIRING_TTL_MS = 15 * 60_000;
 const DEFAULT_SLOW_RPC_TIMEOUT_MS = 90_000;
 const DEFAULT_SOCKET_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 const DEFAULT_RECENT_HISTORY_CACHE_TTL_MS = 30_000;
+const DEFAULT_STALE_HEARTBEAT_MULTIPLIER = 4;
 
 export function createControlServer(
   input: ControlServerOptions
@@ -154,6 +157,7 @@ export function createControlServer(
     pruneBrowserSessions(browserSessions, audit, options.browserSessionIdleMs);
     prunePairings(pairings, audit);
     pruneRateLimits(rateLimits);
+    markStaleDevices(devices, userNamespace, audit, options.staleDeviceTimeoutMs);
   }, options.pruneIntervalMs);
 
   const issueBrowserSession = () => {
@@ -275,17 +279,21 @@ export function createControlServer(
   userNamespace.on("connection", (socket) => {
     const auth = socket.handshake.auth as RelayUserAuth | undefined;
     const lastSeqByDevice = auth?.lastSeqByDevice ?? {};
+    const replayBatch: DeviceEventPayload[] = [];
     for (const device of sortedDevices(devices)) {
       socket.emit("device:upsert", device.info);
       const after = Number.isFinite(lastSeqByDevice[device.info.deviceId] ?? NaN)
         ? Math.max(0, Number(lastSeqByDevice[device.info.deviceId]))
         : 0;
       for (const event of device.store.after(after)) {
-        socket.emit("device:event", {
+        replayBatch.push({
           deviceId: device.info.deviceId,
           event
         } satisfies DeviceEventPayload);
       }
+    }
+    if (replayBatch.length > 0) {
+      socket.emit("device:replay", replayBatch);
     }
   });
 
@@ -406,6 +414,7 @@ export function createControlServer(
       const device =
         devices.get(payload.deviceId) ??
         registerEventOnlyDevice(devices, payload.deviceId, socket, options.eventLimit);
+      const duplicate = device.store.hasSeq(payload.event.seq);
       device.store.append(payload.event);
       applyMachineEventState(device, payload.event);
       device.info = {
@@ -414,7 +423,9 @@ export function createControlServer(
         online: true,
         socketId: socket.id
       };
-      userNamespace.emit("device:event", payload satisfies DeviceEventPayload);
+      if (!duplicate) {
+        userNamespace.emit("device:event", payload satisfies DeviceEventPayload);
+      }
     });
 
     socket.on("disconnect", () => {
@@ -425,28 +436,38 @@ export function createControlServer(
       if (!device) {
         return;
       }
+      const wasOnline = device.info.online;
       device.socket = null;
-      device.info = {
+      const nextInfo = {
         ...device.info,
         online: false,
         lastSeenAt: Date.now()
       };
+      delete nextInfo.socketId;
+      device.info = nextInfo;
       audit.write({
         action: "device.disconnect",
         at: device.info.lastSeenAt,
         deviceId: registeredDeviceId,
         outcome: "success"
       });
-      userNamespace.emit("device:offline", {
-        deviceId: device.info.deviceId,
-        lastSeenAt: device.info.lastSeenAt
-      });
+      if (wasOnline) {
+        userNamespace.emit("device:offline", {
+          deviceId: device.info.deviceId,
+          lastSeenAt: device.info.lastSeenAt
+        });
+      }
     });
   });
 
   app.get("/api/control/health", async () => ({
     ok: true,
-    devices: [...devices.values()].filter((device) => device.info.online).length
+    onlineDevices: [...devices.values()].filter((device) => device.info.online).length,
+    knownDevices: devices.size,
+    registeredDevices: registry.all().length,
+    uptimeSeconds: Math.floor(process.uptime()),
+    version: "0.1.0",
+    production: options.production
   }));
 
   app.post("/api/auth/session", async (request, reply) => {
@@ -1016,7 +1037,11 @@ export function createControlServer(
       ...(query.itemsView ? { itemsView: query.itemsView } : {})
     };
     try {
-      const cached = readCachedHistoryPage(devices.get(deviceId) ?? null, params);
+      const cached = readCachedHistoryPage(
+        devices.get(deviceId) ?? null,
+        params,
+        options.recentHistoryCacheTtlMs
+      );
       if (cached) {
         audit.write({
           action: "relay.rpc.cache_hit",
@@ -1206,7 +1231,7 @@ async function handleRpcRequest(
       deviceId,
       method: input.method,
       outcome: "failure",
-      reason: message
+      reason: classifyRelayRpcFailure(message)
     });
     const statusCode =
       message.includes("timeout")
@@ -1280,6 +1305,11 @@ function normalizeControlOptions(options: ControlServerOptions) {
     browserSessionTtlMs: options.browserSessionTtlMs ?? DEFAULT_BROWSER_SESSION_TTL_MS,
     browserSessionIdleMs: options.browserSessionIdleMs ?? DEFAULT_BROWSER_SESSION_IDLE_MS,
     pruneIntervalMs: options.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS,
+    staleDeviceTimeoutMs:
+      options.staleDeviceTimeoutMs ??
+      (options.heartbeatIntervalMs ?? 15_000) * DEFAULT_STALE_HEARTBEAT_MULTIPLIER,
+    recentHistoryCacheTtlMs:
+      options.recentHistoryCacheTtlMs ?? DEFAULT_RECENT_HISTORY_CACHE_TTL_MS,
     allowedOrigins: normalizedOrigins,
     production: options.production ?? false,
     allowMachineOwnerToken:
@@ -1497,7 +1527,8 @@ function readCachedHistoryPage(
     limit?: number;
     sortDirection?: string;
     itemsView?: string;
-  }
+  },
+  ttlMs: number
 ): CachedHistoryPageRecord | null {
   if (!device) {
     return null;
@@ -1510,7 +1541,7 @@ function readCachedHistoryPage(
   if (!record) {
     return null;
   }
-  if (Date.now() - record.fetchedAt > DEFAULT_RECENT_HISTORY_CACHE_TTL_MS) {
+  if (Date.now() - record.fetchedAt > ttlMs) {
     device.recentHistoryPages.delete(cacheKey);
     return null;
   }
@@ -1571,6 +1602,51 @@ function dropCachedHistoryPagesForThread(device: RegisteredDevice, threadId: str
   }
 }
 
+function markStaleDevices(
+  devices: Map<string, RegisteredDevice>,
+  userNamespace: Namespace,
+  audit: AuditLogger,
+  staleDeviceTimeoutMs: number
+): void {
+  const now = Date.now();
+  for (const device of devices.values()) {
+    if (!device.info.online || now - device.info.lastSeenAt <= staleDeviceTimeoutMs) {
+      continue;
+    }
+    device.socket = null;
+    const nextInfo = {
+      ...device.info,
+      online: false,
+      lastSeenAt: now
+    };
+    delete nextInfo.socketId;
+    device.info = nextInfo;
+    audit.write({
+      action: "device.presence.stale",
+      at: now,
+      deviceId: device.info.deviceId,
+      outcome: "success"
+    });
+    userNamespace.emit("device:offline", {
+      deviceId: device.info.deviceId,
+      lastSeenAt: device.info.lastSeenAt
+    });
+  }
+}
+
+function classifyRelayRpcFailure(message: string): string {
+  if (message.includes("timeout")) {
+    return "relay_rpc_timeout";
+  }
+  if (message.includes("not connected") || message.includes("offline")) {
+    return "device_offline";
+  }
+  if (message.includes("not found")) {
+    return "not_found";
+  }
+  return "relay_rpc_error";
+}
+
 function replyWithRpcError(
   reply: FastifyReply,
   audit: AuditLogger,
@@ -1583,10 +1659,10 @@ function replyWithRpcError(
     action: "relay.rpc",
     at: Date.now(),
     deviceId,
-    method,
-    outcome: "failure",
-    reason: message
-  });
+      method,
+      outcome: "failure",
+      reason: classifyRelayRpcFailure(message)
+    });
   const statusCode =
     message.includes("timeout")
       ? 504

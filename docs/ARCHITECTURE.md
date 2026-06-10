@@ -1,61 +1,79 @@
 # Architecture
 
-CodexNext Phase 1 is a local CLI smoke test for the Codex app-server protocol. It proves the core control-plane primitive before any Web, mobile, server, pairing, or multi-device work.
+CodexNext is a relay-first personal control plane for Codex app-server.
 
-## Runtime Flow
+The normal product path is:
 
 ```txt
-codexnext goal-smoke
-  -> spawn("codex", ["app-server", "--stdio"])
-  -> initialize
-  -> initialized notification
-  -> thread/start
-  -> thread/goal/set
-  -> turn/start
-  -> stream app-server notifications
-  -> decline approval requests by callback
-  -> turn/completed or Ctrl+C turn/interrupt
+Browser / mobile Web / future mobile client
+  -> CodexNext Web login
+  -> Web HttpOnly cookie
+  -> Web server POST /api/relay/session
+  -> Control relay browser session
+  -> Paired outbound agent
+  -> Local Codex app-server
 ```
 
-## Packages
+The user path must not expose an Agent URL, Access Token, `?agent=`, `?token=`, or `?ownerToken=`. Browser storage may keep device display metadata and UI preferences, but not owner tokens, relay session tokens, or device tokens.
 
-`packages/protocol` owns shared protocol vocabulary:
+## Runtime Services
 
-- JSON-RPC message shapes
-- Codex app-server method constants
-- lightweight TypeScript types for phase-1 request and response payloads
-- Zod validation for CLI inputs
+`apps/control` is the relay control plane.
 
-`packages/codex-client` owns transport and protocol mechanics:
+- Fastify provides HTTP APIs for health, session bootstrap, pairing, device listing, revoke, and relay RPC.
+- Socket.IO provides `/user` and `/machine` namespaces.
+- Browser sessions are short-lived bearer tokens stored server-side only as `tokenHash` records with TTL, idle timeout, revoke, and pruning.
+- Machine authorization uses the v2 device registry with `deviceTokenHash`. Production disables machine owner-token bootstrap unless explicitly opted in.
+- Pairing requests are one-time, fingerprinted, rate-limited, and expire after 15 minutes.
+- Device events are stored in a bounded in-memory per-device event store.
+- Audit logs record security actions and relay RPC outcomes with redaction.
 
-- request id allocation
-- pending request tracking
-- response matching
-- error response conversion
-- request timeout
-- notification event emitter
-- server-initiated request handling
-- stdio child process transport
-- Codex app-server method wrappers
+`apps/web` is the public UI.
 
-`apps/agent` owns CLI behavior:
+- Next.js handles the login page, auth routes, relay bootstrap route, and console UI.
+- Login uses an HttpOnly Web session cookie.
+- `/api/relay/session` uses the server-only `CODEXNEXT_OWNER_TOKEN` to mint a short-lived control session and returns only `{ relayUrl, sessionToken }`.
+- Relay session tokens live in React memory and are reissued through the cookie-protected bootstrap path after refresh.
+- Saved devices are relay-only metadata and are sanitized before being kept in `localStorage`.
 
-- environment checks in `doctor`
-- smoke-test orchestration in `goal-smoke`
-- human-readable app-server notification output
-- Ctrl+C interruption
+`apps/agent` runs on each controllable machine.
 
-## Why stdio first
+- `pair` creates or reuses `~/.codexnext/device.json`, requests a pairing code, and polls until approved.
+- `connect` opens one outbound Socket.IO machine connection and handles `rpc:request`.
+- The local Codex app-server remains the final authority for approvals, sandboxing, and command execution.
+- `doctor` checks local prerequisites and can probe relay health.
 
-Stdio is the default app-server transport and keeps phase 1 private to the local machine. It avoids exposing a listener, avoids auth design too early, and mirrors the handoff requirement that the app-server stays on the user device.
+## Relay Event Contract
 
-## JSON-RPC Notes
+Control uses two event shapes for browser clients:
 
-Codex app-server uses JSON-RPC style messages with the `jsonrpc` header omitted on the wire. Requests have `id`, `method`, and optional `params`. Responses echo `id` and return either `result` or `error`. Notifications have `method` and optional `params` without `id`.
+```txt
+device:replay -> initial reconnect batch, payload: DeviceEventPayload[]
+device:event  -> live single event, payload: DeviceEventPayload
+```
 
-The client also handles server-initiated requests. This matters because approval prompts are requests from app-server to the client, not notifications.
+On user namespace connection, the browser supplies `lastSeqByDevice`. Control emits current `device:upsert` records and then one `device:replay` batch containing only events with `seq > lastSeqByDevice[deviceId]`.
 
-## Phase Boundary
+After the connection is live, new machine events are emitted as `device:event`. Duplicate machine events with the same sequence number are stored once and are not re-emitted live.
 
-This architecture deliberately does not create a control server or UI. Those layers should depend on the same `@codexnext/codex-client` primitives after the smoke test proves the local app-server loop.
+## Device Presence
 
+Machine agents send heartbeat messages using the interval returned by `machine:hello`. Control marks a device offline when it has been stale for the configured stale timeout, defaulting to four heartbeat intervals. Stale offline state does not delete the device workspace or event history; a later heartbeat/hello can mark the device online again if the device remains authorized.
+
+Device revoke is stronger than stale presence: revoke marks the registry record, disconnects the live socket, emits offline to users, and prevents reconnect.
+
+## History Cache
+
+Recent Codex history pages are cached in memory per device for a short TTL to make thread switching fast. Cache entries are keyed by device, thread id, cwd, sort direction, items view, and limit. Archive and unloaded-thread events invalidate affected thread cache entries. The source of truth remains the local Codex app-server on the paired machine.
+
+## Direct Dev-Only Boundary
+
+`codexnext dev-serve` remains only as a hidden troubleshooting path for local development. It requires `CODEXNEXT_ENABLE_DEV_DIRECT=1`; non-loopback binding also requires `--allow-remote-direct`. It is not part of the product path, README setup flow, Web UI, or browser URL contract.
+
+## Package Roles
+
+`packages/protocol` owns shared TypeScript types, Zod schemas, relay method names, Socket.IO namespace/path constants, and Codex app-server request/response vocabulary.
+
+`packages/codex-client` owns JSON-RPC transport mechanics for Codex app-server.
+
+CodexNext intentionally does not replace Codex permissions. Permission mode, sandbox mode, approvals, and command execution enforcement remain inside the local Codex app-server.

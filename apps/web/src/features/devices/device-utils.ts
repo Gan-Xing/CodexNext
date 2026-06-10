@@ -50,10 +50,9 @@ export function readSavedDevicesState(): SavedDevicesReadResult {
       return { devices: [], droppedLegacyDirectDevices: 0 };
     }
 
-    const relayDevices = parsed.filter(isRelaySavedDevice).map((device) => ({
-      ...device,
-      relayUrl: normalizeAgentUrl(device.relayUrl)
-    }));
+    const relayDevices = parsed.filter(isRelaySavedDevice).map((device) =>
+      sanitizeRelaySavedDevice(device)
+    );
     const droppedLegacyDirectDevices = parsed.length - relayDevices.length;
 
     if (droppedLegacyDirectDevices > 0) {
@@ -157,6 +156,26 @@ function isRelaySavedDevice(value: unknown): value is SavedDevice {
     typeof value.relayUrl === "string" &&
     typeof value.deviceId === "string"
   );
+}
+
+function sanitizeRelaySavedDevice(device: SavedDevice): SavedDevice {
+  return {
+    id: device.id,
+    name: device.name,
+    mode: "relay",
+    relayUrl: normalizeAgentUrl(device.relayUrl),
+    deviceId: device.deviceId,
+    ...(typeof device.hostname === "string" || device.hostname === null
+      ? { hostname: device.hostname }
+      : {}),
+    ...(typeof device.online === "boolean" ? { online: device.online } : {}),
+    ...(typeof device.codexVersion === "string" || device.codexVersion === null
+      ? { codexVersion: device.codexVersion }
+      : {}),
+    ...(typeof device.lastConnectedAt === "number" || device.lastConnectedAt === null
+      ? { lastConnectedAt: device.lastConnectedAt }
+      : {})
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -43,6 +43,11 @@ program
     15_000
   )
   .option(
+    "--stale-device-timeout-ms <number>",
+    "Mark devices offline after this many milliseconds without heartbeat. Defaults to 4x heartbeat interval.",
+    parsePositiveInteger
+  )
+  .option(
     "--rpc-timeout-ms <number>",
     "Default relay RPC timeout.",
     parsePositiveInteger,
@@ -60,6 +65,7 @@ program
       allowRelayFullAccess?: boolean;
       disableRelayFullAccess?: boolean;
       heartbeatIntervalMs: number;
+      staleDeviceTimeoutMs?: number;
       rpcTimeoutMs: number;
     }) => {
       const handle = createControlServer({
@@ -82,6 +88,9 @@ program
               : {}
         ),
         heartbeatIntervalMs: options.heartbeatIntervalMs,
+        ...(options.staleDeviceTimeoutMs !== undefined
+          ? { staleDeviceTimeoutMs: options.staleDeviceTimeoutMs }
+          : {}),
         rpcTimeoutMs: options.rpcTimeoutMs
       });
       await handle.app.listen({

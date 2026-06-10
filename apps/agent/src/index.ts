@@ -15,9 +15,10 @@ program
 
 program
   .command("doctor")
-  .description("Check Node, pnpm, and Codex app-server prerequisites.")
-  .action(async () => {
-    await runDoctor();
+  .description("Check Node, pnpm, Codex CLI, relay health, and deployment diagnostics.")
+  .option("--relay <url>", "Optional control relay URL to probe with /api/control/health.")
+  .action(async (options: { relay?: string }) => {
+    await runDoctor(options);
   });
 
 program
