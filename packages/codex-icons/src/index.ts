@@ -33,6 +33,7 @@ export type CodexUiIconName =
   | "search"
   | "settings"
   | "shield"
+  | "shieldCode"
   | "shieldAlert"
   | "stop"
   | "summary"
@@ -97,6 +98,7 @@ const codexUiIconSpecs = {
   search: { asset: "search-c0nm-ej1" },
   settings: { asset: "settings-cog-mjpuk5w" },
   shield: { svg: inlineSvgByName.shield },
+  shieldCode: { asset: "shield-code-bqug9ybu" },
   shieldAlert: { asset: "shield-exclamation-kf9myntx" },
   stop: { asset: "stop-d3wuyj06" },
   summary: { asset: "thread-side-panel-tabs-qmoazjz--04" },

@@ -1094,7 +1094,7 @@ function ProjectSheet(props: {
         <div className="cn-permission-list-real">
           {[
             ["hand", "请求批准", "编辑外部文件和使用互联网时始终询问"],
-            ["shield", "替我审批", "仅对检测到的风险操作请求批准"],
+            ["shieldCode", "替我审批", "仅对检测到的风险操作请求批准"],
             ["shieldAlert", "完全访问权限", "可不受限制地访问互联网和电脑上的任何文件"],
             ["settings", "自定义 config.toml", "使用 config.toml 中定义的权限"]
           ].map(([icon, label, description]) => (

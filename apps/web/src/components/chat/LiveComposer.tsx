@@ -67,6 +67,7 @@ export function LiveComposer(props: {
 }) {
   const footerRef = useRef<HTMLElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const menuPanelRef = useRef<HTMLDivElement | null>(null);
   const plusButtonRef = useRef<HTMLButtonElement | null>(null);
   const permissionButtonRef = useRef<HTMLButtonElement | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -163,6 +164,7 @@ export function LiveComposer(props: {
     const widthCap = menu === "permission" ? 560 : menu === "model" ? 360 : 300;
     const width = Math.min(widthCap, Math.max(footerRect.width - 24, 220));
     const maxLeft = Math.max(footerRect.width - width, 0);
+    const maxHeight = Math.max(220, triggerRect.top - 22);
     let left =
       menu === "model"
         ? triggerRect.right - footerRect.left - width
@@ -173,6 +175,7 @@ export function LiveComposer(props: {
     return {
       bottom: `${bottom}px`,
       left: `${left}px`,
+      maxHeight: `${maxHeight}px`,
       right: "auto",
       width: `${width}px`
     };
@@ -210,9 +213,20 @@ export function LiveComposer(props: {
       return;
     }
 
-    const handlePointerDown = (event: PointerEvent) => {
+    const handlePointerDown = (event: Event) => {
       const target = event.target;
-      if (target instanceof Node && footerRef.current?.contains(target)) {
+      if (!(target instanceof Node)) {
+        props.onCloseMenu();
+        return;
+      }
+
+      const clickedTrigger =
+        plusButtonRef.current?.contains(target) ||
+        permissionButtonRef.current?.contains(target) ||
+        modelButtonRef.current?.contains(target);
+      const clickedMenu = menuPanelRef.current?.contains(target);
+
+      if (clickedTrigger || clickedMenu) {
         return;
       }
       props.onCloseMenu();
@@ -224,11 +238,15 @@ export function LiveComposer(props: {
       }
     };
 
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    window.addEventListener("mousedown", handlePointerDown, true);
+    window.addEventListener("touchstart", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown, true);
     return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("mousedown", handlePointerDown, true);
+      window.removeEventListener("touchstart", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [props.activeMenu, props.onCloseMenu]);
 
@@ -347,7 +365,7 @@ export function LiveComposer(props: {
       </div>
 
       {props.activeMenu === "plus" ? (
-        <div className="cn-popover plus cn-live-popover" style={menuStyle}>
+        <div ref={menuPanelRef} className="cn-popover plus cn-live-popover" style={menuStyle}>
           <button
             className="cn-menu-row with-icon compact"
             type="button"
@@ -388,7 +406,7 @@ export function LiveComposer(props: {
       ) : null}
 
       {props.activeMenu === "model" ? (
-        <div className="cn-popover model cn-live-popover" style={menuStyle}>
+        <div ref={menuPanelRef} className="cn-popover model cn-live-popover" style={menuStyle}>
           <div className="cn-menu-column">
             <p>推理</p>
             {props.reasoningOptions.map((option) => (
@@ -438,7 +456,7 @@ export function LiveComposer(props: {
       ) : null}
 
       {props.activeMenu === "permission" ? (
-        <div className="cn-popover permission cn-live-popover" style={menuStyle}>
+        <div ref={menuPanelRef} className="cn-popover permission cn-live-popover" style={menuStyle}>
           {props.permissionOptions.map((option) => (
             <button
               key={option.mode}

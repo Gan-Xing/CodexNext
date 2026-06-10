@@ -141,7 +141,7 @@ export const permissionOptions: Array<{
   },
   {
     description: "仅对检测到的风险操作请求批准",
-    icon: "shield",
+    icon: "shieldCode",
     label: "替我审批",
     mode: "auto-approve"
   },
