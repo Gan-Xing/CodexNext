@@ -1,6 +1,13 @@
 "use client";
 
-import { useRef, type RefObject } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject
+} from "react";
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import type { LocalPermissionMode, LocalReasoningEffort } from "../../lib/types";
 import type { AttachmentDraft } from "../../features/chat/chat-state";
@@ -24,8 +31,10 @@ interface PermissionOption {
   mode: LocalPermissionMode;
 }
 
+type ComposerMenu = "plus" | "model" | "permission";
+
 export function LiveComposer(props: {
-  activeMenu: "plus" | "model" | "permission" | null;
+  activeMenu: ComposerMenu | null;
   activeTurn: boolean;
   attachments: AttachmentDraft[];
   draft: string;
@@ -48,7 +57,7 @@ export function LiveComposer(props: {
   onDismissGoalMode: () => void;
   onDraftChange: (value: string) => void;
   onInterrupt: () => void;
-  onOpenMenu: (menu: "plus" | "model" | "permission") => void;
+  onOpenMenu: (menu: ComposerMenu) => void;
   onRemoveAttachment: (attachment: AttachmentDraft) => void;
   onSelectModel: (value: string) => void;
   onSelectPermission: (value: LocalPermissionMode) => void;
@@ -56,7 +65,12 @@ export function LiveComposer(props: {
   onSubmit: () => void;
   onTogglePlanMode: () => void;
 }) {
+  const footerRef = useRef<HTMLElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const plusButtonRef = useRef<HTMLButtonElement | null>(null);
+  const permissionButtonRef = useRef<HTMLButtonElement | null>(null);
+  const modelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>();
   const hasDraft = props.draft.trim().length > 0;
   const showInterrupt = props.activeTurn && !hasDraft;
   const showGoalPill = props.goalMode || props.hasGoal;
@@ -127,8 +141,120 @@ export function LiveComposer(props: {
     action();
   }
 
+  function resolveMenuStyle(menu: ComposerMenu): CSSProperties | undefined {
+    if (typeof window === "undefined" || window.innerWidth <= 900) {
+      return undefined;
+    }
+
+    const footer = footerRef.current;
+    const trigger =
+      menu === "plus"
+        ? plusButtonRef.current
+        : menu === "permission"
+          ? permissionButtonRef.current
+          : modelButtonRef.current;
+
+    if (!footer || !trigger) {
+      return undefined;
+    }
+
+    const footerRect = footer.getBoundingClientRect();
+    const triggerRect = trigger.getBoundingClientRect();
+    const widthCap = menu === "permission" ? 560 : menu === "model" ? 360 : 300;
+    const width = Math.min(widthCap, Math.max(footerRect.width - 24, 220));
+    const maxLeft = Math.max(footerRect.width - width, 0);
+    let left =
+      menu === "model"
+        ? triggerRect.right - footerRect.left - width
+        : triggerRect.left - footerRect.left;
+    left = Math.min(Math.max(left, 0), maxLeft);
+    const bottom = Math.max(footerRect.bottom - triggerRect.top + 10, 56);
+
+    return {
+      bottom: `${bottom}px`,
+      left: `${left}px`,
+      right: "auto",
+      width: `${width}px`
+    };
+  }
+
+  useLayoutEffect(() => {
+    if (!props.activeMenu) {
+      setMenuStyle(undefined);
+      return;
+    }
+
+    let frame = 0;
+    const update = () => setMenuStyle(resolveMenuStyle(props.activeMenu!));
+    const schedule = () => {
+      if (frame) {
+        window.cancelAnimationFrame(frame);
+      }
+      frame = window.requestAnimationFrame(update);
+    };
+
+    schedule();
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
+    return () => {
+      if (frame) {
+        window.cancelAnimationFrame(frame);
+      }
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", schedule, true);
+    };
+  }, [props.activeMenu, props.goalMode, props.hasGoal, props.planMode]);
+
+  useEffect(() => {
+    if (!props.activeMenu) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && footerRef.current?.contains(target)) {
+        return;
+      }
+      props.onCloseMenu();
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        props.onCloseMenu();
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [props.activeMenu, props.onCloseMenu]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea || typeof window === "undefined") {
+      return;
+    }
+
+    const styles = window.getComputedStyle(textarea);
+    const lineHeight = Number.parseFloat(styles.lineHeight) || 22;
+    const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
+    const maxHeight = lineHeight * 8 + paddingTop + paddingBottom;
+
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [props.draft, props.goalMode, props.planMode]);
+
   return (
-    <footer className={props.activeTurn ? "cn-desktop-composer cn-live-composer steer" : "cn-desktop-composer cn-live-composer"}>
+    <footer
+      ref={footerRef}
+      className={props.activeTurn ? "cn-desktop-composer cn-live-composer steer" : "cn-desktop-composer cn-live-composer"}
+    >
       <textarea
         ref={textareaRef}
         aria-label="CodexNext 输入框"
@@ -168,6 +294,7 @@ export function LiveComposer(props: {
           onChange={(event) => props.onAttachFiles(event.target.files)}
         />
         <button
+          ref={plusButtonRef}
           className="cn-icon-button"
           type="button"
           title="更多操作"
@@ -176,6 +303,7 @@ export function LiveComposer(props: {
           <CodexIcon name="plus" />
         </button>
         <button
+          ref={permissionButtonRef}
           className="cn-composer-pill"
           type="button"
           onClick={() => props.onOpenMenu("permission")}
@@ -199,6 +327,7 @@ export function LiveComposer(props: {
           />
         ) : null}
         <button
+          ref={modelButtonRef}
           className="cn-composer-pill cn-composer-pill-model"
           type="button"
           onClick={() => props.onOpenMenu("model")}
@@ -218,7 +347,7 @@ export function LiveComposer(props: {
       </div>
 
       {props.activeMenu === "plus" ? (
-        <div className="cn-popover plus cn-live-popover">
+        <div className="cn-popover plus cn-live-popover" style={menuStyle}>
           <button
             className="cn-menu-row with-icon compact"
             type="button"
@@ -259,7 +388,7 @@ export function LiveComposer(props: {
       ) : null}
 
       {props.activeMenu === "model" ? (
-        <div className="cn-popover model cn-live-popover">
+        <div className="cn-popover model cn-live-popover" style={menuStyle}>
           <div className="cn-menu-column">
             <p>推理</p>
             {props.reasoningOptions.map((option) => (
@@ -309,7 +438,7 @@ export function LiveComposer(props: {
       ) : null}
 
       {props.activeMenu === "permission" ? (
-        <div className="cn-popover permission cn-live-popover">
+        <div className="cn-popover permission cn-live-popover" style={menuStyle}>
           {props.permissionOptions.map((option) => (
             <button
               key={option.mode}

@@ -1719,7 +1719,8 @@ export function useWebConsoleController() {
   async function resumeHistorySessionForGoal(
     entry: LocalCodexHistoryEntry,
     previewSession: LocalSessionSummary,
-    objective: string
+    objective: string,
+    clientMessageId?: string
   ) {
     if (isPreviewOnlyHistoryEntry(entry)) {
       patchActiveWorkspace((workspace) => ({
@@ -1790,6 +1791,13 @@ export function useWebConsoleController() {
         status: "active",
         tokenBudget: result.session.goal?.tokenBudget ?? null
       });
+      if (clientMessageId) {
+        patchActiveWorkspace((workspace) =>
+          markOptimisticMessageSent(workspace, clientMessageId, {
+            sessionId: result.session.sessionId
+          })
+        );
+      }
     } catch (err) {
       patchActiveWorkspace((workspace) => ({
         ...workspace,
@@ -1830,6 +1838,16 @@ export function useWebConsoleController() {
     }
 
     if (goalComposerMode) {
+      const clientMessageId = createClientId("goal");
+      const targetSessionId = currentSession?.sessionId ?? pendingSessionId(clientMessageId);
+
+      patchActiveWorkspace((workspace) =>
+        addOptimisticUserMessage(workspace, {
+          sessionId: targetSessionId,
+          clientMessageId,
+          text
+        })
+      );
       setDraft("");
       setAttachments([]);
       setActiveMenu(null);
@@ -1847,17 +1865,46 @@ export function useWebConsoleController() {
             if (!historyEntry) {
               throw new Error("这条记录暂时不可用，请刷新后重试。");
             }
-            await resumeHistorySessionForGoal(historyEntry, currentSession, text);
+            await resumeHistorySessionForGoal(
+              historyEntry,
+              currentSession,
+              text,
+              clientMessageId
+            );
           } else {
             await setGoalForSession(currentSession.sessionId, {
               objective: text,
               status: "active",
               tokenBudget: currentSession.goal?.tokenBudget ?? null
             });
+            patchActiveWorkspace((workspace) =>
+              markOptimisticMessageSent(workspace, clientMessageId, {
+                sessionId: currentSession.sessionId
+              })
+            );
           }
           setGoalComposerMode(false);
           return;
         }
+
+        const pendingSession = makePendingSession({
+          sessionId: targetSessionId,
+          cwd: cwd.trim(),
+          model,
+          permissionMode,
+          reasoningEffort
+        });
+        patchActiveWorkspace((workspace) =>
+          upsertSessionInWorkspace(
+            {
+              ...workspace,
+              currentSessionId: pendingSession.sessionId,
+              selectedHistoryKey: null,
+              cwd: pendingSession.cwd
+            },
+            pendingSession
+          )
+        );
 
         const result = await createSession(connection, {
           cwd: cwd.trim(),
@@ -1870,18 +1917,34 @@ export function useWebConsoleController() {
         });
 
         patchActiveWorkspace((workspace) => {
-          const next = upsertSessionInWorkspace(workspace, result.session);
+          let next = reassignSessionChatItems(
+            workspace,
+            pendingSession.sessionId,
+            result.session.sessionId
+          );
+          next = markOptimisticMessageSent(next, clientMessageId, {
+            sessionId: result.session.sessionId
+          });
+          next = upsertSessionInWorkspace(next, result.session);
           return {
             ...next,
             currentSessionId: result.session.sessionId,
             selectedHistoryKey: null,
-            cwd: result.session.cwd
+            cwd: result.session.cwd,
+            sessions: next.sessions.filter(
+              (session) =>
+                session.sessionId !== pendingSession.sessionId ||
+                session.sessionId === result.session.sessionId
+            )
           };
         });
         setGoalComposerMode(false);
         setActiveSheet(null);
         return;
       } catch (err) {
+        patchActiveWorkspace((workspace) =>
+          markOptimisticMessageFailed(workspace, clientMessageId, formatError(err))
+        );
         setError(formatError(err));
         return;
       }
