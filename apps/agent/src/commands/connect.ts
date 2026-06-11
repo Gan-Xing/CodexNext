@@ -1,6 +1,6 @@
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
-import { io, type Socket } from "socket.io-client";
+import { io } from "socket.io-client";
 import type {
   MachineHelloAck,
   MachineHelloPayload,
@@ -16,7 +16,8 @@ import { printLine, printSection } from "../output.js";
 import {
   activeSessionCount,
   codexVersion,
-  createLocalAgentRuntime
+  createLocalAgentRuntime,
+  type LocalAgentRuntime
 } from "../local-server/local-agent.js";
 import { readOrCreateDeviceIdentity } from "../relay/device-identity.js";
 
@@ -28,22 +29,90 @@ export interface ConnectOptions {
   codexBin: string;
 }
 
-export async function runConnect(options: ConnectOptions): Promise<void> {
+export interface ConnectRuntimeDependencies {
+  activeSessionCount?: typeof activeSessionCount;
+  codexVersion?: typeof codexVersion;
+  createLocalAgentRuntime?: typeof createLocalAgentRuntime;
+  clearInterval?: typeof clearInterval;
+  io?: (uri: string, options: Parameters<typeof io>[1]) => ConnectSocket;
+  now?: () => number;
+  printLine?: typeof printLine;
+  printSection?: typeof printSection;
+  readOrCreateDeviceIdentity?: typeof readOrCreateDeviceIdentity;
+  setInterval?: typeof setInterval;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export interface ConnectAgentHandle {
+  close(): Promise<void>;
+  runtime: LocalAgentRuntime;
+  socket: ConnectSocket;
+}
+
+export interface ConnectSocket {
+  auth: unknown;
+  connected: boolean;
+  io: {
+    on(event: "reconnect_attempt", listener: () => void): unknown;
+    on(event: string, listener: (...args: any[]) => void): unknown;
+  };
+  close(): unknown;
+  connect(): unknown;
+  disconnect(): unknown;
+  emit(event: string, payload: unknown): unknown;
+  on(event: "connect", listener: () => void): unknown;
+  on(event: "disconnect", listener: () => void): unknown;
+  on(event: "connect_error", listener: (error: Error) => void): unknown;
+  on(
+    event: "rpc:request",
+    listener: (
+      request: RelayRpcRequest,
+      ack?: (response: RelayRpcResponse) => void
+    ) => void
+  ): unknown;
+  on(event: string, listener: (...args: any[]) => void): unknown;
+  timeout(timeoutMs: number): {
+    emit<T>(
+      event: string,
+      payload: unknown,
+      callback: (error: Error | null, response: T) => void
+    ): unknown;
+  };
+}
+
+export async function startConnectAgent(
+  options: ConnectOptions,
+  dependencies: ConnectRuntimeDependencies = {}
+): Promise<ConnectAgentHandle> {
+  const activeSessionCountFn =
+    dependencies.activeSessionCount ?? activeSessionCount;
+  const clearIntervalFn = dependencies.clearInterval ?? clearInterval;
+  const codexVersionFn = dependencies.codexVersion ?? codexVersion;
+  const createLocalAgentRuntimeFn =
+    dependencies.createLocalAgentRuntime ?? createLocalAgentRuntime;
+  const ioFn = dependencies.io ?? io;
+  const nowFn = dependencies.now ?? Date.now;
+  const printLineFn = dependencies.printLine ?? printLine;
+  const printSectionFn = dependencies.printSection ?? printSection;
+  const readOrCreateDeviceIdentityFn =
+    dependencies.readOrCreateDeviceIdentity ?? readOrCreateDeviceIdentity;
+  const setIntervalFn = dependencies.setInterval ?? setInterval;
+  const sleepFn = dependencies.sleep ?? sleep;
   const relayUrl = normalizeRelayUrl(options.relay);
-  const identity = await readOrCreateDeviceIdentity({
+  const identity = await readOrCreateDeviceIdentityFn({
     ...(options.deviceName ? { deviceName: options.deviceName } : {}),
     relayUrl
   });
-  const runtime = createLocalAgentRuntime({
+  const runtime = createLocalAgentRuntimeFn({
     host: "relay",
     port: 0,
     approvalTimeoutMs: options.approvalTimeoutMs,
     codexBin: options.codexBin
   });
-  const codex = await codexVersion(options.codexBin);
-  const startedAt = Date.now();
+  const codex = await codexVersionFn(options.codexBin);
+  const startedAt = nowFn();
 
-  const socket = io(`${relayUrl}${RelayNamespace.Machine}`, {
+  const socket: ConnectSocket = ioFn(`${relayUrl}${RelayNamespace.Machine}`, {
     path: RelaySocketPath,
     reconnection: true,
     reconnectionDelay: 500,
@@ -73,7 +142,7 @@ export async function runConnect(options: ConnectOptions): Promise<void> {
 
   const stopHeartbeat = () => {
     if (heartbeatTimer) {
-      clearInterval(heartbeatTimer);
+      clearIntervalFn(heartbeatTimer);
       heartbeatTimer = null;
     }
   };
@@ -84,14 +153,14 @@ export async function runConnect(options: ConnectOptions): Promise<void> {
     }
     socket.emit("machine:heartbeat", {
       deviceId: identity.deviceId,
-      at: Date.now(),
-      activeSessions: activeSessionCount(runtime.sessionManager.summaries())
+      at: nowFn(),
+      activeSessions: activeSessionCountFn(runtime.sessionManager.summaries())
     });
   };
 
   const startHeartbeat = () => {
     stopHeartbeat();
-    heartbeatTimer = setInterval(emitHeartbeat, heartbeatIntervalMs);
+    heartbeatTimer = setIntervalFn(emitHeartbeat, heartbeatIntervalMs);
     emitHeartbeat();
   };
 
@@ -132,15 +201,15 @@ export async function runConnect(options: ConnectOptions): Promise<void> {
       startHeartbeat();
       if (!announcedReady) {
         announcedReady = true;
-        printSection("codexnext connect", "relay agent is connected");
-        printLine(`Relay: ${relayUrl}`);
-        printLine(`Device: ${identity.deviceName} (${identity.deviceId})`);
-        printLine("Press Ctrl+C to stop the relay agent.");
+        printSectionFn("codexnext connect", "relay agent is connected");
+        printLineFn(`Relay: ${relayUrl}`);
+        printLineFn(`Device: ${identity.deviceName} (${identity.deviceId})`);
+        printLineFn("Press Ctrl+C to stop the relay agent.");
       }
     } catch (error) {
-      printLine(`relay handshake failed: ${formatError(error)}`);
+      printLineFn(`relay handshake failed: ${formatError(error)}`);
       socket.disconnect();
-      await sleep(1_000);
+      await sleepFn(1_000);
       updateAuth();
       socket.connect();
     }
@@ -151,31 +220,49 @@ export async function runConnect(options: ConnectOptions): Promise<void> {
   });
 
   socket.io.on("reconnect_attempt", updateAuth);
-  socket.on("connect_error", (error) => {
-    printLine(`relay connect error: ${formatError(error)}`);
+  socket.on("connect_error", (error: Error) => {
+    printLineFn(`relay connect error: ${formatError(error)}`);
   });
 
-  socket.on("rpc:request", async (request: RelayRpcRequest, ack?: (response: RelayRpcResponse) => void) => {
-    if (typeof ack !== "function") {
-      return;
+  socket.on(
+    "rpc:request",
+    async (
+      request: RelayRpcRequest,
+      ack?: (response: RelayRpcResponse) => void
+    ) => {
+      if (typeof ack !== "function") {
+        return;
+      }
+      try {
+        const result = await runtime.invoke(request.method, request.params);
+        ack({ ok: true, result });
+      } catch (error) {
+        ack({
+          ok: false,
+          error: {
+            message: formatError(error)
+          }
+        });
+      }
     }
-    try {
-      const result = await runtime.invoke(request.method, request.params);
-      ack({ ok: true, result });
-    } catch (error) {
-      ack({
-        ok: false,
-        error: {
-          message: formatError(error)
-        }
-      });
-    }
-  });
+  );
+
+  return {
+    close: async () => {
+      stopHeartbeat();
+      socket.close();
+      await runtime.close();
+    },
+    runtime,
+    socket
+  };
+}
+
+export async function runConnect(options: ConnectOptions): Promise<void> {
+  const handle = await startConnectAgent(options);
 
   const shutdown = async () => {
-    stopHeartbeat();
-    socket.close();
-    await runtime.close();
+    await handle.close();
     process.exit(0);
   };
 
@@ -190,19 +277,22 @@ export async function runConnect(options: ConnectOptions): Promise<void> {
 }
 
 async function emitWithAck<T>(
-  socket: Socket,
+  socket: ConnectSocket,
   event: string,
   payload: unknown,
   timeoutMs: number
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    socket.timeout(timeoutMs).emit(event, payload, (error: Error | null, response: T) => {
-      if (error) {
-        reject(error);
-        return;
+    socket
+      .timeout(timeoutMs)
+      .emit(event, payload, (error: Error | null, response: T) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(response);
       }
-      resolve(response);
-    });
+    );
   });
 }
 

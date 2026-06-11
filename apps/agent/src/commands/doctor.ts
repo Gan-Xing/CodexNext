@@ -325,3 +325,8 @@ function runCommand(command: string, args: string[]): Promise<CommandResult> {
     });
   });
 }
+
+export const __doctorTestInternals = {
+  isSafeHealthPayload,
+  safeUrlLabel
+};

@@ -4,10 +4,14 @@ import type {
   PairingCreateResponse,
   PairingPollResponse
 } from "@codexnext/protocol";
+import {
+  PairingCreateResponseSchema,
+  PairingPollResponseSchema
+} from "@codexnext/protocol";
 import { codexVersion } from "../local-server/local-agent.js";
 import { printLine, printSection } from "../output.js";
 import { readOrCreateDeviceIdentity } from "../relay/device-identity.js";
-import { normalizeRelayUrl, runConnect } from "./connect.js";
+import { normalizeRelayUrl, runConnect, type ConnectOptions } from "./connect.js";
 
 export interface PairOptions {
   relay: string;
@@ -16,14 +20,35 @@ export interface PairOptions {
   codexBin: string;
 }
 
-export async function runPair(options: PairOptions): Promise<void> {
+export interface PairRuntimeDependencies {
+  codexVersion?: typeof codexVersion;
+  connect?: (options: ConnectOptions) => Promise<void>;
+  fetch?: typeof fetch;
+  printLine?: typeof printLine;
+  printSection?: typeof printSection;
+  readOrCreateDeviceIdentity?: typeof readOrCreateDeviceIdentity;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export async function runPair(
+  options: PairOptions,
+  dependencies: PairRuntimeDependencies = {}
+): Promise<void> {
+  const codexVersionFn = dependencies.codexVersion ?? codexVersion;
+  const connectFn = dependencies.connect ?? runConnect;
+  const fetchFn = dependencies.fetch ?? fetch;
+  const printLineFn = dependencies.printLine ?? printLine;
+  const printSectionFn = dependencies.printSection ?? printSection;
+  const readOrCreateDeviceIdentityFn =
+    dependencies.readOrCreateDeviceIdentity ?? readOrCreateDeviceIdentity;
+  const sleepFn = dependencies.sleep ?? sleep;
   const relayUrl = normalizeRelayUrl(options.relay);
-  const identity = await readOrCreateDeviceIdentity({
+  const identity = await readOrCreateDeviceIdentityFn({
     ...(options.deviceName ? { deviceName: options.deviceName } : {}),
     relayUrl
   });
-  const codex = await codexVersion(options.codexBin);
-  const create = await fetch(new URL("/api/pairings/device", relayUrl), {
+  const codex = await codexVersionFn(options.codexBin);
+  const create = await fetchFn(new URL("/api/pairings/device", relayUrl), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -44,20 +69,20 @@ export async function runPair(options: PairOptions): Promise<void> {
     const text = await create.text();
     throw new Error(text || `Pairing failed: ${create.status}`);
   }
-  const pairing = (await create.json()) as PairingCreateResponse;
+  const pairing = parsePairingCreateResponse(await create.json());
 
-  printSection("codexnext pair", "pair this device");
-  printLine(`Code: ${pairing.code}`);
-  printLine(`Expires: ${new Date(pairing.expiresAt).toLocaleString()}`);
+  printSectionFn("codexnext pair", "pair this device");
+  printLineFn(`Code: ${pairing.code}`);
+  printLineFn(`Expires: ${new Date(pairing.expiresAt).toLocaleString()}`);
   if (pairing.approveUrl) {
-    printLine(`Open: ${pairing.approveUrl}`);
+    printLineFn(`Open: ${pairing.approveUrl}`);
   } else {
-    printLine(`Open your CodexNext Web page and visit /pair?code=${pairing.codeDigits}`);
+    printLineFn(`Open your CodexNext Web page and visit /pair?code=${pairing.codeDigits}`);
   }
 
   while (true) {
-    await sleep(2_000);
-    const poll = await fetch(
+    await sleepFn(2_000);
+    const poll = await fetchFn(
       new URL(
         `/api/pairings/device/${encodeURIComponent(pairing.requestId)}?pollToken=${encodeURIComponent(pairing.pollToken)}`,
         relayUrl
@@ -67,7 +92,7 @@ export async function runPair(options: PairOptions): Promise<void> {
       const text = await poll.text();
       throw new Error(text || `Pairing poll failed: ${poll.status}`);
     }
-    const status = (await poll.json()) as PairingPollResponse;
+    const status = parsePairingPollResponse(await poll.json());
     if (status.status === "pending") {
       continue;
     }
@@ -77,9 +102,9 @@ export async function runPair(options: PairOptions): Promise<void> {
     if (status.status === "expired") {
       throw new Error("配对码已过期。");
     }
-    printLine("");
-    printSection("paired", "device approved, connecting to relay");
-    await runConnect({
+    printLineFn("");
+    printSectionFn("paired", "device approved, connecting to relay");
+    await connectFn({
       relay: relayUrl,
       deviceName: identity.deviceName,
       approvalTimeoutMs: options.approvalTimeoutMs,
@@ -87,4 +112,20 @@ export async function runPair(options: PairOptions): Promise<void> {
     });
     return;
   }
+}
+
+function parsePairingCreateResponse(payload: unknown): PairingCreateResponse {
+  const parsed = PairingCreateResponseSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error("Invalid pairing response: create");
+  }
+  return parsed.data as PairingCreateResponse;
+}
+
+function parsePairingPollResponse(payload: unknown): PairingPollResponse {
+  const parsed = PairingPollResponseSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error("Invalid pairing response: poll");
+  }
+  return parsed.data as PairingPollResponse;
 }

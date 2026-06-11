@@ -112,6 +112,30 @@ describe("ApprovalBridge", () => {
 
     await expect(pending).resolves.toEqual({ decision: "abort" });
   });
+
+  it("lets the first approval decision win and rejects stale duplicate decisions", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const pending = bridge.requestApproval({
+      sessionId: "session_1",
+      method: CodexServerRequestMethod.CommandExecutionRequestApproval,
+      params: { threadId: "thread_1", turnId: "turn_1" }
+    });
+    const approval = bridge.listPending()[0];
+    expect(approval?.approvalId).toBeTruthy();
+
+    expect(bridge.resolveDecision(approval?.approvalId ?? "", "accept")).toEqual({
+      decision: "accept"
+    });
+    await expect(pending).resolves.toEqual({ decision: "accept" });
+    expect(() =>
+      bridge.resolveDecision(approval?.approvalId ?? "", "decline")
+    ).toThrow(/No pending approval/);
+    expect(bridge.listPending()).toEqual([]);
+    expect(
+      store.all().filter((event) => event.type === LocalEventType.ApprovalResolved)
+    ).toHaveLength(1);
+  });
 });
 
 describe("SessionManager messages", () => {
