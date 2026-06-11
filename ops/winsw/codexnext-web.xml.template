@@ -1,0 +1,26 @@
+<service>
+  <id>codexnext-web</id>
+  <name>CodexNext Relay Web</name>
+  <description>Runs the CodexNext web console against the configured relay control origin.</description>
+  <executable>%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe</executable>
+  <arguments>-NoProfile -ExecutionPolicy Bypass -Command "&amp; { $ErrorActionPreference = 'Stop'; Set-Location -LiteralPath $env:CODEXNEXT_ROOT; $env:NEXT_PUBLIC_CODEXNEXT_RELAY_URL = $env:CODEXNEXT_RELAY_URL; if ($env:CODEXNEXT_DISABLE_RELAY_FULL_ACCESS) { $env:NEXT_PUBLIC_CODEXNEXT_DISABLE_RELAY_FULL_ACCESS = $env:CODEXNEXT_DISABLE_RELAY_FULL_ACCESS }; if ($env:CODEXNEXT_ALLOW_URL_TOKEN) { $env:NEXT_PUBLIC_CODEXNEXT_ALLOW_URL_TOKEN = $env:CODEXNEXT_ALLOW_URL_TOKEN }; pnpm --filter @codexnext/web exec next start -H $env:CODEXNEXT_WEB_HOST -p $env:CODEXNEXT_WEB_PORT }"</arguments>
+  <workingdirectory>%CODEXNEXT_ROOT%</workingdirectory>
+  <env name="CODEXNEXT_ROOT" value="C:\codexnext" />
+  <env name="CODEXNEXT_RELAY_URL" value="https://relay.example.invalid" />
+  <env name="CODEXNEXT_OWNER_TOKEN" value="replace-with-long-random-token" />
+  <env name="CODEXNEXT_PUBLIC_ORIGIN" value="https://web.example.invalid" />
+  <env name="CODEXNEXT_WEB_HOST" value="0.0.0.0" />
+  <env name="CODEXNEXT_WEB_PORT" value="3002" />
+  <env name="CODEXNEXT_WEB_AUTH_PASSWORD_HASH" value="replace-with-scrypt-hash" />
+  <env name="CODEXNEXT_WEB_SESSION_SECRET" value="replace-with-long-random-secret" />
+  <env name="CODEXNEXT_DISABLE_RELAY_FULL_ACCESS" value="0" />
+  <env name="CODEXNEXT_ALLOW_URL_TOKEN" value="" />
+  <onfailure action="restart" delay="5 sec" />
+  <stoptimeout>20 sec</stoptimeout>
+  <stopparentprocessfirst>true</stopparentprocessfirst>
+  <logpath>%BASE%\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10485760</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

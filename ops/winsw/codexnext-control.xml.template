@@ -1,0 +1,28 @@
+<service>
+  <id>codexnext-control</id>
+  <name>CodexNext Relay Control Server</name>
+  <description>Runs the CodexNext relay control API and Socket.IO relay.</description>
+  <executable>%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe</executable>
+  <arguments>-NoProfile -ExecutionPolicy Bypass -Command "&amp; { $ErrorActionPreference = 'Stop'; Set-Location -LiteralPath $env:CODEXNEXT_ROOT; $cmdArgs = @('--host', $env:CODEXNEXT_CONTROL_HOST, '--port', $env:CODEXNEXT_CONTROL_PORT, '--owner-token', $env:CODEXNEXT_OWNER_TOKEN, '--heartbeat-interval-ms', $env:CODEXNEXT_HEARTBEAT_INTERVAL_MS, '--rpc-timeout-ms', $env:CODEXNEXT_RPC_TIMEOUT_MS); if ($env:CODEXNEXT_STALE_DEVICE_TIMEOUT_MS) { $cmdArgs += @('--stale-device-timeout-ms', $env:CODEXNEXT_STALE_DEVICE_TIMEOUT_MS) }; if ($env:CODEXNEXT_PRODUCTION -eq '1') { $cmdArgs += '--production' }; if ($env:CODEXNEXT_ALLOW_MACHINE_OWNER_TOKEN -eq '1') { $cmdArgs += '--allow-machine-owner-token' }; if ($env:CODEXNEXT_DISABLE_RELAY_FULL_ACCESS -eq '1') { $cmdArgs += '--disable-relay-full-access' }; if ($env:CODEXNEXT_PUBLIC_WEB_ORIGIN) { $cmdArgs += @('--public-web-origin', $env:CODEXNEXT_PUBLIC_WEB_ORIGIN) }; if ($env:CODEXNEXT_ALLOWED_ORIGINS) { $env:CODEXNEXT_ALLOWED_ORIGINS.Split(',') | ForEach-Object { $origin = $_.Trim(); if ($origin) { $cmdArgs += @('--allow-origin', $origin) } } }; pnpm --filter @codexnext/control dev -- @cmdArgs }"</arguments>
+  <workingdirectory>%CODEXNEXT_ROOT%</workingdirectory>
+  <env name="CODEXNEXT_ROOT" value="C:\codexnext" />
+  <env name="CODEXNEXT_OWNER_TOKEN" value="replace-with-long-random-token" />
+  <env name="CODEXNEXT_CONTROL_HOST" value="0.0.0.0" />
+  <env name="CODEXNEXT_CONTROL_PORT" value="3922" />
+  <env name="CODEXNEXT_PRODUCTION" value="1" />
+  <env name="CODEXNEXT_PUBLIC_WEB_ORIGIN" value="https://web.example.invalid" />
+  <env name="CODEXNEXT_ALLOWED_ORIGINS" value="https://web.example.invalid" />
+  <env name="CODEXNEXT_ALLOW_MACHINE_OWNER_TOKEN" value="0" />
+  <env name="CODEXNEXT_DISABLE_RELAY_FULL_ACCESS" value="0" />
+  <env name="CODEXNEXT_HEARTBEAT_INTERVAL_MS" value="15000" />
+  <env name="CODEXNEXT_STALE_DEVICE_TIMEOUT_MS" value="" />
+  <env name="CODEXNEXT_RPC_TIMEOUT_MS" value="30000" />
+  <onfailure action="restart" delay="5 sec" />
+  <stoptimeout>20 sec</stoptimeout>
+  <stopparentprocessfirst>true</stopparentprocessfirst>
+  <logpath>%BASE%\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10485760</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

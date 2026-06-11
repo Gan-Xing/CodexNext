@@ -10,7 +10,9 @@
   "scripts": {
     "sync:codex-icons": "node packages/codex-icons/scripts/extract-codex-icons.mjs",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:guard": "node scripts/test-codexnext-backlog-cycle-guard.mjs",
+    "test:winsw": "node scripts/test-winsw-templates.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
