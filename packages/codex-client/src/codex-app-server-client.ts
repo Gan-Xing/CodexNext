@@ -31,7 +31,42 @@ import type {
 } from "@codexnext/protocol";
 import {
   CodexClientMethod,
-  CodexServerRequestMethod
+  CodexServerRequestMethod,
+  CommandExecutionRequestApprovalParamsSchema,
+  CommandExecutionRequestApprovalResponseSchema,
+  FileChangeRequestApprovalParamsSchema,
+  FileChangeRequestApprovalResponseSchema,
+  InitializeParamsSchema,
+  LegacyApplyPatchApprovalParamsSchema,
+  LegacyExecCommandApprovalParamsSchema,
+  LegacyApprovalResponseSchema,
+  ThreadArchiveParamsSchema,
+  ThreadArchiveResponseSchema,
+  ThreadGoalClearParamsSchema,
+  ThreadGoalClearResponseSchema,
+  ThreadGoalGetParamsSchema,
+  ThreadGoalGetResponseSchema,
+  ThreadGoalSetParamsSchema,
+  ThreadGoalSetResponseSchema,
+  ThreadLoadedListParamsSchema,
+  ThreadLoadedListResponseSchema,
+  ThreadListParamsSchema,
+  ThreadListResponseSchema,
+  ThreadReadParamsSchema,
+  ThreadReadResponseSchema,
+  ThreadResumeParamsSchema,
+  ThreadResumeResponseSchema,
+  ThreadStartParamsSchema,
+  ThreadStartResponseSchema,
+  ThreadTurnsListParamsSchema,
+  ThreadTurnsListResponseSchema,
+  ThreadUnarchiveParamsSchema,
+  ThreadUnarchiveResponseSchema,
+  TurnInterruptParamsSchema,
+  TurnStartResponseSchema,
+  TurnStartParamsSchema,
+  TurnSteerParamsSchema,
+  parseAppServerNotification
 } from "@codexnext/protocol";
 import { JsonRpcClient, type JsonRpcClientOptions } from "./json-rpc.js";
 import {
@@ -83,17 +118,29 @@ export class CodexAppServerClient {
   public onNotification(
     listener: (notification: AppServerNotification) => void
   ): () => void {
-    return this.rpc.onNotification(listener);
+    return this.rpc.onNotification((notification) => {
+      const parsed = parseAppServerNotification(notification);
+      if (parsed) {
+        listener(parsed);
+      }
+    });
   }
 
   public onNotificationMethod(
     method: string,
     listener: (params: unknown, notification: AppServerNotification) => void
   ): () => void {
-    return this.rpc.onNotification(method, listener);
+    return this.rpc.onNotification(method, (_params, notification) => {
+      const parsed = parseAppServerNotification(notification);
+      if (parsed) {
+        listener(parsed.params, parsed);
+      }
+    });
   }
 
-  public initialize(params?: Partial<InitializeParams>): Promise<InitializeResponse> {
+  public async initialize(
+    params?: Partial<InitializeParams>
+  ): Promise<InitializeResponse> {
     const merged: InitializeParams = {
       clientInfo: {
         name: "codexnext_agent",
@@ -108,9 +155,15 @@ export class CodexAppServerClient {
       }
     };
 
+    const validParams = parseAppServerRequestParams(
+      InitializeParamsSchema,
+      merged,
+      CodexClientMethod.Initialize
+    );
+
     return this.rpc.request<InitializeResponse>(
       CodexClientMethod.Initialize,
-      merged
+      validParams
     );
   }
 
@@ -118,110 +171,208 @@ export class CodexAppServerClient {
     return this.rpc.notify(CodexClientMethod.Initialized, {});
   }
 
-  public threadStart(
+  public async threadStart(
     params: ThreadStartParams = {}
   ): Promise<ThreadStartResponse> {
-    return this.rpc.request<ThreadStartResponse>(
-      CodexClientMethod.ThreadStart,
-      params
+    const validParams = parseAppServerRequestParams(
+      ThreadStartParamsSchema,
+      params,
+      CodexClientMethod.ThreadStart
+    );
+    return parseAppServerResponse(
+      ThreadStartResponseSchema,
+      this.rpc.request(CodexClientMethod.ThreadStart, validParams),
+      CodexClientMethod.ThreadStart
     );
   }
 
-  public threadResume(params: ThreadResumeParams): Promise<ThreadResumeResponse> {
-    return this.rpc.request<ThreadResumeResponse>(
-      CodexClientMethod.ThreadResume,
-      params
+  public async threadResume(
+    params: ThreadResumeParams
+  ): Promise<ThreadResumeResponse> {
+    const validParams = parseAppServerRequestParams(
+      ThreadResumeParamsSchema,
+      params,
+      CodexClientMethod.ThreadResume
+    );
+    return parseAppServerResponse(
+      ThreadResumeResponseSchema,
+      this.rpc.request(CodexClientMethod.ThreadResume, validParams),
+      CodexClientMethod.ThreadResume
     );
   }
 
-  public threadArchive(
+  public async threadArchive(
     params: ThreadArchiveParams
   ): Promise<ThreadArchiveResponse> {
-    return this.rpc.request<ThreadArchiveResponse>(
-      CodexClientMethod.ThreadArchive,
-      params
+    const validParams = parseAppServerRequestParams(
+      ThreadArchiveParamsSchema,
+      params,
+      CodexClientMethod.ThreadArchive
+    );
+    return parseAppServerResponse(
+      ThreadArchiveResponseSchema,
+      this.rpc.request(CodexClientMethod.ThreadArchive, validParams),
+      CodexClientMethod.ThreadArchive
     );
   }
 
-  public threadUnarchive(
+  public async threadUnarchive(
     params: ThreadUnarchiveParams
   ): Promise<ThreadUnarchiveResponse> {
-    return this.rpc.request<ThreadUnarchiveResponse>(
-      CodexClientMethod.ThreadUnarchive,
-      params
+    const validParams = parseAppServerRequestParams(
+      ThreadUnarchiveParamsSchema,
+      params,
+      CodexClientMethod.ThreadUnarchive
+    );
+    return parseAppServerResponse(
+      ThreadUnarchiveResponseSchema,
+      this.rpc.request(CodexClientMethod.ThreadUnarchive, validParams),
+      CodexClientMethod.ThreadUnarchive
     );
   }
 
-  public threadList(params: ThreadListParams = {}): Promise<ThreadListResponse> {
-    return this.rpc.request<ThreadListResponse>(
-      CodexClientMethod.ThreadList,
-      params
+  public async threadList(
+    params: ThreadListParams = {}
+  ): Promise<ThreadListResponse> {
+    const validParams = parseAppServerRequestParams(
+      ThreadListParamsSchema,
+      params,
+      CodexClientMethod.ThreadList
+    );
+    return parseAppServerResponse(
+      ThreadListResponseSchema,
+      this.rpc.request(CodexClientMethod.ThreadList, validParams),
+      CodexClientMethod.ThreadList
     );
   }
 
-  public threadLoadedList(): Promise<ThreadLoadedListResponse> {
-    return this.rpc.request<ThreadLoadedListResponse>(
-      CodexClientMethod.ThreadLoadedList,
-      {}
+  public async threadLoadedList(): Promise<ThreadLoadedListResponse> {
+    const validParams = parseAppServerRequestParams(
+      ThreadLoadedListParamsSchema,
+      {},
+      CodexClientMethod.ThreadLoadedList
+    );
+    return parseAppServerResponse(
+      ThreadLoadedListResponseSchema,
+      this.rpc.request(CodexClientMethod.ThreadLoadedList, validParams),
+      CodexClientMethod.ThreadLoadedList
     );
   }
 
-  public threadRead(params: ThreadReadParams): Promise<ThreadReadResponse> {
-    return this.rpc.request<ThreadReadResponse>(
-      CodexClientMethod.ThreadRead,
-      params
+  public async threadRead(params: ThreadReadParams): Promise<ThreadReadResponse> {
+    const validParams = parseAppServerRequestParams(
+      ThreadReadParamsSchema,
+      params,
+      CodexClientMethod.ThreadRead
+    );
+    return parseAppServerResponse(
+      ThreadReadResponseSchema,
+      this.rpc.request(CodexClientMethod.ThreadRead, validParams),
+      CodexClientMethod.ThreadRead
     );
   }
 
-  public threadTurnsList(
+  public async threadTurnsList(
     params: ThreadTurnsListParams
   ): Promise<ThreadTurnsListResponse> {
-    return this.rpc.request<ThreadTurnsListResponse>(
-      CodexClientMethod.ThreadTurnsList,
-      params
+    const validParams = parseAppServerRequestParams(
+      ThreadTurnsListParamsSchema,
+      params,
+      CodexClientMethod.ThreadTurnsList
+    );
+    return parseAppServerResponse(
+      ThreadTurnsListResponseSchema,
+      this.rpc.request(CodexClientMethod.ThreadTurnsList, validParams),
+      CodexClientMethod.ThreadTurnsList
     );
   }
 
-  public setGoal(
+  public async setGoal(
     params: ThreadGoalSetParams
   ): Promise<ThreadGoalSetResponse> {
-    return this.rpc.request<ThreadGoalSetResponse>(
-      CodexClientMethod.ThreadGoalSet,
-      params
+    const validParams = parseAppServerRequestParams(
+      ThreadGoalSetParamsSchema,
+      params,
+      CodexClientMethod.ThreadGoalSet
+    );
+    return parseAppServerResponse(
+      ThreadGoalSetResponseSchema,
+      this.rpc.request(
+        CodexClientMethod.ThreadGoalSet,
+        validParams
+      ),
+      CodexClientMethod.ThreadGoalSet
     );
   }
 
-  public getGoal(
+  public async getGoal(
     params: ThreadGoalGetParams
   ): Promise<ThreadGoalGetResponse> {
-    return this.rpc.request<ThreadGoalGetResponse>(
-      CodexClientMethod.ThreadGoalGet,
-      params
+    const validParams = parseAppServerRequestParams(
+      ThreadGoalGetParamsSchema,
+      params,
+      CodexClientMethod.ThreadGoalGet
+    );
+    return parseAppServerResponse(
+      ThreadGoalGetResponseSchema,
+      this.rpc.request(
+        CodexClientMethod.ThreadGoalGet,
+        validParams
+      ),
+      CodexClientMethod.ThreadGoalGet
     );
   }
 
-  public clearGoal(
+  public async clearGoal(
     params: ThreadGoalClearParams
   ): Promise<ThreadGoalClearResponse> {
-    return this.rpc.request<ThreadGoalClearResponse>(
-      CodexClientMethod.ThreadGoalClear,
-      params
+    const validParams = parseAppServerRequestParams(
+      ThreadGoalClearParamsSchema,
+      params,
+      CodexClientMethod.ThreadGoalClear
+    );
+    return parseAppServerResponse(
+      ThreadGoalClearResponseSchema,
+      this.rpc.request(
+        CodexClientMethod.ThreadGoalClear,
+        validParams
+      ),
+      CodexClientMethod.ThreadGoalClear
     );
   }
 
-  public turnStart(params: TurnStartParams): Promise<TurnStartResponse> {
-    return this.rpc.request<TurnStartResponse>(
-      CodexClientMethod.TurnStart,
-      params
+  public async turnStart(params: TurnStartParams): Promise<TurnStartResponse> {
+    const validParams = parseAppServerRequestParams(
+      TurnStartParamsSchema,
+      params,
+      CodexClientMethod.TurnStart
+    );
+    return parseAppServerResponse(
+      TurnStartResponseSchema,
+      this.rpc.request(
+        CodexClientMethod.TurnStart,
+        validParams
+      ),
+      CodexClientMethod.TurnStart
     );
   }
 
-  public turnSteer(params: TurnSteerParams): Promise<unknown> {
-    return this.rpc.request(CodexClientMethod.TurnSteer, params);
+  public async turnSteer(params: TurnSteerParams): Promise<unknown> {
+    const validParams = parseAppServerRequestParams(
+      TurnSteerParamsSchema,
+      params,
+      CodexClientMethod.TurnSteer
+    );
+    return this.rpc.request(CodexClientMethod.TurnSteer, validParams);
   }
 
-  public turnInterrupt(params: TurnInterruptParams): Promise<unknown> {
-    return this.rpc.request(CodexClientMethod.TurnInterrupt, params);
+  public async turnInterrupt(params: TurnInterruptParams): Promise<unknown> {
+    const validParams = parseAppServerRequestParams(
+      TurnInterruptParamsSchema,
+      params,
+      CodexClientMethod.TurnInterrupt
+    );
+    return this.rpc.request(CodexClientMethod.TurnInterrupt, validParams);
   }
 
   public close(): Promise<void> {
@@ -238,15 +389,75 @@ export class CodexAppServerClient {
 
     for (const method of methods) {
       this.rpc.registerRequestHandler(method, async (params) => {
-        const callbackResult = await this.approvalRequestHandler?.({
-          method,
-          params,
-          receivedAt: new Date()
-        });
-        return callbackResult ?? defaultDeclineApprovalResponse(method);
+        const validParams = parseApprovalRequestParams(method, params);
+        if (validParams === undefined) {
+          return defaultDeclineApprovalResponse(method);
+        }
+
+        try {
+          const callbackResult = await this.approvalRequestHandler?.({
+            method,
+            params: validParams,
+            receivedAt: new Date()
+          });
+          return validatedApprovalResponse(method, callbackResult);
+        } catch {
+          return defaultDeclineApprovalResponse(method);
+        }
       });
     }
   }
+}
+
+function parseApprovalRequestParams(
+  method: string,
+  params: unknown
+): unknown | undefined {
+  const schema = approvalRequestParamsSchemaForMethod(method);
+  const parsed = schema.safeParse(params);
+  if (!parsed.success) {
+    return undefined;
+  }
+  return parsed.data;
+}
+
+function approvalRequestParamsSchemaForMethod(method: string): AppServerSchema {
+  if (method === CodexServerRequestMethod.CommandExecutionRequestApproval) {
+    return CommandExecutionRequestApprovalParamsSchema;
+  }
+  if (method === CodexServerRequestMethod.FileChangeRequestApproval) {
+    return FileChangeRequestApprovalParamsSchema;
+  }
+  if (method === CodexServerRequestMethod.LegacyExecCommandApproval) {
+    return LegacyExecCommandApprovalParamsSchema;
+  }
+  return LegacyApplyPatchApprovalParamsSchema;
+}
+
+function validatedApprovalResponse(
+  method: string,
+  response: ApprovalResponse | undefined
+): ApprovalResponse {
+  if (response === undefined) {
+    return defaultDeclineApprovalResponse(method);
+  }
+
+  const schema = approvalResponseSchemaForMethod(method);
+  const parsed = schema.safeParse(response);
+  if (!parsed.success) {
+    return defaultDeclineApprovalResponse(method);
+  }
+  return parsed.data as ApprovalResponse;
+}
+
+function approvalResponseSchemaForMethod(method: string): AppServerSchema {
+  if (method === CodexServerRequestMethod.CommandExecutionRequestApproval) {
+    return CommandExecutionRequestApprovalResponseSchema;
+  }
+  if (method === CodexServerRequestMethod.FileChangeRequestApproval) {
+    return FileChangeRequestApprovalResponseSchema;
+  }
+  return LegacyApprovalResponseSchema;
 }
 
 function defaultDeclineApprovalResponse(method: string): ApprovalResponse {
@@ -257,4 +468,33 @@ function defaultDeclineApprovalResponse(method: string): ApprovalResponse {
     return { decision: "denied" };
   }
   return { decision: "decline" };
+}
+
+interface AppServerSchema {
+  safeParse(value: unknown): { success: true; data: unknown } | { success: false };
+}
+
+function parseAppServerRequestParams<T>(
+  schema: AppServerSchema,
+  params: unknown,
+  method: string
+): T {
+  const parsed = schema.safeParse(params);
+  if (!parsed.success) {
+    throw new Error(`Invalid app-server request params: ${method}`);
+  }
+  return parsed.data as T;
+}
+
+async function parseAppServerResponse<T>(
+  schema: AppServerSchema,
+  response: Promise<unknown>,
+  method: string
+): Promise<T> {
+  const payload = await response;
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(`Invalid app-server response: ${method}`);
+  }
+  return parsed.data as T;
 }

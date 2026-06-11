@@ -5,6 +5,26 @@ export type JsonObject = { [key: string]: JsonValue | undefined };
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type RequestId = number | string;
 
+const JsonPrimitiveSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null()
+]);
+
+export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    JsonPrimitiveSchema,
+    z.array(JsonValueSchema),
+    z.record(z.string(), JsonValueSchema)
+  ])
+);
+
+export const JsonObjectSchema: z.ZodType<JsonObject> = z.record(
+  z.string(),
+  JsonValueSchema
+);
+
 export const RequestIdSchema = z.union([z.number(), z.string()]);
 
 export const JsonRpcErrorSchema = z
@@ -145,6 +165,15 @@ export type ThreadGoalStatus =
   | "budgetLimited"
   | "complete";
 
+export const ThreadGoalStatusSchema = z.enum([
+  "active",
+  "paused",
+  "blocked",
+  "usageLimited",
+  "budgetLimited",
+  "complete"
+]);
+
 export interface ThreadGoal {
   threadId: string;
   objective: string;
@@ -156,6 +185,17 @@ export interface ThreadGoal {
   updatedAt: number;
 }
 
+export const ThreadGoalSchema = z.object({
+  threadId: z.string().min(1),
+  objective: z.string(),
+  status: ThreadGoalStatusSchema,
+  tokenBudget: z.number().int().positive().nullable(),
+  tokensUsed: z.number().nonnegative(),
+  timeUsedSeconds: z.number().nonnegative(),
+  createdAt: z.number(),
+  updatedAt: z.number()
+});
+
 export interface ThreadGoalSetParams {
   threadId: string;
   objective?: string | null;
@@ -163,25 +203,54 @@ export interface ThreadGoalSetParams {
   tokenBudget?: number | null;
 }
 
+export const ThreadGoalSetParamsSchema = z
+  .object({
+    threadId: z.string().min(1),
+    objective: z.string().nullable().optional(),
+    status: ThreadGoalStatusSchema.nullable().optional(),
+    tokenBudget: z.number().int().positive().nullable().optional()
+  })
+  .strict();
+
 export interface ThreadGoalGetParams {
   threadId: string;
 }
+
+export const ThreadGoalGetParamsSchema = z
+  .object({
+    threadId: z.string().min(1)
+  })
+  .strict();
 
 export interface ThreadGoalClearParams {
   threadId: string;
 }
 
+export const ThreadGoalClearParamsSchema = ThreadGoalGetParamsSchema;
+
 export interface ThreadGoalSetResponse {
   goal: ThreadGoal;
 }
+
+export const ThreadGoalSetResponseSchema = z.object({
+  goal: ThreadGoalSchema
+});
 
 export interface ThreadGoalGetResponse {
   goal: ThreadGoal | null;
 }
 
+export const ThreadGoalGetResponseSchema = z.object({
+  goal: ThreadGoalSchema.nullable()
+});
+
 export interface ThreadGoalClearResponse {
   goal?: ThreadGoal | null;
 }
+
+export const ThreadGoalClearResponseSchema = z.object({
+  goal: ThreadGoalSchema.nullable().optional()
+});
 
 export type AskForApproval =
   | "untrusted"
@@ -198,6 +267,39 @@ export type LocalPermissionMode =
   | "custom-config";
 export type LocalReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
+export const AskForApprovalSchema = z.enum([
+  "untrusted",
+  "on-failure",
+  "on-request",
+  "never"
+]);
+
+export const ApprovalsReviewerSchema = z.enum([
+  "user",
+  "auto_review",
+  "guardian_subagent"
+]);
+
+export const SandboxModeSchema = z.enum([
+  "read-only",
+  "workspace-write",
+  "danger-full-access"
+]);
+
+export const LocalPermissionModeSchema = z.enum([
+  "request-approval",
+  "auto-approve",
+  "full-access",
+  "custom-config"
+]);
+
+export const LocalReasoningEffortSchema = z.enum([
+  "low",
+  "medium",
+  "high",
+  "xhigh"
+]);
+
 export interface ThreadStartParams {
   model?: string | null;
   modelProvider?: string | null;
@@ -210,6 +312,20 @@ export interface ThreadStartParams {
   serviceName?: string | null;
 }
 
+export const ThreadStartParamsSchema = z
+  .object({
+    model: z.string().nullable().optional(),
+    modelProvider: z.string().nullable().optional(),
+    cwd: z.string().nullable().optional(),
+    runtimeWorkspaceRoots: z.array(z.string()).nullable().optional(),
+    approvalPolicy: AskForApprovalSchema.nullable().optional(),
+    approvalsReviewer: ApprovalsReviewerSchema.nullable().optional(),
+    sandbox: SandboxModeSchema.nullable().optional(),
+    ephemeral: z.boolean().nullable().optional(),
+    serviceName: z.string().nullable().optional()
+  })
+  .strict();
+
 export interface ThreadStartResponse {
   thread: {
     id: string;
@@ -218,6 +334,14 @@ export interface ThreadStartResponse {
     [key: string]: unknown;
   };
 }
+
+export const ThreadStartResponseSchema = z.object({
+  thread: z.object({
+    id: z.string().min(1),
+    status: z.unknown().optional(),
+    cwd: z.string().optional()
+  }).passthrough()
+});
 
 export interface ThreadResumeParams {
   threadId: string;
@@ -252,16 +376,31 @@ export interface ThreadArchiveParams {
   threadId: string;
 }
 
+export const ThreadArchiveParamsSchema = z
+  .object({
+    threadId: z.string().min(1)
+  })
+  .strict();
+
 export type ThreadArchiveResponse = Record<string, never>;
+
+export const ThreadArchiveResponseSchema = z.object({}).strict();
 
 export interface ThreadUnarchiveParams {
   threadId: string;
 }
 
+export const ThreadUnarchiveParamsSchema = ThreadArchiveParamsSchema;
+
 export type ThreadUnarchiveResponse = Record<string, never>;
+
+export const ThreadUnarchiveResponseSchema = z.object({}).strict();
 
 export type ThreadSortKey = "created_at" | "updated_at";
 export type SortDirection = "asc" | "desc";
+
+export const ThreadSortKeySchema = z.enum(["created_at", "updated_at"]);
+export const SortDirectionSchema = z.enum(["asc", "desc"]);
 
 export type ThreadSourceKind =
   | "cli"
@@ -272,6 +411,17 @@ export type ThreadSourceKind =
   | "custom"
   | "subAgent"
   | "unknown";
+
+export const ThreadSourceKindSchema = z.enum([
+  "cli",
+  "vscode",
+  "exec",
+  "appServer",
+  "mcp",
+  "custom",
+  "subAgent",
+  "unknown"
+]);
 
 export interface ThreadListParams {
   cursor?: string | null;
@@ -285,6 +435,24 @@ export interface ThreadListParams {
   useStateDbOnly?: boolean;
   searchTerm?: string | null;
 }
+
+export const ThreadListParamsSchema = z
+  .object({
+    cursor: z.string().nullable().optional(),
+    limit: z.number().int().positive().nullable().optional(),
+    sortKey: ThreadSortKeySchema.nullable().optional(),
+    sortDirection: SortDirectionSchema.nullable().optional(),
+    modelProviders: z.array(z.string().min(1)).nullable().optional(),
+    sourceKinds: z.array(ThreadSourceKindSchema).nullable().optional(),
+    archived: z.boolean().nullable().optional(),
+    cwd: z
+      .union([z.string(), z.array(z.string())])
+      .nullable()
+      .optional(),
+    useStateDbOnly: z.boolean().optional(),
+    searchTerm: z.string().nullable().optional()
+  })
+  .strict();
 
 export interface CodexThread {
   id: string;
@@ -325,26 +493,87 @@ export type CodexThreadItem = {
   [key: string]: unknown;
 };
 
+export const CodexThreadItemSchema = z.object({
+  id: z.string().optional(),
+  type: z.string().optional(),
+  content: z.unknown().optional(),
+  text: z.string().optional(),
+  summary: z.array(z.string()).optional(),
+  command: z.string().optional(),
+  aggregatedOutput: z.string().nullable().optional(),
+  changes: z.array(z.unknown()).optional()
+}).passthrough();
+
+export const CodexThreadTurnSchema = z.object({
+  id: z.string().min(1),
+  items: z.array(CodexThreadItemSchema),
+  params: z.unknown().optional(),
+  status: z.unknown().optional(),
+  startedAt: z.number().nullable().optional(),
+  completedAt: z.number().nullable().optional()
+}).passthrough();
+
+export const CodexThreadSchema = z.object({
+  id: z.string().min(1),
+  sessionId: z.string().optional(),
+  preview: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  status: z.unknown().optional(),
+  cwd: z.string(),
+  cliVersion: z.string().optional(),
+  source: z.unknown().optional(),
+  title: z.string().nullable().optional(),
+  name: z.string().nullable().optional(),
+  path: z.string().nullable().optional(),
+  turns: z.array(CodexThreadTurnSchema).optional()
+}).passthrough();
+
 export interface ThreadListResponse {
   data: CodexThread[];
   nextCursor: string | null;
   backwardsCursor: string | null;
 }
 
+export const ThreadListResponseSchema = z.object({
+  data: z.array(CodexThreadSchema),
+  nextCursor: z.string().nullable(),
+  backwardsCursor: z.string().nullable()
+});
+
 export interface ThreadLoadedListResponse {
   data: CodexThread[];
 }
+
+export const ThreadLoadedListParamsSchema = z.object({}).strict();
+
+export const ThreadLoadedListResponseSchema = z.object({
+  data: z.array(CodexThreadSchema)
+});
 
 export interface ThreadReadParams {
   threadId: string;
   includeTurns?: boolean;
 }
 
+export const ThreadReadParamsSchema = z
+  .object({
+    threadId: z.string().min(1),
+    includeTurns: z.boolean().optional()
+  })
+  .strict();
+
 export interface ThreadReadResponse {
   thread: CodexThread;
 }
 
+export const ThreadReadResponseSchema = z.object({
+  thread: CodexThreadSchema
+});
+
 export type ThreadTurnItemsView = "summary" | "full";
+
+export const ThreadTurnItemsViewSchema = z.enum(["summary", "full"]);
 
 export interface ThreadTurnsListParams {
   threadId: string;
@@ -354,11 +583,65 @@ export interface ThreadTurnsListParams {
   itemsView?: ThreadTurnItemsView | null;
 }
 
+export const ThreadTurnsListParamsSchema = z
+  .object({
+    threadId: z.string().min(1),
+    cursor: z.string().nullable().optional(),
+    limit: z.number().int().positive().nullable().optional(),
+    sortDirection: SortDirectionSchema.nullable().optional(),
+    itemsView: ThreadTurnItemsViewSchema.nullable().optional()
+  })
+  .strict();
+
+export const ThreadTurnsPageParamsSchema = ThreadTurnsListParamsSchema.omit({
+  threadId: true
+});
+
 export interface ThreadTurnsListResponse {
   data: CodexThreadTurn[];
   nextCursor: string | null;
   backwardsCursor: string | null;
 }
+
+export const ThreadTurnsListResponseSchema = z.object({
+  data: z.array(CodexThreadTurnSchema),
+  nextCursor: z.string().nullable(),
+  backwardsCursor: z.string().nullable()
+});
+
+export const ThreadResumeResponseSchema = ThreadStartResponseSchema.extend({
+  model: z.string().optional(),
+  modelProvider: z.string().optional(),
+  serviceTier: z.string().nullable().optional(),
+  cwd: z.string().optional(),
+  initialTurnsPage: ThreadTurnsListResponseSchema.nullable().optional(),
+  approvalPolicy: AskForApprovalSchema.optional(),
+  approvalsReviewer: ApprovalsReviewerSchema.optional(),
+  reasoningEffort: z
+    .union([LocalReasoningEffortSchema, z.enum(["none", "minimal"])])
+    .nullable()
+    .optional(),
+  instructionSources: z.array(z.string()).optional()
+});
+
+export const ThreadResumeParamsSchema = z
+  .object({
+    threadId: z.string().min(1),
+    model: z.string().nullable().optional(),
+    modelProvider: z.string().nullable().optional(),
+    serviceTier: z.string().nullable().optional(),
+    cwd: z.string().nullable().optional(),
+    excludeTurns: z.boolean().nullable().optional(),
+    initialTurnsPage: ThreadTurnsPageParamsSchema.nullable().optional(),
+    approvalPolicy: AskForApprovalSchema.nullable().optional(),
+    approvalsReviewer: ApprovalsReviewerSchema.nullable().optional(),
+    sandbox: SandboxModeSchema.nullable().optional(),
+    config: JsonObjectSchema.nullable().optional(),
+    baseInstructions: z.string().nullable().optional(),
+    developerInstructions: z.string().nullable().optional(),
+    personality: JsonObjectSchema.nullable().optional()
+  })
+  .strict();
 
 export type UserInput =
   | {
@@ -377,6 +660,30 @@ export type UserInput =
       path: string;
     };
 
+export const UserInputSchema = z.union([
+  z
+    .object({
+      type: z.literal("text"),
+      text: z.string(),
+      text_elements: z.array(z.unknown())
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("image"),
+      detail: z.enum(["auto", "low", "high"]).optional(),
+      url: z.string().min(1)
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("localImage"),
+      detail: z.enum(["auto", "low", "high"]).optional(),
+      path: z.string().min(1)
+    })
+    .strict()
+]);
+
 export function makeTextInput(text: string): UserInput {
   return { type: "text", text, text_elements: [] };
 }
@@ -391,15 +698,38 @@ export interface TurnStartParams {
   model?: string | null;
 }
 
+export const TurnStartParamsSchema = z
+  .object({
+    threadId: z.string().min(1),
+    input: z.array(UserInputSchema).min(1),
+    cwd: z.string().nullable().optional(),
+    runtimeWorkspaceRoots: z.array(z.string()).nullable().optional(),
+    approvalPolicy: AskForApprovalSchema.nullable().optional(),
+    approvalsReviewer: ApprovalsReviewerSchema.nullable().optional(),
+    model: z.string().nullable().optional()
+  })
+  .strict();
+
 export interface Turn {
   id: string;
-  status?: "completed" | "interrupted" | "failed" | "inProgress";
+  status?: string;
   [key: string]: unknown;
 }
+
+export const TurnSchema = z
+  .object({
+    id: z.string().min(1),
+    status: z.string().optional()
+  })
+  .passthrough();
 
 export interface TurnStartResponse {
   turn: Turn;
 }
+
+export const TurnStartResponseSchema = z.object({
+  turn: TurnSchema
+});
 
 export interface TurnSteerParams {
   threadId: string;
@@ -407,10 +737,25 @@ export interface TurnSteerParams {
   input: UserInput[];
 }
 
+export const TurnSteerParamsSchema = z
+  .object({
+    threadId: z.string().min(1),
+    expectedTurnId: z.string().min(1),
+    input: z.array(UserInputSchema).min(1)
+  })
+  .strict();
+
 export interface TurnInterruptParams {
   threadId: string;
   turnId: string;
 }
+
+export const TurnInterruptParamsSchema = z
+  .object({
+    threadId: z.string().min(1),
+    turnId: z.string().min(1)
+  })
+  .strict();
 
 export type CommandExecutionApprovalDecision =
   | "accept"
@@ -425,13 +770,73 @@ export type FileChangeApprovalDecision =
   | "decline"
   | "cancel";
 
+const AppServerApprovalRequestParamsBaseSchema = z
+  .object({
+    requestId: z.string().min(1).optional(),
+    threadId: z.string().min(1).optional(),
+    turnId: z.string().min(1).optional()
+  })
+  .passthrough();
+
+export const CommandExecutionRequestApprovalParamsSchema =
+  AppServerApprovalRequestParamsBaseSchema.extend({
+    command: z.unknown().optional()
+  }).passthrough();
+
+export const FileChangeRequestApprovalParamsSchema =
+  AppServerApprovalRequestParamsBaseSchema.extend({
+    path: z.unknown().optional(),
+    changes: z.unknown().optional()
+  }).passthrough();
+
+export const LegacyExecCommandApprovalParamsSchema =
+  AppServerApprovalRequestParamsBaseSchema.extend({
+    command: z.unknown().optional()
+  }).passthrough();
+
+export const LegacyApplyPatchApprovalParamsSchema =
+  AppServerApprovalRequestParamsBaseSchema.extend({
+    patch: z.unknown().optional()
+  }).passthrough();
+
+export const ApprovalRequestParamsSchema = z.union([
+  CommandExecutionRequestApprovalParamsSchema,
+  FileChangeRequestApprovalParamsSchema,
+  LegacyExecCommandApprovalParamsSchema,
+  LegacyApplyPatchApprovalParamsSchema
+]);
+
 export interface CommandExecutionRequestApprovalResponse {
   decision: CommandExecutionApprovalDecision;
 }
 
+export const CommandExecutionApprovalDecisionSchema = z.union([
+  z.enum(["accept", "acceptForSession", "decline", "cancel"]),
+  JsonObjectSchema
+]);
+
+export const CommandExecutionRequestApprovalResponseSchema = z
+  .object({
+    decision: CommandExecutionApprovalDecisionSchema
+  })
+  .strict();
+
 export interface FileChangeRequestApprovalResponse {
   decision: FileChangeApprovalDecision;
 }
+
+export const FileChangeApprovalDecisionSchema = z.enum([
+  "accept",
+  "acceptForSession",
+  "decline",
+  "cancel"
+]);
+
+export const FileChangeRequestApprovalResponseSchema = z
+  .object({
+    decision: FileChangeApprovalDecisionSchema
+  })
+  .strict();
 
 export type LegacyReviewDecision =
   | "approved"
@@ -445,14 +850,166 @@ export interface LegacyApprovalResponse {
   decision: LegacyReviewDecision;
 }
 
+export const LegacyReviewDecisionSchema = z.union([
+  z.enum(["approved", "approved_for_session", "denied", "timed_out", "abort"]),
+  JsonObjectSchema
+]);
+
+export const LegacyApprovalResponseSchema = z
+  .object({
+    decision: LegacyReviewDecisionSchema
+  })
+  .strict();
+
 export type ApprovalResponse =
   | CommandExecutionRequestApprovalResponse
   | FileChangeRequestApprovalResponse
   | LegacyApprovalResponse;
 
-export interface AppServerNotification {
-  method: string;
-  params?: unknown;
+export const ApprovalResponseSchema = z.union([
+  CommandExecutionRequestApprovalResponseSchema,
+  FileChangeRequestApprovalResponseSchema,
+  LegacyApprovalResponseSchema
+]);
+
+export const AppServerNotificationSchema = z
+  .object({
+    method: z.string().min(1),
+    params: z.unknown().optional()
+  })
+  .passthrough();
+
+export type AppServerNotification = z.infer<typeof AppServerNotificationSchema>;
+
+const NotificationThreadSchema = z
+  .object({
+    id: z.string().min(1).optional(),
+    status: z.unknown().optional()
+  })
+  .passthrough();
+
+const NotificationTurnSchema = z
+  .object({
+    id: z.string().min(1).optional(),
+    status: z.string().optional()
+  })
+  .passthrough();
+
+const NotificationGoalSchema = z
+  .object({
+    threadId: z.string().min(1).optional(),
+    objective: z.string().optional(),
+    status: z.string().optional(),
+    tokenBudget: z.number().int().positive().nullable().optional(),
+    tokensUsed: z.number().nonnegative().optional(),
+    timeUsedSeconds: z.number().nonnegative().optional(),
+    createdAt: z.number().optional(),
+    updatedAt: z.number().optional()
+  })
+  .passthrough();
+
+const NotificationIdFieldsSchema = z
+  .object({
+    threadId: z.string().min(1).optional(),
+    turnId: z.string().min(1).optional()
+  })
+  .passthrough();
+
+export const ThreadStatusChangedNotificationParamsSchema =
+  NotificationIdFieldsSchema.extend({
+    status: z.unknown().optional(),
+    thread: NotificationThreadSchema.optional()
+  }).passthrough();
+
+export const ThreadGoalUpdatedNotificationParamsSchema =
+  NotificationIdFieldsSchema.extend({
+    goal: NotificationGoalSchema
+  }).passthrough();
+
+export const ThreadGoalClearedNotificationParamsSchema =
+  NotificationIdFieldsSchema.extend({
+    goal: NotificationGoalSchema.nullable().optional()
+  }).passthrough();
+
+export const TurnNotificationParamsSchema = NotificationIdFieldsSchema.extend({
+  turn: NotificationTurnSchema.optional()
+}).passthrough();
+
+export const TextDeltaNotificationParamsSchema =
+  NotificationIdFieldsSchema.extend({
+    delta: z.string().optional()
+  }).passthrough();
+
+export const CommandExecOutputDeltaNotificationParamsSchema =
+  NotificationIdFieldsSchema.extend({
+    deltaBase64: z.string().optional()
+  }).passthrough();
+
+export const DiffUpdatedNotificationParamsSchema =
+  NotificationIdFieldsSchema.extend({
+    diff: z.string().optional()
+  }).passthrough();
+
+export const PlanNotificationParamsSchema = NotificationIdFieldsSchema.extend({
+  delta: z.string().optional(),
+  explanation: z.string().optional(),
+  plan: z.unknown().optional()
+}).passthrough();
+
+const KnownNotificationParamsSchemas = {
+  [CodexNotificationMethod.ThreadStatusChanged]:
+    ThreadStatusChangedNotificationParamsSchema,
+  [CodexNotificationMethod.ThreadGoalUpdated]:
+    ThreadGoalUpdatedNotificationParamsSchema,
+  [CodexNotificationMethod.ThreadGoalCleared]:
+    ThreadGoalClearedNotificationParamsSchema,
+  [CodexNotificationMethod.TurnStarted]: TurnNotificationParamsSchema,
+  [CodexNotificationMethod.TurnCompleted]: TurnNotificationParamsSchema,
+  [CodexNotificationMethod.AgentMessageDelta]:
+    TextDeltaNotificationParamsSchema,
+  [CodexNotificationMethod.CommandExecutionOutputDelta]:
+    TextDeltaNotificationParamsSchema,
+  [CodexNotificationMethod.FileChangeOutputDelta]:
+    TextDeltaNotificationParamsSchema,
+  [CodexNotificationMethod.CommandExecOutputDelta]:
+    CommandExecOutputDeltaNotificationParamsSchema,
+  [CodexNotificationMethod.TurnDiffUpdated]: DiffUpdatedNotificationParamsSchema,
+  [CodexNotificationMethod.TurnPlanUpdated]: PlanNotificationParamsSchema,
+  [CodexNotificationMethod.PlanDelta]: PlanNotificationParamsSchema
+} as const;
+
+export function appServerNotificationParamsSchemaForMethod(
+  method: string
+): z.ZodType<unknown> | undefined {
+  return KnownNotificationParamsSchemas[
+    method as keyof typeof KnownNotificationParamsSchemas
+  ];
+}
+
+export function parseAppServerNotification(
+  notification: unknown
+): AppServerNotification | undefined {
+  const parsed = AppServerNotificationSchema.safeParse(notification);
+  if (!parsed.success) {
+    return undefined;
+  }
+
+  const paramsSchema = appServerNotificationParamsSchemaForMethod(
+    parsed.data.method
+  );
+  if (!paramsSchema || parsed.data.params === undefined) {
+    return parsed.data;
+  }
+
+  const parsedParams = paramsSchema.safeParse(parsed.data.params);
+  if (!parsedParams.success) {
+    return undefined;
+  }
+
+  return {
+    ...parsed.data,
+    params: parsedParams.data
+  };
 }
 
 export const GoalSmokeOptionsSchema = z.object({
@@ -495,6 +1052,22 @@ export const LocalEventType = {
 export type LocalEventType =
   (typeof LocalEventType)[keyof typeof LocalEventType];
 
+const LocalEventTypeValues = Object.values(LocalEventType) as [
+  LocalEventType,
+  ...LocalEventType[]
+];
+
+export const LocalEventSchema = z.object({
+  id: z.string().min(1),
+  seq: z.number().int().nonnegative(),
+  type: z.enum(LocalEventTypeValues),
+  ts: z.number(),
+  sessionId: z.string().min(1).optional(),
+  threadId: z.string().min(1).optional(),
+  turnId: z.string().min(1).optional(),
+  payload: z.unknown().optional()
+});
+
 export interface LocalEvent {
   id: string;
   seq: number;
@@ -515,6 +1088,16 @@ export type LocalSessionStatus =
   | "interrupted"
   | "error";
 
+export const LocalSessionStatusSchema = z.enum([
+  "idle",
+  "running",
+  "waiting_approval",
+  "completed",
+  "failed",
+  "interrupted",
+  "error"
+]);
+
 export interface LocalSessionSummary {
   sessionId: string;
   threadId?: string;
@@ -534,6 +1117,41 @@ export interface LocalSessionSummary {
   updatedAt: number;
 }
 
+export const LocalSessionSummarySchema = z.object({
+  sessionId: z.string().min(1),
+  threadId: z.string().min(1).optional(),
+  currentTurnId: z.string().min(1).optional(),
+  activeTurnId: z.string().min(1).optional(),
+  status: LocalSessionStatusSchema,
+  cwd: z.string().min(1),
+  title: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  reasoningEffort: LocalReasoningEffortSchema.nullable().optional(),
+  permissionMode: LocalPermissionModeSchema,
+  approvalPolicy: AskForApprovalSchema.nullable(),
+  approvalsReviewer: ApprovalsReviewerSchema.nullable(),
+  sandbox: SandboxModeSchema.nullable(),
+  goal: ThreadGoalSchema.nullable().optional(),
+  createdAt: z.number(),
+  updatedAt: z.number()
+});
+
+export const LocalSessionsResponseSchema = z.object({
+  sessions: z.array(LocalSessionSummarySchema)
+});
+
+export interface LocalSessionsResponse {
+  sessions: LocalSessionSummary[];
+}
+
+export const LocalCreateSessionResponseSchema = z.object({
+  session: LocalSessionSummarySchema
+});
+
+export interface LocalCreateSessionResponse {
+  session: LocalSessionSummary;
+}
+
 export const LocalApprovalDecisionSchema = z.object({
   decision: z.enum(["accept", "acceptForSession", "decline", "cancel"])
 });
@@ -545,25 +1163,11 @@ export type LocalApprovalDecision = z.infer<
 export const LocalStartSessionSchema = z.object({
   cwd: z.string().min(1),
   model: z.string().min(1).nullable().optional(),
-  permissionMode: z
-    .enum(["request-approval", "auto-approve", "full-access", "custom-config"])
-    .default("request-approval"),
-  approvalPolicy: z
-    .enum(["untrusted", "on-failure", "on-request", "never"])
-    .nullable()
-    .optional(),
-  reasoningEffort: z
-    .enum(["low", "medium", "high", "xhigh"])
-    .nullable()
-    .optional(),
-  approvalsReviewer: z
-    .enum(["user", "auto_review", "guardian_subagent"])
-    .nullable()
-    .optional(),
-  sandbox: z
-    .enum(["read-only", "workspace-write", "danger-full-access"])
-    .nullable()
-    .optional(),
+  permissionMode: LocalPermissionModeSchema.default("request-approval"),
+  approvalPolicy: AskForApprovalSchema.nullable().optional(),
+  reasoningEffort: LocalReasoningEffortSchema.nullable().optional(),
+  approvalsReviewer: ApprovalsReviewerSchema.nullable().optional(),
+  sandbox: SandboxModeSchema.nullable().optional(),
   tokenBudget: z.number().int().positive().nullable().optional(),
   initialGoal: z.string().nullable().optional(),
   initialMessage: z.string().nullable().optional(),
@@ -577,25 +1181,11 @@ export const LocalResumeSessionSchema = z.object({
   cwd: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
   model: z.string().min(1).nullable().optional(),
-  permissionMode: z
-    .enum(["request-approval", "auto-approve", "full-access", "custom-config"])
-    .default("request-approval"),
-  approvalPolicy: z
-    .enum(["untrusted", "on-failure", "on-request", "never"])
-    .nullable()
-    .optional(),
-  reasoningEffort: z
-    .enum(["low", "medium", "high", "xhigh"])
-    .nullable()
-    .optional(),
-  approvalsReviewer: z
-    .enum(["user", "auto_review", "guardian_subagent"])
-    .nullable()
-    .optional(),
-  sandbox: z
-    .enum(["read-only", "workspace-write", "danger-full-access"])
-    .nullable()
-    .optional()
+  permissionMode: LocalPermissionModeSchema.default("request-approval"),
+  approvalPolicy: AskForApprovalSchema.nullable().optional(),
+  reasoningEffort: LocalReasoningEffortSchema.nullable().optional(),
+  approvalsReviewer: ApprovalsReviewerSchema.nullable().optional(),
+  sandbox: SandboxModeSchema.nullable().optional()
 });
 
 export type LocalResumeSessionInput = z.infer<typeof LocalResumeSessionSchema>;
@@ -606,6 +1196,32 @@ export const LocalSendMessageSchema = z.object({
 });
 
 export type LocalSendMessageInput = z.infer<typeof LocalSendMessageSchema>;
+
+export const LocalSendMessageResponseSchema = z.object({
+  mode: z.enum(["turn-start", "steer"]),
+  turnId: z.string().min(1)
+});
+
+export interface LocalSendMessageResponse {
+  mode: "turn-start" | "steer";
+  turnId: string;
+}
+
+export const LocalInterruptResponseSchema = z.object({
+  turnId: z.string().min(1)
+});
+
+export interface LocalInterruptResponse {
+  turnId: string;
+}
+
+export const LocalEventReplayResponseSchema = z.object({
+  events: z.array(LocalEventSchema)
+});
+
+export interface LocalEventReplayResponse {
+  events: LocalEvent[];
+}
 
 export interface LocalDirectoryEntry {
   name: string;
@@ -631,12 +1247,32 @@ export interface LocalCodexHistoryEntry {
   threadStatus?: string | null;
 }
 
+export const LocalCodexHistoryEntrySchema = z.object({
+  id: z.string().min(1),
+  cwd: z.string().min(1),
+  cwdExists: z.boolean().optional(),
+  title: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  source: z.string(),
+  loaded: z.boolean().optional(),
+  threadStatus: z.string().nullable().optional()
+});
+
 export type LocalCodexHistoryMessageRole =
   | "user"
   | "assistant"
   | "command"
   | "system"
   | "diff";
+
+export const LocalCodexHistoryMessageRoleSchema = z.enum([
+  "user",
+  "assistant",
+  "command",
+  "system",
+  "diff"
+]);
 
 export interface LocalCodexHistoryMessage {
   id: string;
@@ -645,19 +1281,40 @@ export interface LocalCodexHistoryMessage {
   ts: string;
 }
 
+export const LocalCodexHistoryMessageSchema = z.object({
+  id: z.string().min(1),
+  role: LocalCodexHistoryMessageRoleSchema,
+  text: z.string(),
+  ts: z.string()
+});
+
 export interface LocalCodexHistoryResponse {
   root: string;
   entries: LocalCodexHistoryEntry[];
 }
 
+export const LocalCodexHistoryResponseSchema = z.object({
+  root: z.string(),
+  entries: z.array(LocalCodexHistoryEntrySchema)
+});
+
 export interface LocalLoadedThreadsResponse {
   threadIds: string[];
 }
+
+export const LocalLoadedThreadsResponseSchema = z.object({
+  threadIds: z.array(z.string().min(1))
+});
 
 export interface LocalCodexHistoryDetailResponse {
   entry: LocalCodexHistoryEntry;
   messages: LocalCodexHistoryMessage[];
 }
+
+export const LocalCodexHistoryDetailResponseSchema = z.object({
+  entry: LocalCodexHistoryEntrySchema,
+  messages: z.array(LocalCodexHistoryMessageSchema)
+});
 
 export interface LocalCodexHistoryPageResponse {
   entry: LocalCodexHistoryEntry;
@@ -666,10 +1323,26 @@ export interface LocalCodexHistoryPageResponse {
   backwardsCursor: string | null;
 }
 
+export const LocalCodexHistoryPageResponseSchema = z.object({
+  entry: LocalCodexHistoryEntrySchema,
+  messages: z.array(LocalCodexHistoryMessageSchema),
+  nextCursor: z.string().nullable(),
+  backwardsCursor: z.string().nullable()
+});
+
+export type LocalCodexHistoryArchiveResponse = Record<string, never>;
+
+export const LocalCodexHistoryArchiveResponseSchema = z.object({}).strict();
+
 export interface LocalResumeSessionResponse {
   session: LocalSessionSummary;
   history: LocalCodexHistoryPageResponse;
 }
+
+export const LocalResumeSessionResponseSchema = z.object({
+  session: LocalSessionSummarySchema,
+  history: LocalCodexHistoryPageResponseSchema
+});
 
 export const LocalSetGoalSchema = z.object({
   objective: z.string().nullable().optional(),
@@ -706,6 +1379,45 @@ export interface LocalHealthResponse {
     version?: string;
   };
 }
+
+export const LocalHealthResponseSchema = z.object({
+  ok: z.boolean(),
+  version: z.string(),
+  pid: z.number().int().nonnegative(),
+  uptimeSeconds: z.number().nonnegative(),
+  host: z.string(),
+  port: z.number().int().nonnegative(),
+  device: z
+    .object({
+      defaultName: z.string(),
+      hostname: z.string(),
+      platform: z.string()
+    })
+    .optional(),
+  codex: z
+    .object({
+      available: z.boolean(),
+      version: z.string().optional()
+    })
+    .optional()
+});
+
+export const ThreadSidebarPrefsPayloadSchema = z.object({
+  pinned: z.array(z.string().min(1))
+});
+
+export const ProjectSidebarPrefsPayloadSchema = z.object({
+  hidden: z.array(z.string().min(1)),
+  pinned: z.array(z.string().min(1)),
+  renamed: z.record(z.string(), z.string().min(1))
+});
+
+export const SidebarPrefsResponseSchema = z.object({
+  project: ProjectSidebarPrefsPayloadSchema,
+  thread: ThreadSidebarPrefsPayloadSchema
+});
+
+export type SidebarPrefsResponse = z.infer<typeof SidebarPrefsResponseSchema>;
 
 export const RelaySocketPath = "/socket.io/codexnext";
 
@@ -767,22 +1479,50 @@ export interface MachineHelloPayload {
   startedAt: number;
 }
 
+export const MachineHelloPayloadSchema = z.object({
+  deviceId: z.string().min(1),
+  deviceName: z.string().min(1),
+  hostname: z.string().min(1),
+  platform: z.string().min(1),
+  arch: z.string().min(1),
+  agentVersion: z.string().min(1),
+  codexVersion: z.string().nullable().optional(),
+  startedAt: z.number()
+}).strict();
+
 export interface MachineHelloAck {
   ok: true;
   serverTime: number;
   heartbeatIntervalMs: number;
 }
 
+export const MachineHelloAckSchema = z.object({
+  ok: z.literal(true),
+  serverTime: z.number(),
+  heartbeatIntervalMs: z.number().int().positive()
+}).strict();
+
 export interface RelayErrorAck {
   ok: false;
   error: string;
 }
+
+export const RelayErrorAckSchema = z.object({
+  ok: z.literal(false),
+  error: z.string().min(1)
+}).strict();
 
 export interface MachineHeartbeatPayload {
   deviceId: string;
   at: number;
   activeSessions: number;
 }
+
+export const MachineHeartbeatPayloadSchema = z.object({
+  deviceId: z.string().min(1),
+  at: z.number(),
+  activeSessions: z.number().int().nonnegative()
+}).strict();
 
 export interface DevicePresence {
   deviceId: string;
@@ -791,6 +1531,14 @@ export interface DevicePresence {
   socketId?: string;
   activeSessions?: number;
 }
+
+export const DevicePresenceSchema = z.object({
+  deviceId: z.string().min(1),
+  online: z.boolean(),
+  lastSeenAt: z.number(),
+  socketId: z.string().min(1).optional(),
+  activeSessions: z.number().int().nonnegative().optional()
+}).strict();
 
 export interface RelayDeviceRecord extends DevicePresence {
   deviceName: string;
@@ -802,14 +1550,33 @@ export interface RelayDeviceRecord extends DevicePresence {
   startedAt: number;
 }
 
+export const RelayDeviceRecordSchema = DevicePresenceSchema.extend({
+  deviceName: z.string().min(1),
+  hostname: z.string().min(1),
+  platform: z.string().min(1),
+  arch: z.string().min(1),
+  agentVersion: z.string().min(1),
+  codexVersion: z.string().nullable().optional(),
+  startedAt: z.number()
+}).strict();
+
 export interface RelayDevicesResponse {
   devices: RelayDeviceRecord[];
 }
+
+export const RelayDevicesResponseSchema = z.object({
+  devices: z.array(RelayDeviceRecordSchema)
+}).strict();
 
 export interface RelaySessionResponse {
   ok: true;
   sessionToken: string;
 }
+
+export const RelaySessionResponseSchema = z.object({
+  ok: z.literal(true),
+  sessionToken: z.string().min(1)
+}).strict();
 
 export const RelayMethod = {
   AgentHealth: "agent.health",
@@ -832,12 +1599,26 @@ export const RelayMethod = {
 
 export type RelayMethod = (typeof RelayMethod)[keyof typeof RelayMethod];
 
+const RelayMethodValues = Object.values(RelayMethod) as [
+  RelayMethod,
+  ...RelayMethod[]
+];
+
+export const RelayMethodSchema = z.enum(RelayMethodValues);
+
 export interface RelayRpcRequest {
   requestId: string;
   method: RelayMethod;
   params?: unknown;
   deadlineMs?: number;
 }
+
+export const RelayRpcRequestSchema = z.object({
+  requestId: z.string().min(1),
+  method: RelayMethodSchema,
+  params: z.unknown().optional(),
+  deadlineMs: z.number().int().positive().optional()
+}).strict();
 
 export type RelayRpcResponse =
   | { ok: true; result?: unknown }
@@ -850,6 +1631,21 @@ export type RelayRpcResponse =
       };
     };
 
+export const RelayRpcResponseSchema = z.union([
+  z.object({
+    ok: z.literal(true),
+    result: z.unknown().optional()
+  }).strict(),
+  z.object({
+    ok: z.literal(false),
+    error: z.object({
+      message: z.string().min(1),
+      code: z.string().min(1).optional(),
+      data: z.unknown().optional()
+    }).strict()
+  }).strict()
+]);
+
 export interface MachineEventPayload {
   deviceId: string;
   event: LocalEvent;
@@ -859,6 +1655,23 @@ export interface DeviceEventPayload {
   deviceId: string;
   event: LocalEvent;
 }
+
+export const DeviceEventPayloadSchema = z.object({
+  deviceId: z.string().min(1),
+  event: LocalEventSchema
+});
+
+export const PairingRequestPayloadSchema = z.object({
+  deviceId: z.string().min(1),
+  deviceToken: z.string().min(1),
+  deviceName: z.string().min(1),
+  hostname: z.string().min(1),
+  platform: z.string().min(1),
+  arch: z.string().min(1),
+  agentVersion: z.string().min(1),
+  codexVersion: z.string().nullable().optional(),
+  relayUrl: z.string().nullable().optional()
+});
 
 export interface PairingRequestPayload {
   deviceId: string;
@@ -871,6 +1684,47 @@ export interface PairingRequestPayload {
   codexVersion?: string | null;
   relayUrl?: string | null;
 }
+
+export const PairingCreateResponseSchema = z.object({
+  requestId: z.string().min(1),
+  pollToken: z.string().min(1),
+  code: z.string().min(1),
+  codeDigits: z.string().min(1),
+  expiresAt: z.number(),
+  approveUrl: z.string().nullable().optional()
+});
+
+const PairingStatusSchema = z.enum(["pending", "approved", "rejected", "expired"]);
+
+export const PairingRequestViewSchema = z.object({
+  requestId: z.string().min(1),
+  codeDigits: z.string().min(1),
+  deviceId: z.string().min(1),
+  deviceName: z.string().min(1),
+  hostname: z.string().min(1),
+  platform: z.string().min(1),
+  arch: z.string().min(1),
+  agentVersion: z.string().min(1),
+  codexVersion: z.string().nullable().optional(),
+  relayUrl: z.string().nullable().optional(),
+  shortFingerprint: z.string().min(1),
+  createdAt: z.number(),
+  expiresAt: z.number(),
+  status: PairingStatusSchema
+});
+
+export const PairingPollResponseSchema = z.object({
+  ok: z.boolean(),
+  status: PairingStatusSchema,
+  deviceId: z.string().min(1),
+  expiresAt: z.number()
+});
+
+export const PairingApproveResponseSchema = z.object({
+  ok: z.literal(true),
+  deviceId: z.string().min(1),
+  sessionToken: z.string().min(1)
+}).strict();
 
 export interface PairingCreateResponse {
   requestId: string;

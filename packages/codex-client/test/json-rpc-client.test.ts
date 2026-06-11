@@ -7,7 +7,8 @@ import {
 } from "../src/json-rpc.js";
 import {
   JsonRpcResponseError,
-  JsonRpcTimeoutError
+  JsonRpcTimeoutError,
+  JsonRpcTransportClosedError
 } from "../src/errors.js";
 
 class FakeTransport extends EventEmitter implements JsonRpcTransport {
@@ -114,6 +115,38 @@ describe("JsonRpcClient", () => {
     );
   });
 
+  it("rejects all pending requests when the transport errors", async () => {
+    const transport = new FakeTransport();
+    const client = new JsonRpcClient(transport);
+    client.on("error", () => {
+      // EventEmitter treats unhandled error events as fatal; the app layer owns logging.
+    });
+
+    const first = client.request("first", undefined, { timeoutMs: 1_000 });
+    const second = client.request("second", undefined, { timeoutMs: 1_000 });
+
+    transport.emit("error", new Error("lost transport"));
+
+    await expect(first).rejects.toBeInstanceOf(JsonRpcTransportClosedError);
+    await expect(first).rejects.toMatchObject({ message: "lost transport" });
+    await expect(second).rejects.toBeInstanceOf(JsonRpcTransportClosedError);
+    await expect(second).rejects.toMatchObject({ message: "lost transport" });
+  });
+
+  it("rejects pending and future requests when the transport closes", async () => {
+    const transport = new FakeTransport();
+    const client = new JsonRpcClient(transport);
+
+    const pending = client.request("slow", undefined, { timeoutMs: 1_000 });
+    transport.emit("close");
+
+    await expect(pending).rejects.toBeInstanceOf(JsonRpcTransportClosedError);
+    await expect(client.request("after-close")).rejects.toBeInstanceOf(
+      JsonRpcTransportClosedError
+    );
+    expect(transport.sent).toEqual([{ id: 0, method: "slow" }]);
+  });
+
   it("lets server-initiated request handlers return a result", async () => {
     const transport = new FakeTransport();
     const client = new JsonRpcClient(transport);
@@ -141,5 +174,54 @@ describe("JsonRpcClient", () => {
       }
     ]);
   });
-});
 
+  it("returns method-not-found for unknown server-initiated requests", async () => {
+    const transport = new FakeTransport();
+    const client = new JsonRpcClient(transport);
+
+    transport.emitMessage({
+      id: 45,
+      method: "item/tool/unknown",
+      params: { question: "Continue?" }
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(transport.sent).toEqual([
+      {
+        id: 45,
+        error: {
+          code: -32601,
+          message: 'No handler registered for server request "item/tool/unknown"'
+        }
+      }
+    ]);
+  });
+
+  it("turns server-initiated request handler failures into JSON-RPC errors", async () => {
+    const transport = new FakeTransport();
+    const client = new JsonRpcClient(transport);
+
+    client.registerRequestHandler("item/tool/requestUserInput", () => {
+      throw new Error("handler failed");
+    });
+
+    transport.emitMessage({
+      id: 46,
+      method: "item/tool/requestUserInput",
+      params: { question: "Continue?" }
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(transport.sent).toEqual([
+      {
+        id: 46,
+        error: {
+          code: -32000,
+          message: "handler failed"
+        }
+      }
+    ]);
+  });
+});
