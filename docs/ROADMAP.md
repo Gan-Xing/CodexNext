@@ -64,9 +64,9 @@ Exit criteria:
 
 ## Phase 4: Mobile Client
 
-Status: blocked on Phase 3C gate.
+Status: shared client boundary in progress; ready for scaffold after framework choice.
 
-Phase 4 should begin only after Phase 3C proves the relay protocol and runtime contracts. The mobile client should consume the same Web/control relay path:
+Phase 3C is complete, Cycle 01 started the shared relay client boundary in `packages/relay-client`, and Cycle 02 added shared relay URL/header helpers for device list, event replay, and approval decisions. The mobile client should consume the same Web/control relay path:
 
 - Web-style login/session bootstrap adapted for mobile
 - device list and presence
@@ -75,15 +75,28 @@ Phase 4 should begin only after Phase 3C proves the relay protocol and runtime c
 - approval prompts
 - replay using `device:replay` initial batches and `device:event` live events
 
-Out of scope until after Phase 3C:
+Entry criteria:
 
-- React Native implementation
+- shared replay/auth helpers are covered by contract tests
+- shared device list, replay, approval URL, and bearer-header helpers are covered by contract tests
+- mobile session storage threat model is documented
+- bootstrap request/response fixtures are documented in `docs/PHASE4_MOBILE_CLIENT_BASELINE.md`
+- Web/control relay APIs remain the only client path
+
+Exit criteria for the first mobile scaffold:
+
+- a minimal app can authenticate, list devices, show presence, and replay one session stream without ownerToken or deviceToken in client storage
+- the scaffold consumes `@codexnext/relay-client` instead of duplicating relay URL, auth, replay, or approval-decision rules
+
+Still deferred:
+
+- placeholder `apps/mobile` without a React Native/Expo versus mobile-Web-shell decision
 - OAuth/passkeys
 - multi-user SaaS authorization
 
 ## Phase 5: Multi-Device Reliability
 
-Status: future.
+Status: modeled for first implementation slices.
 
 Phase 3C moves core runtime reliability earlier so mobile does not inherit an unstable relay. Phase 5 can build on that baseline with:
 
@@ -92,3 +105,10 @@ Phase 3C moves core runtime reliability earlier so mobile does not inherit an un
 - richer reconnect UX
 - local daemon/service polish
 - conflict handling across simultaneous user clients
+
+First executable subphases:
+
+- define the device/machine/session/thread/workspace/client hierarchy
+- make replay and presence behavior deterministic across multiple browser/mobile clients
+- serialize or explicitly reject conflicting user operations per device/session
+- extend service polish beyond Linux systemd and macOS launchd agent helpers, with Windows tracked as a gap

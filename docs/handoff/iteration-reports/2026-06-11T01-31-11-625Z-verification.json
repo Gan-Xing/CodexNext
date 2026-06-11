@@ -1,0 +1,59 @@
+{
+  "generatedAt": "2026-06-11T01:31:11.626Z",
+  "results": [
+    {
+      "commandLine": "pnpm install",
+      "exitCode": 0,
+      "signal": null,
+      "startedAt": "2026-06-11T01:30:39.793Z",
+      "finishedAt": "2026-06-11T01:30:41.229Z",
+      "durationMs": 1436,
+      "error": null
+    },
+    {
+      "commandLine": "pnpm typecheck",
+      "exitCode": 0,
+      "signal": null,
+      "startedAt": "2026-06-11T01:30:41.229Z",
+      "finishedAt": "2026-06-11T01:30:57.173Z",
+      "durationMs": 15944,
+      "error": null
+    },
+    {
+      "commandLine": "pnpm test",
+      "exitCode": 0,
+      "signal": null,
+      "startedAt": "2026-06-11T01:30:57.173Z",
+      "finishedAt": "2026-06-11T01:31:04.025Z",
+      "durationMs": 6852,
+      "error": null
+    },
+    {
+      "commandLine": "pnpm test:guard",
+      "exitCode": 0,
+      "signal": null,
+      "startedAt": "2026-06-11T01:31:04.026Z",
+      "finishedAt": "2026-06-11T01:31:07.251Z",
+      "durationMs": 3225,
+      "error": null
+    },
+    {
+      "commandLine": "pnpm test:winsw",
+      "exitCode": 0,
+      "signal": null,
+      "startedAt": "2026-06-11T01:31:07.251Z",
+      "finishedAt": "2026-06-11T01:31:08.389Z",
+      "durationMs": 1138,
+      "error": null
+    },
+    {
+      "commandLine": "pnpm --filter @codexnext/agent dev -- doctor",
+      "exitCode": 0,
+      "signal": null,
+      "startedAt": "2026-06-11T01:31:08.390Z",
+      "finishedAt": "2026-06-11T01:31:11.625Z",
+      "durationMs": 3235,
+      "error": null
+    }
+  ]
+}

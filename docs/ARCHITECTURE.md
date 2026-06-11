@@ -76,4 +76,6 @@ Recent Codex history pages are cached in memory per device for a short TTL to ma
 
 `packages/codex-client` owns JSON-RPC transport mechanics for Codex app-server.
 
+`packages/relay-client` owns the first shared Web/mobile relay client boundary. It is intentionally small and pure: URL normalization, bearer auth headers, device/session/event replay/sidebar/approval URL helpers, user Socket.IO auth payloads, replay filtering, live-event acceptance, and sequence advancement. Browser and future mobile clients should depend on this package before duplicating relay event state rules.
+
 CodexNext intentionally does not replace Codex permissions. Permission mode, sandbox mode, approvals, and command execution enforcement remain inside the local Codex app-server.

@@ -8,6 +8,7 @@ CodexNext is a relay-first control plane for Codex app-server. Users sign in to 
 
 - `packages/protocol`
 - `packages/codex-client`
+- `packages/relay-client`
 - `apps/agent`
 - `apps/control`
 - `apps/web`
@@ -120,8 +121,8 @@ Bundled helpers currently cover:
 - macOS `launchd`
   - bundled helper currently targets `agent`
 - Windows
-  - no bundled service-manager helper yet
-  - the same roles still apply
+  - WinSW XML templates for `control`, `web`, and `agent`
+  - validate templates with `pnpm test:winsw`
 
 Linux install examples:
 
@@ -158,6 +159,7 @@ Doctor checks Node, pnpm, Codex CLI, device identity file permissions, relay hea
 - relay full-access follows Codex by default; set `CODEXNEXT_DISABLE_RELAY_FULL_ACCESS=1` on the control server only if you intentionally want an extra relay-only safety gate
 - relay reconnect uses `device:replay` initial batches and `device:event` live events
 - approvals and sandbox enforcement remain Codex-native
+- shared relay client helpers define the Web/mobile replay auth boundary without storing owner or device tokens client-side
 
 ## Hidden Dev-Only Direct Mode
 

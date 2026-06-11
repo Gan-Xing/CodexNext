@@ -112,7 +112,7 @@ macOS `launchd` helper for the outbound relay agent:
 ./scripts/ops/install-macos-agent.sh
 ```
 
-Windows has no bundled service-manager installer yet. The same roles apply; run the scripts with your preferred process manager.
+Windows service examples now use WinSW XML templates for control, web, and agent roles. Copy the matching template next to the WinSW executable, rename it to match that executable, replace the inline `env` placeholders, and install through WinSW. Validate template drift from the repo root with `pnpm test:winsw`. For a personal outbound relay agent, a documented PowerShell Scheduled Task remains an acceptable fallback. NSSM remains deferred unless WinSW cannot cover a target deployment.
 
 Templates and scripts:
 
@@ -124,10 +124,15 @@ Templates and scripts:
 - [ops/systemd/agent.env.example](../ops/systemd/agent.env.example)
 - [ops/launchd/com.codexnext.relay-agent.plist.template](../ops/launchd/com.codexnext.relay-agent.plist.template)
 - [ops/launchd/relay-agent.env.example](../ops/launchd/relay-agent.env.example)
+- [ops/winsw/codexnext-control.xml.template](../ops/winsw/codexnext-control.xml.template)
+- [ops/winsw/codexnext-web.xml.template](../ops/winsw/codexnext-web.xml.template)
+- [ops/winsw/codexnext-agent.xml.template](../ops/winsw/codexnext-agent.xml.template)
+- [ops/winsw/README.md](../ops/winsw/README.md)
 - [scripts/ops/run-control.sh](../scripts/ops/run-control.sh)
 - [scripts/ops/run-web.sh](../scripts/ops/run-web.sh)
 - [scripts/ops/run-relay-agent.sh](../scripts/ops/run-relay-agent.sh)
 - [scripts/ops/build-web.sh](../scripts/ops/build-web.sh)
+- [scripts/test-winsw-templates.mjs](../scripts/test-winsw-templates.mjs)
 
 ## Deploy Order
 

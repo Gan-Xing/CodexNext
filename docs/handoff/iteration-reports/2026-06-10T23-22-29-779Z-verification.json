@@ -1,0 +1,41 @@
+{
+  "generatedAt": "2026-06-10T23:22:29.780Z",
+  "results": [
+    {
+      "commandLine": "pnpm install",
+      "exitCode": 0,
+      "signal": null,
+      "startedAt": "2026-06-10T23:22:05.767Z",
+      "finishedAt": "2026-06-10T23:22:07.203Z",
+      "durationMs": 1436,
+      "error": null
+    },
+    {
+      "commandLine": "pnpm typecheck",
+      "exitCode": 0,
+      "signal": null,
+      "startedAt": "2026-06-10T23:22:07.203Z",
+      "finishedAt": "2026-06-10T23:22:21.132Z",
+      "durationMs": 13929,
+      "error": null
+    },
+    {
+      "commandLine": "pnpm test",
+      "exitCode": 0,
+      "signal": null,
+      "startedAt": "2026-06-10T23:22:21.132Z",
+      "finishedAt": "2026-06-10T23:22:26.974Z",
+      "durationMs": 5842,
+      "error": null
+    },
+    {
+      "commandLine": "pnpm --filter @codexnext/agent dev -- doctor",
+      "exitCode": 0,
+      "signal": null,
+      "startedAt": "2026-06-10T23:22:26.974Z",
+      "finishedAt": "2026-06-10T23:22:29.779Z",
+      "durationMs": 2805,
+      "error": null
+    }
+  ]
+}
