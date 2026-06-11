@@ -144,6 +144,18 @@ describe("control server relay", () => {
     expect(response.status).toBe(401);
   });
 
+  it("returns not found for sidebar prefs on unknown devices", async () => {
+    const { baseUrl } = await startServer();
+    const response = await authorizedFetch(
+      `${baseUrl}/api/devices/missing-device/sidebar-prefs`
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "Device not found"
+    });
+  });
+
   it("stores relay sidebar prefs per device", async () => {
     const tempHome = mkdtempSync(path.join(os.tmpdir(), "codexnext-sidebar-prefs-"));
     process.env.HOME = tempHome;
@@ -290,6 +302,120 @@ describe("control server relay", () => {
     });
   });
 
+  it("rejects malformed successful relay rpc results over HTTP", async () => {
+    const { baseUrl } = await startServer();
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    machine.on("rpc:request", (request: RelayRpcRequest, ack: (response: unknown) => void) => {
+      if (request.method === "agent.health") {
+        ack({
+          ok: true,
+          result: {
+            ok: true,
+            version: "0.1.0",
+            pid: "not-a-number",
+            uptimeSeconds: 1,
+            host: "relay",
+            port: 0
+          }
+        });
+      }
+    });
+
+    const response = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/health`
+    );
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid relay RPC result for agent.health"
+    });
+  });
+
+  it("maps stale approval decisions from the machine to deterministic HTTP errors", async () => {
+    const { baseUrl } = await startServer();
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    const resolvedApprovals = new Set<string>();
+    machine.on("rpc:request", (request: RelayRpcRequest, ack: (response: unknown) => void) => {
+      if (request.method !== RelayMethodValue.ApprovalDecision) {
+        return;
+      }
+      const params = request.params as { approvalId?: string };
+      const approvalId = params.approvalId ?? "";
+      if (resolvedApprovals.has(approvalId)) {
+        ack({
+          ok: false,
+          error: {
+            message: `No pending approval for id ${approvalId}`,
+            code: "not_found"
+          }
+        });
+        return;
+      }
+      resolvedApprovals.add(approvalId);
+      ack({
+        ok: true,
+        result: { decision: "accept" }
+      });
+    });
+
+    const first = await fetch(
+      `${baseUrl}/api/relay/devices/device_1/approvals/approval_1/decision`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ownerToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ decision: "accept" })
+      }
+    );
+    expect(first.status).toBe(200);
+    await expect(first.json()).resolves.toEqual({ decision: "accept" });
+
+    const second = await fetch(
+      `${baseUrl}/api/relay/devices/device_1/approvals/approval_1/decision`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ownerToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ decision: "decline" })
+      }
+    );
+    expect(second.status).toBe(404);
+    await expect(second.json()).resolves.toEqual({
+      error: "No pending approval for id approval_1"
+    });
+  });
+
   it("returns loaded thread ids over relay HTTP", async () => {
     const { baseUrl } = await startServer();
     const machine = createMachineSocket(baseUrl, "device_1", {
@@ -325,6 +451,44 @@ describe("control server relay", () => {
     expect(response.status).toBe(200);
     const payload = (await response.json()) as { threadIds: string[] };
     expect(payload.threadIds).toEqual(["thread_hot", "thread_warm"]);
+  });
+
+  it("rejects malformed loaded history results before updating control state", async () => {
+    const { baseUrl } = await startServer();
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    machine.on("rpc:request", (request, ack) => {
+      if (request.method !== RelayMethodValue.CodexHistoryLoaded) {
+        return;
+      }
+      ack({
+        ok: true,
+        result: {
+          threadIds: [""]
+        }
+      });
+    });
+
+    const response = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/loaded`
+    );
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid relay RPC result for codexHistory.loaded"
+    });
   });
 
   it("returns 504-style errors when relay rpc times out", async () => {
@@ -379,7 +543,14 @@ describe("control server relay", () => {
         ack({
           ok: true,
           result: {
-            entry: { id: "thread_1", cwd: "/tmp", title: "Thread", createdAt: "", updatedAt: "" },
+            entry: {
+              id: "thread_1",
+              cwd: "/tmp",
+              title: "Thread",
+              createdAt: "",
+              updatedAt: "",
+              source: "cli"
+            },
             messages: []
           }
         });
@@ -461,6 +632,88 @@ describe("control server relay", () => {
     expect(callCount).toBe(1);
   });
 
+  it("rejects malformed history turns without caching the bad page", async () => {
+    const { baseUrl } = await startServer({ rpcTimeoutMs: 50 });
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    let callCount = 0;
+    machine.on("rpc:request", (payload, ack) => {
+      if (payload.method !== RelayMethodValue.CodexHistoryTurns) {
+        return;
+      }
+      callCount += 1;
+      if (callCount === 1) {
+        ack({
+          ok: true,
+          result: {
+            entry: {
+              id: "thread_1",
+              cwd: "/tmp",
+              title: "Thread",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z"
+            },
+            messages: [],
+            nextCursor: null,
+            backwardsCursor: null
+          }
+        });
+        return;
+      }
+      ack({
+        ok: true,
+        result: {
+          entry: {
+            id: "thread_1",
+            cwd: "/tmp",
+            cwdExists: true,
+            title: "Thread",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            source: "cli"
+          },
+          messages: [
+            {
+              id: "msg_2",
+              role: "assistant",
+              text: "valid page",
+              ts: "2026-01-01T00:00:00.000Z"
+            }
+          ],
+          nextCursor: null,
+          backwardsCursor: null
+        }
+      });
+    });
+
+    const first = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/turns?id=thread_1&limit=20`
+    );
+    expect(first.status).toBe(502);
+
+    const second = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/turns?id=thread_1&limit=20`
+    );
+    expect(second.status).toBe(200);
+    await expect(second.json()).resolves.toMatchObject({
+      messages: [{ text: "valid page" }]
+    });
+    expect(callCount).toBe(2);
+  });
+
   it("expires recent history page cache by ttl", async () => {
     const { baseUrl } = await startServer({
       recentHistoryCacheTtlMs: 1,
@@ -523,6 +776,120 @@ describe("control server relay", () => {
     );
     expect(second.status).toBe(200);
     expect(callCount).toBe(2);
+  });
+
+  it("caches resumed history pages for subsequent turns requests", async () => {
+    const { baseUrl } = await startServer({ rpcTimeoutMs: 50 });
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    let resumeCallCount = 0;
+    let turnsCallCount = 0;
+    machine.on("rpc:request", (payload, ack) => {
+      if (payload.method === RelayMethodValue.CodexHistoryResume) {
+        resumeCallCount += 1;
+        ack({
+          ok: true,
+          result: {
+            session: {
+              sessionId: "session_resume",
+              threadId: "thread_resume",
+              status: "idle",
+              cwd: "/tmp",
+              permissionMode: "request-approval",
+              approvalPolicy: null,
+              approvalsReviewer: null,
+              sandbox: null,
+              createdAt: 1,
+              updatedAt: 2
+            },
+            history: {
+              entry: {
+                id: "thread_resume",
+                cwd: "/tmp",
+                cwdExists: true,
+                title: "Resumed Thread",
+                createdAt: "2026-01-01T00:00:00.000Z",
+                updatedAt: "2026-01-01T00:00:00.000Z",
+                source: "cli"
+              },
+              messages: [
+                {
+                  id: "msg_resume",
+                  role: "assistant",
+                  text: "resumed page",
+                  ts: "2026-01-01T00:00:00.000Z"
+                }
+              ],
+              nextCursor: null,
+              backwardsCursor: null
+            }
+          }
+        });
+      }
+      if (payload.method === RelayMethodValue.CodexHistoryTurns) {
+        turnsCallCount += 1;
+        ack({
+          ok: true,
+          result: {
+            entry: {
+              id: "thread_resume",
+              cwd: "/tmp",
+              cwdExists: true,
+              title: "Uncached Thread",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+              source: "cli"
+            },
+            messages: [
+              {
+                id: "msg_uncached",
+                role: "assistant",
+                text: "uncached page",
+                ts: "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            nextCursor: null,
+            backwardsCursor: null
+          }
+        });
+      }
+    });
+
+    const resume = await fetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/resume`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ownerToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ id: "thread_resume", cwd: "/tmp" })
+      }
+    );
+    expect(resume.status).toBe(200);
+
+    const cached = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/turns?id=thread_resume&cwd=%2Ftmp&limit=40&sortDirection=desc&itemsView=summary`
+    );
+    expect(cached.status).toBe(200);
+    await expect(cached.json()).resolves.toMatchObject({
+      messages: [{ text: "resumed page" }]
+    });
+    expect(resumeCallCount).toBe(1);
+    expect(turnsCallCount).toBe(0);
   });
 
   it("invalidates recent history cache when a thread is archived", async () => {
@@ -855,6 +1222,191 @@ describe("control server relay", () => {
     expect(live.event.seq).toBe(3);
   });
 
+  it("converges replay and live events across two user clients", async () => {
+    const { baseUrl } = await startServer();
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    machine.emit("machine:event", {
+      deviceId: "device_1",
+      event: {
+        id: "evt_1",
+        seq: 1,
+        ts: Date.now(),
+        type: "chat.user",
+        payload: { text: "first" }
+      }
+    });
+    machine.emit("machine:event", {
+      deviceId: "device_1",
+      event: {
+        id: "evt_2",
+        seq: 2,
+        ts: Date.now(),
+        type: "chat.assistant.delta",
+        payload: { text: "second" }
+      }
+    });
+
+    const firstSession = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    const secondSession = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    const firstToken = ((await firstSession.json()) as { sessionToken: string }).sessionToken;
+    const secondToken = ((await secondSession.json()) as { sessionToken: string }).sessionToken;
+
+    const firstBrowser = createUserSocket(baseUrl, { device_1: 0 }, firstToken, false);
+    const secondBrowser = createUserSocket(baseUrl, { device_1: 1 }, secondToken, false);
+    const firstReplay = waitForDeviceReplay(firstBrowser);
+    const secondReplay = waitForDeviceReplay(secondBrowser);
+    firstBrowser.connect();
+    secondBrowser.connect();
+    await waitForConnect(firstBrowser, async () => undefined);
+    await waitForConnect(secondBrowser, async () => undefined);
+
+    await expect(firstReplay).resolves.toMatchObject([
+      { deviceId: "device_1", event: { seq: 1 } },
+      { deviceId: "device_1", event: { seq: 2 } }
+    ]);
+    await expect(secondReplay).resolves.toMatchObject([
+      { deviceId: "device_1", event: { seq: 2 } }
+    ]);
+
+    const observedLiveEvents: DeviceEventPayload[] = [];
+    firstBrowser.on("device:event", (payload: DeviceEventPayload) =>
+      observedLiveEvents.push(payload)
+    );
+    secondBrowser.on("device:event", (payload: DeviceEventPayload) =>
+      observedLiveEvents.push(payload)
+    );
+    const firstLive = waitForDeviceEvent(firstBrowser);
+    const secondLive = waitForDeviceEvent(secondBrowser);
+    machine.emit("machine:event", {
+      deviceId: "device_1",
+      event: {
+        id: "evt_3",
+        seq: 3,
+        ts: Date.now(),
+        type: "chat.assistant.delta",
+        payload: { text: "live" }
+      }
+    });
+    await expect(firstLive).resolves.toMatchObject({
+      deviceId: "device_1",
+      event: { seq: 3 }
+    });
+    await expect(secondLive).resolves.toMatchObject({
+      deviceId: "device_1",
+      event: { seq: 3 }
+    });
+
+    const eventCountBeforeDuplicate = observedLiveEvents.length;
+    machine.emit("machine:event", {
+      deviceId: "device_1",
+      event: {
+        id: "evt_3_duplicate",
+        seq: 3,
+        ts: Date.now(),
+        type: "chat.assistant.delta",
+        payload: { text: "duplicate" }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(
+      observedLiveEvents
+        .slice(eventCountBeforeDuplicate)
+        .filter((payload) => payload.event.id === "evt_3_duplicate")
+    ).toEqual([]);
+  });
+
+  it("broadcasts the same presence state to two user clients", async () => {
+    const { baseUrl } = await startServer();
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    const firstSession = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    const secondSession = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    const firstToken = ((await firstSession.json()) as { sessionToken: string }).sessionToken;
+    const secondToken = ((await secondSession.json()) as { sessionToken: string }).sessionToken;
+    const firstBrowser = createUserSocket(baseUrl, { device_1: 0 }, firstToken);
+    const secondBrowser = createUserSocket(baseUrl, { device_1: 0 }, secondToken);
+    await waitForConnect(firstBrowser, async () => undefined);
+    await waitForConnect(secondBrowser, async () => undefined);
+
+    const firstPresence = waitForDevicePresence(firstBrowser);
+    const secondPresence = waitForDevicePresence(secondBrowser);
+    machine.emit("machine:heartbeat", {
+      deviceId: "device_1",
+      at: 123,
+      activeSessions: 2
+    });
+
+    await expect(firstPresence).resolves.toMatchObject({
+      deviceId: "device_1",
+      online: true,
+      lastSeenAt: 123,
+      activeSessions: 2
+    });
+    await expect(secondPresence).resolves.toMatchObject({
+      deviceId: "device_1",
+      online: true,
+      lastSeenAt: 123,
+      activeSessions: 2
+    });
+  });
+
+  it("rejects invalid pairing create payloads", async () => {
+    const { baseUrl } = await startServer();
+    const response = await fetch(`${baseUrl}/api/pairings/device`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        deviceId: "device_invalid"
+      })
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid pairing payload"
+    });
+  });
+
   it("approves a pairing request and authorizes machine connect without owner token", async () => {
     const { baseUrl } = await startServer({
       production: true,
@@ -985,6 +1537,21 @@ describe("control server relay", () => {
     expect(response.status).toBe(401);
   });
 
+  it("rate limits browser session mint attempts", async () => {
+    const { baseUrl } = await startServer();
+    let lastStatus = 200;
+    for (let attempt = 0; attempt < 13; attempt += 1) {
+      const response = await fetch(`${baseUrl}/api/auth/session`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ownerToken}`
+        }
+      });
+      lastStatus = response.status;
+    }
+    expect(lastStatus).toBe(429);
+  });
+
   it("requires explicit allowed origins in production", () => {
     expect(() =>
       createControlServer({
@@ -1054,6 +1621,10 @@ describe("control server relay", () => {
       }
     });
     const payload = (await issue.json()) as { sessionToken: string };
+    const browser = createUserSocket(baseUrl, {}, payload.sessionToken);
+    await waitForConnect(browser, async () => undefined);
+    const disconnected = waitForDisconnect(browser);
+
     const logout = await fetch(`${baseUrl}/api/auth/logout`, {
       method: "POST",
       headers: {
@@ -1061,6 +1632,8 @@ describe("control server relay", () => {
       }
     });
     expect(logout.status).toBe(200);
+    await expect(disconnected).resolves.toBeUndefined();
+
     const list = await authorizedFetch(`${baseUrl}/api/devices`, payload.sessionToken);
     expect(list.status).toBe(401);
   });
@@ -1115,6 +1688,27 @@ describe("control server relay", () => {
     await expect(connectError).resolves.toMatchObject({
       message: expect.stringMatching(/unauthorized/i)
     });
+  });
+
+  it("disconnects connected user sockets when relay sessions expire during pruning", async () => {
+    const now = Date.parse("2026-01-01T00:00:00.000Z");
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(now);
+    const { baseUrl } = await startServer({
+      browserSessionTtlMs: 1_000,
+      pruneIntervalMs: 5
+    });
+    const issue = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ownerToken}`
+      }
+    });
+    const payload = (await issue.json()) as { sessionToken: string };
+    const browser = createUserSocket(baseUrl, {}, payload.sessionToken);
+    await waitForConnect(browser, async () => undefined);
+
+    dateNow.mockReturnValue(now + 1_001);
+    await expect(waitForDisconnect(browser)).resolves.toBeUndefined();
   });
 
   it("stores hashed device tokens instead of plaintext", async () => {
@@ -1403,6 +1997,24 @@ describe("control server relay", () => {
     expect(lastStatus).toBe(429);
   });
 
+  it("rate limits pairing decision attempts", async () => {
+    const { baseUrl } = await startServer();
+    let lastStatus = 404;
+    for (let attempt = 0; attempt < 21; attempt += 1) {
+      const response = await fetch(
+        `${baseUrl}/api/pairings/requests/000000/approve`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${ownerToken}`
+          }
+        }
+      );
+      lastStatus = response.status;
+    }
+    expect(lastStatus).toBe(429);
+  });
+
   it("revokes a connected device, disconnects the socket, and blocks reconnect", async () => {
     const tempHome = mkdtempSync(path.join(os.tmpdir(), "codexnext-device-revoke-"));
     process.env.HOME = tempHome;
@@ -1488,6 +2100,166 @@ describe("control server relay", () => {
     reconnect.connect();
     await expect(connectError).resolves.toMatchObject({
       message: expect.stringMatching(/unauthorized/i)
+    });
+  });
+
+  it("broadcasts device revoke offline state to two user clients", async () => {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "codexnext-device-revoke-two-users-"));
+    process.env.HOME = tempHome;
+    const { baseUrl } = await startServer();
+    const createResponse = await fetch(`${baseUrl}/api/pairings/device`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        deviceId: "device_revoke_two_users",
+        deviceToken: "device-token-live",
+        deviceName: "Live Device",
+        hostname: "live-device.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0"
+      })
+    });
+    const pairing = (await createResponse.json()) as PairingCreateResponse;
+    const approveResponse = await fetch(
+      `${baseUrl}/api/pairings/requests/${pairing.codeDigits}/approve`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ownerToken}`
+        }
+      }
+    );
+    const approved = (await approveResponse.json()) as PairingApproveResponse;
+
+    const secondSession = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    const secondToken = ((await secondSession.json()) as { sessionToken: string }).sessionToken;
+
+    const machine = createMachineSocket(baseUrl, "device_revoke_two_users", {
+      deviceToken: "device-token-live"
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_revoke_two_users",
+        deviceName: "Live Device",
+        hostname: "live-device.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    const firstBrowser = createUserSocket(baseUrl, {}, approved.sessionToken);
+    const secondBrowser = createUserSocket(baseUrl, {}, secondToken);
+    await waitForConnect(firstBrowser, async () => undefined);
+    await waitForConnect(secondBrowser, async () => undefined);
+    const firstOffline = waitForDeviceOffline(firstBrowser);
+    const secondOffline = waitForDeviceOffline(secondBrowser);
+
+    const revoke = await fetch(`${baseUrl}/api/devices/device_revoke_two_users`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${approved.sessionToken}`
+      }
+    });
+    expect(revoke.status).toBe(200);
+    await expect(firstOffline).resolves.toMatchObject({
+      deviceId: "device_revoke_two_users"
+    });
+    await expect(secondOffline).resolves.toMatchObject({
+      deviceId: "device_revoke_two_users"
+    });
+  });
+
+  it("bounds an in-flight relay rpc when its device is revoked", async () => {
+    const tempHome = mkdtempSync(path.join(os.tmpdir(), "codexnext-device-revoke-rpc-"));
+    process.env.HOME = tempHome;
+    const { baseUrl } = await startServer({
+      production: true,
+      allowedOrigins: ["http://example.com"],
+      allowMachineOwnerToken: false,
+      rpcTimeoutMs: 100
+    });
+    const createResponse = await fetch(`${baseUrl}/api/pairings/device`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        deviceId: "device_revoke_rpc",
+        deviceToken: "device-token-rpc",
+        deviceName: "RPC Device",
+        hostname: "rpc-device.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0"
+      })
+    });
+    const pairing = (await createResponse.json()) as PairingCreateResponse;
+    const sessionIssue = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ownerToken}`
+      }
+    });
+    const issuedSession = (await sessionIssue.json()) as { sessionToken: string };
+    await fetch(`${baseUrl}/api/pairings/requests/${pairing.codeDigits}/approve`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${issuedSession.sessionToken}`
+      }
+    });
+
+    const machine = createMachineSocket(baseUrl, "device_revoke_rpc", {
+      deviceToken: "device-token-rpc"
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_revoke_rpc",
+        deviceName: "RPC Device",
+        hostname: "rpc-device.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        startedAt: Date.now()
+      })
+    );
+
+    let sawRpc: (() => void) | undefined;
+    const rpcStarted = new Promise<void>((resolve) => {
+      sawRpc = resolve;
+    });
+    machine.on("rpc:request", () => {
+      sawRpc?.();
+      // Intentionally leave the in-flight RPC unresolved until revoke closes the socket.
+    });
+
+    const inFlight = authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_revoke_rpc/health`,
+      issuedSession.sessionToken
+    );
+    await rpcStarted;
+
+    const disconnected = waitForDisconnect(machine);
+    const revoke = await fetch(`${baseUrl}/api/devices/device_revoke_rpc`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${issuedSession.sessionToken}`
+      }
+    });
+    expect(revoke.status).toBe(200);
+    await expect(disconnected).resolves.toBeUndefined();
+
+    const response = await inFlight;
+    expect([503, 504]).toContain(response.status);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringMatching(/timeout|offline|not connected/i)
     });
   });
 
@@ -1793,6 +2565,27 @@ async function waitForDeviceOffline(socket: Socket): Promise<{ deviceId: string;
   return new Promise<{ deviceId: string; lastSeenAt: number }>((resolve) => {
     socket.once("device:offline", (payload: { deviceId: string; lastSeenAt: number }) =>
       resolve(payload)
+    );
+  });
+}
+
+async function waitForDevicePresence(socket: Socket): Promise<{
+  activeSessions?: number;
+  deviceId: string;
+  lastSeenAt: number;
+  online: boolean;
+  socketId?: string;
+}> {
+  return new Promise((resolve) => {
+    socket.once(
+      "device:presence",
+      (payload: {
+        activeSessions?: number;
+        deviceId: string;
+        lastSeenAt: number;
+        online: boolean;
+        socketId?: string;
+      }) => resolve(payload)
     );
   });
 }
