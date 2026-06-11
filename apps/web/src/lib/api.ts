@@ -1,6 +1,8 @@
 import type {
   AgentConnection,
   LocalApprovalDecision,
+  LocalCodexHistoryArchiveResponse,
+  LocalCreateSessionResponse,
   LocalCodexHistoryDetailResponse,
   LocalCodexHistoryPageResponse,
   LocalCodexHistoryResponse,
@@ -8,16 +10,49 @@ import type {
   LocalDirectoryListResponse,
   LocalEvent,
   LocalHealthResponse,
+  LocalInterruptResponse,
   LocalPermissionMode,
   LocalReasoningEffort,
   LocalResumeSessionResponse,
+  LocalSendMessageResponse,
   LocalSendMessageInput,
   LocalStartSessionInput,
-  LocalSessionSummary,
+  LocalSessionsResponse,
   SidebarPrefsResponse,
-  RelayDeviceRecord,
-  RelayDevicesResponse
+  RelayDeviceRecord
 } from "./types";
+import {
+  buildApprovalDecisionBody,
+  buildApprovalDecisionUrl,
+  buildCodexHistoryArchiveUrl,
+  buildCodexHistoryDetailUrl,
+  buildCodexHistoryResumeUrl,
+  buildCodexHistoryTurnsUrl,
+  buildCodexHistoryUrl,
+  buildDeviceHealthUrl,
+  buildDeviceEventReplayUrl,
+  buildDeviceSessionsUrl,
+  buildDeviceSidebarPrefsUrl,
+  buildRelayAuthorizationHeaders,
+  buildRelayDevicesUrl,
+  buildSessionMessageUrl,
+  buildTurnInterruptUrl,
+  buildLoadedCodexHistoryUrl,
+  parseCodexHistoryArchiveResponse,
+  parseCodexHistoryDetailResponse,
+  parseCodexHistoryPageResponse,
+  parseCodexHistoryResponse,
+  parseLoadedCodexHistoryResponse,
+  parseLocalCreateSessionResponse,
+  parseLocalEventReplayResponse,
+  parseLocalHealthResponse,
+  parseLocalInterruptResponse,
+  parseResumeSessionResponse,
+  parseLocalSendMessageResponse,
+  parseLocalSessionsResponse,
+  parseRelayDevicesResponse,
+  parseSidebarPrefsResponse
+} from "@codexnext/relay-client";
 
 export type { AgentConnection };
 
@@ -26,13 +61,21 @@ export async function agentFetch<T>(
   path: string,
   init: RequestInit = {}
 ): Promise<T> {
+  return (await agentFetchJson(connection, path, init)) as T;
+}
+
+async function agentFetchJson(
+  connection: AgentConnection,
+  path: string,
+  init: RequestInit = {}
+): Promise<unknown> {
   const url = resolveAgentUrl(connection, path);
 
   const response = await fetch(url, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${connection.sessionToken}`,
+      ...buildRelayAuthorizationHeaders(connection.sessionToken),
       ...(init.headers ?? {})
     }
   });
@@ -42,25 +85,22 @@ export async function agentFetch<T>(
     throw new Error(text || `${response.status} ${response.statusText}`);
   }
 
-  return (await response.json()) as T;
+  return response.json();
 }
 
 export async function listRelayDevices(
   relayUrl: string,
   accessToken: string
 ): Promise<RelayDeviceRecord[]> {
-  const url = new URL("/api/devices", relayUrl);
+  const url = buildRelayDevicesUrl(relayUrl);
   const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`
-    }
+    headers: buildRelayAuthorizationHeaders(accessToken)
   });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `${response.status} ${response.statusText}`);
   }
-  const payload = (await response.json()) as RelayDevicesResponse;
-  return payload.devices;
+  return parseRelayDevicesResponse(await response.json());
 }
 
 export async function getRelaySidebarPrefs(
@@ -68,17 +108,15 @@ export async function getRelaySidebarPrefs(
   accessToken: string,
   deviceId: string
 ): Promise<SidebarPrefsResponse> {
-  const url = new URL(`/api/devices/${encodeURIComponent(deviceId)}/sidebar-prefs`, relayUrl);
+  const url = buildDeviceSidebarPrefsUrl(relayUrl, deviceId);
   const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`
-    }
+    headers: buildRelayAuthorizationHeaders(accessToken)
   });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `${response.status} ${response.statusText}`);
   }
-  return (await response.json()) as SidebarPrefsResponse;
+  return parseSidebarPrefsResponse(await response.json());
 }
 
 export async function updateRelaySidebarPrefs(
@@ -87,11 +125,11 @@ export async function updateRelaySidebarPrefs(
   deviceId: string,
   prefs: SidebarPrefsResponse
 ): Promise<SidebarPrefsResponse> {
-  const url = new URL(`/api/devices/${encodeURIComponent(deviceId)}/sidebar-prefs`, relayUrl);
+  const url = buildDeviceSidebarPrefsUrl(relayUrl, deviceId);
   const response = await fetch(url, {
     method: "PUT",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      ...buildRelayAuthorizationHeaders(accessToken),
       "Content-Type": "application/json"
     },
     body: JSON.stringify(prefs)
@@ -100,24 +138,26 @@ export async function updateRelaySidebarPrefs(
     const text = await response.text();
     throw new Error(text || `${response.status} ${response.statusText}`);
   }
-  return (await response.json()) as SidebarPrefsResponse;
+  return parseSidebarPrefsResponse(await response.json());
 }
 
 export function health(connection: AgentConnection): Promise<LocalHealthResponse> {
-  return agentFetch<LocalHealthResponse>(connection, "/api/health");
+  return agentFetchJson(connection, "/api/health").then(parseLocalHealthResponse);
 }
 
 export function replayEvents(
   connection: AgentConnection,
   after = 0
 ): Promise<{ events: LocalEvent[] }> {
-  return agentFetch(connection, `/api/events?after=${after}`);
+  return agentFetchJson(connection, `/api/events?after=${after}`).then((payload) => ({
+    events: parseLocalEventReplayResponse(payload, after)
+  }));
 }
 
 export function listSessions(
   connection: AgentConnection
-): Promise<{ sessions: LocalSessionSummary[] }> {
-  return agentFetch(connection, "/api/sessions");
+): Promise<LocalSessionsResponse> {
+  return agentFetchJson(connection, "/api/sessions").then(parseLocalSessionsResponse);
 }
 
 export function listDirectories(
@@ -132,24 +172,29 @@ export function listCodexHistory(
   connection: AgentConnection,
   limit = 80
 ): Promise<LocalCodexHistoryResponse> {
-  return agentFetch(connection, `/api/codex-history?limit=${limit}`);
+  return agentFetchJson(
+    connection,
+    pathAndSearch(buildCodexHistoryUrl(connection, limit))
+  ).then(parseCodexHistoryResponse);
 }
 
 export function getLoadedCodexThreads(
   connection: AgentConnection
 ): Promise<LocalLoadedThreadsResponse> {
-  return agentFetch(connection, "/api/codex-history/loaded");
+  return agentFetchJson(
+    connection,
+    pathAndSearch(buildLoadedCodexHistoryUrl(connection))
+  ).then(parseLoadedCodexHistoryResponse);
 }
 
 export function getCodexHistoryDetail(
   connection: AgentConnection,
   input: { id: string; cwd?: string }
 ): Promise<LocalCodexHistoryDetailResponse> {
-  const query = new URLSearchParams({ id: input.id });
-  if (input.cwd) {
-    query.set("cwd", input.cwd);
-  }
-  return agentFetch(connection, `/api/codex-history/detail?${query.toString()}`);
+  return agentFetchJson(
+    connection,
+    pathAndSearch(buildCodexHistoryDetailUrl(connection, input))
+  ).then(parseCodexHistoryDetailResponse);
 }
 
 export function getCodexHistoryTurns(
@@ -161,29 +206,20 @@ export function getCodexHistoryTurns(
     limit?: number;
   }
 ): Promise<LocalCodexHistoryPageResponse> {
-  const query = new URLSearchParams({ id: input.id });
-  if (input.cwd) {
-    query.set("cwd", input.cwd);
-  }
-  if (input.cursor) {
-    query.set("cursor", input.cursor);
-  }
-  if (typeof input.limit === "number" && Number.isFinite(input.limit)) {
-    query.set("limit", String(Math.floor(input.limit)));
-  }
-  query.set("sortDirection", "desc");
-  query.set("itemsView", "summary");
-  return agentFetch(connection, `/api/codex-history/turns?${query.toString()}`);
+  return agentFetchJson(
+    connection,
+    pathAndSearch(buildCodexHistoryTurnsUrl(connection, input))
+  ).then(parseCodexHistoryPageResponse);
 }
 
 export function archiveCodexHistory(
   connection: AgentConnection,
   input: { id: string }
-): Promise<Record<string, never>> {
-  return agentFetch(connection, "/api/codex-history/archive", {
+): Promise<LocalCodexHistoryArchiveResponse> {
+  return agentFetchJson(connection, pathAndSearch(buildCodexHistoryArchiveUrl(connection)), {
     method: "POST",
     body: JSON.stringify(input)
-  });
+  }).then(parseCodexHistoryArchiveResponse);
 }
 
 export function resumeCodexHistory(
@@ -196,42 +232,42 @@ export function resumeCodexHistory(
     reasoningEffort?: LocalReasoningEffort | null;
   }
 ): Promise<LocalResumeSessionResponse> {
-  return agentFetch(connection, "/api/codex-history/resume", {
+  return agentFetchJson(connection, pathAndSearch(buildCodexHistoryResumeUrl(connection)), {
     method: "POST",
     body: JSON.stringify(input)
-  });
+  }).then(parseResumeSessionResponse);
 }
 
 export function createSession(
   connection: AgentConnection,
   input: LocalStartSessionInput
-): Promise<{ session: LocalSessionSummary }> {
-  return agentFetch(connection, "/api/sessions", {
+): Promise<LocalCreateSessionResponse> {
+  return agentFetchJson(connection, "/api/sessions", {
     method: "POST",
     body: JSON.stringify(input)
-  });
+  }).then(parseLocalCreateSessionResponse);
 }
 
 export function sendSessionMessage(
   connection: AgentConnection,
   sessionId: string,
   input: LocalSendMessageInput
-): Promise<{ mode: "turn-start" | "steer"; turnId: string }> {
-  return agentFetch(connection, `/api/sessions/${sessionId}/messages`, {
+): Promise<LocalSendMessageResponse> {
+  return agentFetchJson(connection, `/api/sessions/${sessionId}/messages`, {
     method: "POST",
     body: JSON.stringify(input)
-  });
+  }).then(parseLocalSendMessageResponse);
 }
 
 export function interruptSessionTurn(
   connection: AgentConnection,
   sessionId: string,
   turnId: string
-): Promise<{ turnId: string }> {
-  return agentFetch(connection, `/api/sessions/${sessionId}/turns/${turnId}/interrupt`, {
+): Promise<LocalInterruptResponse> {
+  return agentFetchJson(connection, `/api/sessions/${sessionId}/turns/${turnId}/interrupt`, {
     method: "POST",
     body: "{}"
-  });
+  }).then(parseLocalInterruptResponse);
 }
 
 export function resolveApproval(
@@ -239,9 +275,9 @@ export function resolveApproval(
   approvalId: string,
   decision: LocalApprovalDecision
 ): Promise<unknown> {
-  return agentFetch(connection, `/api/approvals/${approvalId}/decision`, {
+  return agentFetch(connection, buildApprovalDecisionUrl(connection, approvalId).pathname, {
     method: "POST",
-    body: JSON.stringify({ decision })
+    body: buildApprovalDecisionBody(decision)
   });
 }
 
@@ -249,52 +285,93 @@ export function resolveAgentUrl(connection: AgentConnection, path: string): URL 
   const base = new URL(path, connection.relayUrl);
   const prefix = `/api/relay/devices/${encodeURIComponent(connection.deviceId)}`;
   if (base.pathname === "/api/health") {
-    base.pathname = `${prefix}/health`;
-    return base;
+    return buildDeviceHealthUrl(connection);
   }
   if (base.pathname === "/api/events") {
-    base.pathname = `${prefix}/events`;
-    return base;
+    return buildDeviceEventReplayUrl(
+      connection,
+      Number(base.searchParams.get("after") ?? 0)
+    );
   }
   if (base.pathname === "/api/directories") {
     base.pathname = `${prefix}/directories`;
     return base;
   }
   if (base.pathname === "/api/codex-history") {
-    base.pathname = `${prefix}/codex-history`;
-    return base;
+    return buildCodexHistoryUrl(
+      connection,
+      Number(base.searchParams.get("limit") ?? 80)
+    );
   }
   if (base.pathname === "/api/codex-history/loaded") {
-    base.pathname = `${prefix}/codex-history/loaded`;
-    return base;
+    return buildLoadedCodexHistoryUrl(connection);
   }
   if (base.pathname === "/api/codex-history/detail") {
-    base.pathname = `${prefix}/codex-history/detail`;
-    return base;
+    return buildCodexHistoryDetailUrl(connection, {
+      id: base.searchParams.get("id") ?? "",
+      ...(base.searchParams.has("cwd")
+        ? { cwd: base.searchParams.get("cwd") ?? "" }
+        : {})
+    });
   }
   if (base.pathname === "/api/codex-history/turns") {
-    base.pathname = `${prefix}/codex-history/turns`;
-    return base;
+    return buildCodexHistoryTurnsUrl(connection, {
+      id: base.searchParams.get("id") ?? "",
+      ...(base.searchParams.has("cwd")
+        ? { cwd: base.searchParams.get("cwd") ?? "" }
+        : {}),
+      ...(base.searchParams.has("cursor")
+        ? { cursor: base.searchParams.get("cursor") }
+        : {}),
+      ...(base.searchParams.has("limit")
+        ? { limit: Number(base.searchParams.get("limit")) }
+        : {})
+    });
   }
   if (base.pathname === "/api/codex-history/archive") {
-    base.pathname = `${prefix}/codex-history/archive`;
-    return base;
+    return buildCodexHistoryArchiveUrl(connection);
   }
   if (base.pathname === "/api/codex-history/resume") {
-    base.pathname = `${prefix}/codex-history/resume`;
-    return base;
+    return buildCodexHistoryResumeUrl(connection);
   }
   if (base.pathname === "/api/sessions") {
-    base.pathname = `${prefix}/sessions`;
-    return base;
+    return buildDeviceSessionsUrl(connection);
   }
   if (base.pathname.startsWith("/api/sessions/")) {
+    const messageMatch = base.pathname.match(/^\/api\/sessions\/(.+)\/messages$/);
+    if (messageMatch) {
+      return buildSessionMessageUrl(
+        connection,
+        decodeURIComponent(messageMatch[1] ?? "")
+      );
+    }
+    const interruptMatch = base.pathname.match(
+      /^\/api\/sessions\/(.+)\/turns\/(.+)\/interrupt$/
+    );
+    if (interruptMatch) {
+      return buildTurnInterruptUrl(
+        connection,
+        decodeURIComponent(interruptMatch[1] ?? ""),
+        decodeURIComponent(interruptMatch[2] ?? "")
+      );
+    }
     base.pathname = `${prefix}${base.pathname.slice("/api".length)}`;
     return base;
   }
   if (base.pathname.startsWith("/api/approvals/")) {
+    const approvalMatch = base.pathname.match(/^\/api\/approvals\/(.+)\/decision$/);
+    if (approvalMatch) {
+      return buildApprovalDecisionUrl(
+        connection,
+        decodeURIComponent(approvalMatch[1] ?? "")
+      );
+    }
     base.pathname = `${prefix}${base.pathname.slice("/api".length)}`;
     return base;
   }
   return base;
+}
+
+function pathAndSearch(url: URL): string {
+  return `${url.pathname}${url.search}`;
 }

@@ -24,7 +24,7 @@ import {
   type AgentConnection
 } from "../../lib/api";
 import { openManagedEventStream, type ManagedEventStream } from "../../lib/event-stream";
-import { formatConnectionError, formatError } from "../../lib/format/text";
+import { formatError } from "../../lib/format/text";
 import { createClientId } from "../../lib/random-id";
 import {
   requestRelaySession,
@@ -60,6 +60,22 @@ import {
   upsertSessionInWorkspace
 } from "../chat/chat-state";
 import {
+  coerceRelayPermissionMode,
+  availableRelayPermissionOptions,
+  formatConsoleConnectionError,
+  formatConsoleError,
+  mergeDevicePresenceResults,
+  seedSavedDevicePresence
+} from "./console-utils";
+import {
+  hasRelayOnlyMigrationNoticeSeen,
+  writeProjectSidebarPrefsStorage,
+  writeRelayOnlyMigrationNoticeSeen,
+  writeSavedDevicesStorage,
+  writeSidebarWidthStorage,
+  writeThreadSidebarPrefsStorage
+} from "./console-storage";
+import {
   createSavedDeviceId,
   connectionFromSavedDevice,
   findSavedDevice,
@@ -68,9 +84,6 @@ import {
   normalizeAgentUrl,
   readSavedDevicesState,
   readSidebarWidth,
-  relayOnlyMigrationNoticeStorageKey,
-  sidebarWidthStorageKey,
-  savedDevicesStorageKey,
   type DevicePresenceState,
   type SavedDevice
 } from "../devices/device-utils";
@@ -87,7 +100,6 @@ import {
   makeHistoryPreviewSession,
   makePendingSession,
   pendingSessionId,
-  projectSidebarPrefsStorageKey,
   relayThreadPrefsScope,
   readProjectSidebarPrefs,
   readThreadSidebarPrefs,
@@ -95,7 +107,6 @@ import {
   sanitizeThreadSidebarPrefs,
   sessionSubtitle,
   sessionTitle,
-  threadSidebarPrefsStorageKey,
   type ProjectSidebarPrefs,
   type ProjectThreadGroupData,
   type ThreadListItem,
@@ -146,7 +157,7 @@ export const permissionOptions: Array<{
     mode: "auto-approve"
   },
   {
-    description: "可不受限制地访问互联网和电脑上的任何文件",
+    description: "只在信任的设备和工作区使用；CodexNext 不会再为高风险操作额外拦截",
     icon: "shieldAlert",
     label: "完全访问权限",
     mode: "full-access"
@@ -285,10 +296,14 @@ export function useWebConsoleController() {
   const activeProjectPrefs = getProjectSidebarPrefs(projectSidebarPrefs, sidebarPrefsScopeKey);
   const relayEnabled =
     RELAY_CONFIGURED || Boolean(relayBootstrap) || savedDevices.length > 0;
-  const availablePermissionOptions =
-    relayEnabled && !RELAY_FULL_ACCESS_ENABLED
-      ? permissionOptions.filter((option) => option.mode !== "full-access")
-      : permissionOptions;
+  const availablePermissionOptions = useMemo(
+    () =>
+      availableRelayPermissionOptions(permissionOptions, {
+        relayEnabled,
+        relayFullAccessEnabled: RELAY_FULL_ACCESS_ENABLED
+      }),
+    [relayEnabled]
+  );
   const selectedPermission =
     availablePermissionOptions.find((option) => option.mode === permissionMode) ??
     availablePermissionOptions[0]!;
@@ -485,9 +500,9 @@ export function useWebConsoleController() {
     setProjectSidebarPrefs(storedProjectPrefs);
 
     if (droppedLegacyDirectDevices > 0) {
-      const noticeSeen = window.localStorage.getItem(relayOnlyMigrationNoticeStorageKey) === "1";
+      const noticeSeen = hasRelayOnlyMigrationNoticeSeen(window.localStorage);
       if (!noticeSeen) {
-        window.localStorage.setItem(relayOnlyMigrationNoticeStorageKey, "1");
+        writeRelayOnlyMigrationNoticeSeen(window.localStorage);
         setMigrationNotice(
           `已移除 ${droppedLegacyDirectDevices} 个旧版直连设备。现在请通过“接入设备”完成配对。`
         );
@@ -521,7 +536,7 @@ export function useWebConsoleController() {
         }
       })
       .catch((sessionError) => {
-        setError(formatError(sessionError));
+        setError(formatConsoleError(sessionError));
       });
   }, []);
 
@@ -665,7 +680,7 @@ export function useWebConsoleController() {
         await refreshRelayDevices();
       } catch (error) {
         if (!cancelled) {
-          setError(formatError(error));
+          setError(formatConsoleError(error));
         }
       }
     };
@@ -705,7 +720,7 @@ export function useWebConsoleController() {
     let cancelled = false;
     void syncRelaySidebarPrefs(connection, sidebarPrefsScopeKey).catch((syncError) => {
       if (!cancelled) {
-        setError(formatError(syncError));
+        setError(formatConsoleError(syncError));
       }
     });
     return () => {
@@ -720,10 +735,14 @@ export function useWebConsoleController() {
   ]);
 
   useEffect(() => {
-    if (relayEnabled && !RELAY_FULL_ACCESS_ENABLED && permissionMode === "full-access") {
-      setPermissionMode("request-approval");
+    const nextMode = coerceRelayPermissionMode(
+      permissionMode,
+      availablePermissionOptions
+    );
+    if (nextMode !== permissionMode) {
+      setPermissionMode(nextMode);
     }
-  }, [permissionMode, relayEnabled]);
+  }, [availablePermissionOptions, permissionMode]);
 
   useEffect(() => {
     const selectedDevice = savedDevices.find((device) => device.id === selectedDeviceId) ?? null;
@@ -780,15 +799,7 @@ export function useWebConsoleController() {
 
     const refreshPresence = async () => {
       setDevicePresence((previous) => {
-        const next: Record<string, DevicePresenceState> = {};
-        for (const device of savedDevices) {
-          next[device.id] = previous[device.id] ?? {
-            checkedAt: Date.now(),
-            codexVersion: device.codexVersion ?? null,
-            status: "checking"
-          };
-        }
-        return next;
+        return seedSavedDevicePresence(previous, savedDevices);
       });
 
       const results = await Promise.all(
@@ -838,20 +849,9 @@ export function useWebConsoleController() {
       if (cancelled) {
         return;
       }
-      setDevicePresence((previous) => {
-        const next: Record<string, DevicePresenceState> = {};
-        for (const [deviceId, presence] of Object.entries(previous)) {
-          if (savedDeviceIds.has(deviceId)) {
-            next[deviceId] = presence;
-          }
-        }
-        for (const result of results) {
-          if (savedDeviceIds.has(result.id)) {
-            next[result.id] = result.presence;
-          }
-        }
-        return next;
-      });
+      setDevicePresence((previous) =>
+        mergeDevicePresenceResults(previous, savedDeviceIds, results)
+      );
     };
 
     void refreshPresence();
@@ -866,8 +866,8 @@ export function useWebConsoleController() {
     const sortedDevices = [...nextDevices].sort(
       (a, b) => (b.lastConnectedAt ?? 0) - (a.lastConnectedAt ?? 0)
     );
-    setSavedDevices(sortedDevices);
-    window.localStorage.setItem(savedDevicesStorageKey, JSON.stringify(sortedDevices));
+    const safeDevices = writeSavedDevicesStorage(window.localStorage, sortedDevices);
+    setSavedDevices(safeDevices);
   }
 
   function persistThreadSidebarPrefs(
@@ -875,8 +875,7 @@ export function useWebConsoleController() {
   ) {
     setThreadSidebarPrefs((previous) => {
       const next = resolveStateUpdater(previous, updater);
-      window.localStorage.setItem(threadSidebarPrefsStorageKey, JSON.stringify(next));
-      return next;
+      return writeThreadSidebarPrefsStorage(window.localStorage, next);
     });
   }
 
@@ -887,8 +886,7 @@ export function useWebConsoleController() {
   ) {
     setProjectSidebarPrefs((previous) => {
       const next = resolveStateUpdater(previous, updater);
-      window.localStorage.setItem(projectSidebarPrefsStorageKey, JSON.stringify(next));
-      return next;
+      return writeProjectSidebarPrefsStorage(window.localStorage, next);
     });
   }
 
@@ -905,7 +903,7 @@ export function useWebConsoleController() {
     }));
     if (connection.mode === "relay") {
       void pushRelaySidebarPrefs(nextThreadPrefs, activeProjectPrefs).catch((syncError) =>
-        setError(formatError(syncError))
+        setError(formatConsoleError(syncError))
       );
     }
   }
@@ -957,11 +955,11 @@ export function useWebConsoleController() {
       }));
       if (connection.mode === "relay") {
         void pushRelaySidebarPrefs(nextThreadPrefs, activeProjectPrefs).catch((syncError) =>
-          setError(formatError(syncError))
+          setError(formatConsoleError(syncError))
         );
       }
     } catch (archiveError) {
-      setError(formatError(archiveError));
+      setError(formatConsoleError(archiveError));
     }
   }
 
@@ -978,7 +976,7 @@ export function useWebConsoleController() {
     }));
     if (connection.mode === "relay") {
       void pushRelaySidebarPrefs(activeThreadPrefs, nextProjectPrefs).catch((syncError) =>
-        setError(formatError(syncError))
+        setError(formatConsoleError(syncError))
       );
     }
   }
@@ -1005,7 +1003,7 @@ export function useWebConsoleController() {
     }));
     if (connection.mode === "relay") {
       void pushRelaySidebarPrefs(activeThreadPrefs, nextProjectPrefs).catch((syncError) =>
-        setError(formatError(syncError))
+        setError(formatConsoleError(syncError))
       );
     }
   }
@@ -1076,11 +1074,11 @@ export function useWebConsoleController() {
       }));
       if (connection.mode === "relay") {
         void pushRelaySidebarPrefs(nextThreadPrefs, activeProjectPrefs).catch((syncError) =>
-          setError(formatError(syncError))
+          setError(formatConsoleError(syncError))
         );
       }
     } catch (archiveError) {
-      setError(formatError(archiveError));
+      setError(formatConsoleError(archiveError));
     }
   }
 
@@ -1107,7 +1105,7 @@ export function useWebConsoleController() {
     }));
     if (connection.mode === "relay") {
       void pushRelaySidebarPrefs(activeThreadPrefs, nextProjectPrefs).catch((syncError) =>
-        setError(formatError(syncError))
+        setError(formatConsoleError(syncError))
       );
     }
 
@@ -1171,7 +1169,7 @@ export function useWebConsoleController() {
 
   const resetSidebarWidth = useCallback(() => {
     setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
-    window.localStorage.setItem(sidebarWidthStorageKey, String(DEFAULT_SIDEBAR_WIDTH));
+    writeSidebarWidthStorage(window.localStorage, DEFAULT_SIDEBAR_WIDTH);
   }, []);
 
   const startSidebarResize = useCallback(
@@ -1193,7 +1191,7 @@ export function useWebConsoleController() {
         window.removeEventListener("pointercancel", finish);
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
-        window.localStorage.setItem(sidebarWidthStorageKey, String(nextWidth));
+        writeSidebarWidthStorage(window.localStorage, nextWidth);
         setSidebarResizing(false);
         sidebarResizeCleanupRef.current = null;
       };
@@ -1286,7 +1284,7 @@ export function useWebConsoleController() {
       },
       onError: (streamError) => {
         if (selectedDeviceIdRef.current === deviceId) {
-          setError(formatError(streamError));
+          setError(formatConsoleError(streamError));
         }
       }
     });
@@ -1613,7 +1611,7 @@ export function useWebConsoleController() {
             }
       );
       if (!showedCachedPage) {
-        setError(formatError(err));
+        setError(formatConsoleError(err));
       }
     }
   }
@@ -1945,7 +1943,7 @@ export function useWebConsoleController() {
         patchActiveWorkspace((workspace) =>
           markOptimisticMessageFailed(workspace, clientMessageId, formatError(err))
         );
-        setError(formatError(err));
+        setError(formatConsoleError(err));
         return;
       }
     }
@@ -2045,7 +2043,7 @@ export function useWebConsoleController() {
       patchActiveWorkspace((workspace) =>
         markOptimisticMessageFailed(workspace, clientMessageId, formatError(err))
       );
-      setError(formatError(err));
+      setError(formatConsoleError(err));
     }
   }
 
@@ -2103,7 +2101,7 @@ export function useWebConsoleController() {
       patchActiveWorkspace((workspace) =>
         setSessionHistoryPageState(workspace, sessionId, { loadingOlder: false })
       );
-      setError(formatError(err));
+      setError(formatConsoleError(err));
     }
   }
 
@@ -2280,12 +2278,7 @@ export function useWebConsoleController() {
       });
       setActiveSheet(null);
     } catch (err) {
-      setError(
-        formatConnectionError(
-          err,
-          nextConnection.relayUrl
-        )
-      );
+      setError(formatConsoleConnectionError(err, nextConnection.relayUrl));
     }
   }
 
@@ -2293,7 +2286,7 @@ export function useWebConsoleController() {
     try {
       await attachFiles(files);
     } catch (err) {
-      setError(formatError(err));
+      setError(formatConsoleError(err));
     }
   }
 
@@ -2301,7 +2294,7 @@ export function useWebConsoleController() {
     try {
       await loadDirectories(path);
     } catch (err) {
-      setError(formatError(err));
+      setError(formatConsoleError(err));
     }
   }
 
@@ -2309,7 +2302,7 @@ export function useWebConsoleController() {
     try {
       await interrupt();
     } catch (err) {
-      setError(formatError(err));
+      setError(formatConsoleError(err));
     }
   }
 
@@ -2317,7 +2310,7 @@ export function useWebConsoleController() {
     try {
       await decideApproval(approvalId, decision);
     } catch (err) {
-      setError(formatError(err));
+      setError(formatConsoleError(err));
     }
   }
 
@@ -2326,7 +2319,7 @@ export function useWebConsoleController() {
       await clearGoal();
       setGoalComposerMode(false);
     } catch (err) {
-      setError(formatError(err));
+      setError(formatConsoleError(err));
     }
   }
 
@@ -2334,7 +2327,7 @@ export function useWebConsoleController() {
     try {
       await refreshGoal();
     } catch (err) {
-      setError(formatError(err));
+      setError(formatConsoleError(err));
     }
   }
 
@@ -2342,7 +2335,7 @@ export function useWebConsoleController() {
     try {
       await setGoal({ status: "paused" });
     } catch (err) {
-      setError(formatError(err));
+      setError(formatConsoleError(err));
     }
   }
 
@@ -2350,7 +2343,7 @@ export function useWebConsoleController() {
     try {
       await setGoal({ status: "active" });
     } catch (err) {
-      setError(formatError(err));
+      setError(formatConsoleError(err));
     }
   }
 
@@ -2362,7 +2355,7 @@ export function useWebConsoleController() {
         tokenBudget: goalTokenBudget ? Number(goalTokenBudget) : null
       });
     } catch (err) {
-      setError(formatError(err));
+      setError(formatConsoleError(err));
     }
   }
 

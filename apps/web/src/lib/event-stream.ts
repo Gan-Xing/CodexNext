@@ -1,5 +1,11 @@
 import { io, type Socket } from "socket.io-client";
 import { RelayNamespace, RelaySocketPath } from "@codexnext/protocol";
+import {
+  acceptLiveEvent,
+  buildUserRelayAuth,
+  filterReplayEvents,
+  nextSeqAfterEvents
+} from "@codexnext/relay-client";
 import type { AgentConnection, DeviceEventPayload, LocalEvent } from "./types";
 
 export interface ManagedEventStream {
@@ -29,28 +35,22 @@ export function openManagedEventStream(input: {
     reconnection: true,
     reconnectionDelay: 350,
     reconnectionDelayMax: 5_000,
-    auth: {
-      clientType: "user",
-      sessionToken: input.connection.sessionToken,
-      lastSeqByDevice: {
-        [input.connection.deviceId]: lastSeq
-      }
-    }
+    auth: buildUserRelayAuth(input.connection, lastSeq)
   });
 
   const refreshAuth = () => {
-    socket.auth = {
-      clientType: "user",
-      sessionToken: input.connection.sessionToken,
-      lastSeqByDevice: {
-        [input.connection.deviceId]: lastSeq
-      }
-    };
+    if (closed) {
+      return;
+    }
+    socket.auth = buildUserRelayAuth(input.connection, lastSeq);
   };
 
   input.onStatus("connecting");
 
   socket.on("connect", () => {
+    if (closed) {
+      return;
+    }
     input.onStatus("connected");
   });
 
@@ -70,28 +70,27 @@ export function openManagedEventStream(input: {
   });
 
   socket.on("device:replay", (payload: DeviceEventPayload[]) => {
-    const events = payload
-      .filter((item) => item.deviceId === input.connection.deviceId)
-      .map((item) => item.event)
-      .sort((left, right) => left.seq - right.seq);
+    if (closed) {
+      return;
+    }
+    const events = filterReplayEvents(payload, input.connection.deviceId, lastSeq);
     if (events.length === 0) {
       return;
     }
-    const replayTail = events.at(-1);
-    if (replayTail && replayTail.seq > lastSeq) {
-      lastSeq = replayTail.seq;
-    }
+    lastSeq = nextSeqAfterEvents(lastSeq, events);
     input.onReplay(events);
   });
 
   socket.on("device:event", (payload: DeviceEventPayload) => {
-    if (payload.deviceId !== input.connection.deviceId) {
+    if (closed) {
       return;
     }
-    if (payload.event.seq > lastSeq) {
-      lastSeq = payload.event.seq;
+    const event = acceptLiveEvent(payload, input.connection.deviceId, lastSeq);
+    if (!event) {
+      return;
     }
-    input.onEvent(payload.event);
+    lastSeq = nextSeqAfterEvents(lastSeq, [event]);
+    input.onEvent(event);
   });
 
   socket.on("device:upsert", refreshAuth);

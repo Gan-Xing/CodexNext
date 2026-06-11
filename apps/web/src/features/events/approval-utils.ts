@@ -82,5 +82,5 @@ export function approvalTypeLabel(method: string): string {
   ) {
     return "Tool user input";
   }
-  return "Unknown request";
+  return "Codex request";
 }

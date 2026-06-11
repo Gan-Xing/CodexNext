@@ -91,6 +91,9 @@ importers:
       '@codexnext/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@codexnext/relay-client':
+        specifier: workspace:*
+        version: link:../../packages/relay-client
       next:
         specifier: ^16.2.2
         version: 16.2.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -160,6 +163,22 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  packages/relay-client:
+    dependencies:
+      '@codexnext/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.13.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.15
+        version: 4.1.8(@types/node@24.13.0)(vite@8.0.16(@types/node@24.13.0)(esbuild@0.28.0)(tsx@4.22.4))
 
 packages:
 

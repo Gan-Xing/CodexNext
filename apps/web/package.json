@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@codexnext/codex-icons": "workspace:*",
+    "@codexnext/relay-client": "workspace:*",
     "@codexnext/protocol": "workspace:*",
     "next": "^16.2.2",
     "react-markdown": "^10.1.0",

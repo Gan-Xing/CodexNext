@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { summarizeApproval } from "./approval-utils";
+import { approvalTypeLabel, summarizeApproval } from "./approval-utils";
 
 describe("summarizeApproval", () => {
   it("extracts command and cwd summaries", () => {
@@ -49,5 +49,9 @@ describe("summarizeApproval", () => {
       host: "api.openai.com",
       protocol: "https"
     });
+  });
+
+  it("uses a neutral label for unknown approval methods", () => {
+    expect(approvalTypeLabel("vendor/custom/requestApproval")).toBe("Codex request");
   });
 });

@@ -3,6 +3,8 @@ import type {
   DevicePresence,
   DeviceEventPayload,
   LocalApprovalDecision,
+  LocalCodexHistoryArchiveResponse,
+  LocalCreateSessionResponse,
   LocalCodexHistoryDetailResponse,
   LocalCodexHistoryEntry,
   LocalCodexHistoryMessage,
@@ -12,6 +14,7 @@ import type {
   LocalDirectoryListResponse,
   LocalEvent,
   LocalHealthResponse,
+  LocalInterruptResponse,
   LocalPermissionMode,
   LocalReasoningEffort,
   PairingApproveResponse,
@@ -26,8 +29,10 @@ import type {
   RelayRpcRequest,
   RelayRpcResponse,
   LocalResumeSessionResponse,
+  LocalSendMessageResponse,
   LocalSendMessageInput,
   LocalStartSessionInput,
+  LocalSessionsResponse,
   LocalSessionSummary
 } from "@codexnext/protocol";
 
@@ -43,6 +48,8 @@ export type {
   DevicePresence,
   DeviceEventPayload,
   LocalApprovalDecision,
+  LocalCodexHistoryArchiveResponse,
+  LocalCreateSessionResponse,
   LocalCodexHistoryDetailResponse,
   LocalCodexHistoryEntry,
   LocalCodexHistoryMessage,
@@ -52,6 +59,7 @@ export type {
   LocalDirectoryListResponse,
   LocalEvent,
   LocalHealthResponse,
+  LocalInterruptResponse,
   LocalPermissionMode,
   LocalReasoningEffort,
   PairingApproveResponse,
@@ -66,8 +74,10 @@ export type {
   RelayRpcRequest,
   RelayRpcResponse,
   LocalResumeSessionResponse,
+  LocalSendMessageResponse,
   LocalSendMessageInput,
   LocalStartSessionInput,
+  LocalSessionsResponse,
   LocalSessionSummary
 };
 
