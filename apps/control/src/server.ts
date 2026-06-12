@@ -102,7 +102,7 @@ export function createControlServer(
       callback(null, allowOrigin(origin));
     },
     credentials: false,
-    methods: ["GET", "POST", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Authorization", "Content-Type"]
   });
   const io = new SocketIoServer(app.server as HttpServer, {

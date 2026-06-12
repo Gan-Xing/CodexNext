@@ -1612,6 +1612,25 @@ describe("control server relay", () => {
     expect(allowed.headers.get("access-control-allow-origin")).toBe("http://web.example");
   });
 
+  it("allows PUT preflight for sidebar prefs from an allowed browser origin", async () => {
+    const { baseUrl } = await startServer({
+      production: true,
+      allowedOrigins: ["http://web.example"]
+    });
+    const response = await fetch(`${baseUrl}/api/devices/device_1/sidebar-prefs`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://web.example",
+        "Access-Control-Request-Method": "PUT",
+        "Access-Control-Request-Headers": "authorization,content-type"
+      }
+    });
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe("http://web.example");
+    expect(response.headers.get("access-control-allow-methods")).toContain("PUT");
+  });
+
   it("revokes browser sessions on logout", async () => {
     const { baseUrl } = await startServer();
     const issue = await fetch(`${baseUrl}/api/auth/session`, {
