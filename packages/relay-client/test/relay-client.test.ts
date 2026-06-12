@@ -238,6 +238,7 @@ describe("relay client contract helpers", () => {
             platform: "darwin",
             arch: "arm64",
             agentVersion: "0.1.0",
+            agentRunId: "agent_run_1",
             codexVersion: null,
             startedAt: 1
           }

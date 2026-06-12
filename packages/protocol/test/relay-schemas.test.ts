@@ -206,6 +206,7 @@ describe("relay protocol schemas", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         codexVersion: null,
         startedAt: 1
       })
@@ -256,6 +257,7 @@ describe("relay protocol schemas", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         codexVersion: "codex 0.1.0",
         startedAt: 1
       })
@@ -273,6 +275,7 @@ describe("relay protocol schemas", () => {
             platform: "darwin",
             arch: "arm64",
             agentVersion: "0.1.0",
+            agentRunId: "agent_run_1",
             codexVersion: null,
             startedAt: 1
           }
@@ -291,6 +294,7 @@ describe("relay protocol schemas", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: 1
       })
     ).toThrow();

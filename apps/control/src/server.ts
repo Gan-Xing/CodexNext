@@ -356,6 +356,7 @@ export function createControlServer(
           platform: payload.platform,
           arch: payload.arch,
           agentVersion: payload.agentVersion,
+          agentRunId: payload.agentRunId,
           codexVersion: payload.codexVersion ?? null,
           startedAt: payload.startedAt,
           online: true,
@@ -434,24 +435,47 @@ export function createControlServer(
     });
 
     socket.on("machine:event", (payload: MachineEventPayload) => {
-      if (!payload?.deviceId || !payload.event) {
+      if (!payload?.deviceId || !payload.agentRunId || !payload.event) {
         return;
       }
       const device =
         devices.get(payload.deviceId) ??
-        registerEventOnlyDevice(devices, payload.deviceId, socket, options.eventLimit);
-      const duplicate = device.store.hasSeq(payload.event.seq);
-      device.store.append(payload.event);
-      applyMachineEventState(device, payload.event);
+        registerEventOnlyDevice(
+          devices,
+          payload.deviceId,
+          payload.agentRunId,
+          socket,
+          options.eventLimit
+        );
+      const appendResult = device.store.appendMachineEvent({
+        agentRunId: payload.agentRunId,
+        event: payload.event
+      });
+      if (appendResult.duplicate) {
+        audit.write({
+          action: "device.event.duplicate",
+          at: Date.now(),
+          deviceId: payload.deviceId,
+          outcome: "denied",
+          meta: {
+            agentRunId: payload.agentRunId,
+            sourceSeq: payload.event.seq
+          }
+        });
+        return;
+      }
+      applyMachineEventState(device, appendResult.event);
       device.info = {
         ...device.info,
+        agentRunId: payload.agentRunId,
         lastSeenAt: Date.now(),
         online: true,
         socketId: socket.id
       };
-      if (!duplicate) {
-        userNamespace.emit("device:event", payload satisfies DeviceEventPayload);
-      }
+      userNamespace.emit("device:event", {
+        deviceId: payload.deviceId,
+        event: appendResult.event
+      } satisfies DeviceEventPayload);
     });
 
     socket.on("disconnect", () => {
@@ -732,6 +756,7 @@ function isRecordLike(value: unknown): value is Record<string, unknown> {
 function registerEventOnlyDevice(
   devices: Map<string, RegisteredDevice>,
   deviceId: string,
+  agentRunId: string,
   socket: Socket,
   limit?: number
 ): RegisteredDevice {
@@ -743,6 +768,7 @@ function registerEventOnlyDevice(
       platform: "unknown",
       arch: "unknown",
       agentVersion: "0.1.0",
+      agentRunId,
       codexVersion: null,
       startedAt: Date.now(),
       online: true,

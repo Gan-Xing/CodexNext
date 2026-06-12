@@ -10,7 +10,6 @@ program
   .version("0.1.0");
 
 program
-  .requiredOption("--owner-token <token>", "Owner token used by web and machine clients.")
   .option("--host <host>", "Host to bind.", "127.0.0.1")
   .option("--port <port>", "Port to bind.", parsePositiveInteger, 3002)
   .option(
@@ -55,7 +54,6 @@ program
   )
   .action(
     async (options: {
-      ownerToken: string;
       host: string;
       port: number;
       publicWebOrigin?: string;
@@ -68,8 +66,9 @@ program
       staleDeviceTimeoutMs?: number;
       rpcTimeoutMs: number;
     }) => {
+      const ownerToken = readRequiredEnv("CODEXNEXT_OWNER_TOKEN");
       const handle = createControlServer({
-        ownerToken: options.ownerToken,
+        ownerToken,
         host: options.host,
         port: options.port,
         ...(options.publicWebOrigin
@@ -137,4 +136,12 @@ function parsePositiveInteger(value: string): number {
 
 function collectString(value: string, previous: string[]): string[] {
   return [...previous, value];
+}
+
+function readRequiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(`${name} is required.`);
+  }
+  return value;
 }

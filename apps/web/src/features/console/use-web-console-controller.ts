@@ -2,7 +2,7 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
-import type { LocalReasoningEffort, ThreadGoal } from "@codexnext/protocol";
+import type { LocalReasoningEffort, LocalSessionStatus, ThreadGoal } from "@codexnext/protocol";
 import {
   agentFetch,
   archiveCodexHistory,
@@ -193,13 +193,35 @@ const DEFAULT_SIDEBAR_WIDTH = 292;
 const MIN_SIDEBAR_WIDTH = 272;
 const MAX_SIDEBAR_WIDTH = 620;
 const HISTORY_PAGE_CACHE_TTL_MS = 15_000;
+const MESSAGE_RECONCILE_INITIAL_DELAY_MS = 1_200;
+const MESSAGE_RECONCILE_INTERVAL_MS = 2_500;
+const MESSAGE_RECONCILE_MAX_ATTEMPTS = 720;
 const RELAY_CONFIGURED = Boolean(process.env.NEXT_PUBLIC_CODEXNEXT_RELAY_URL);
 const RELAY_FULL_ACCESS_ENABLED =
   process.env.NEXT_PUBLIC_CODEXNEXT_DISABLE_RELAY_FULL_ACCESS !== "1";
 
+const TERMINAL_SESSION_STATUSES = new Set<LocalSessionStatus>([
+  "idle",
+  "completed",
+  "failed",
+  "interrupted",
+  "error"
+]);
+
 interface RelayBootstrapConfig {
   sessionToken: string;
   relayUrl: string;
+}
+
+interface MessageReconciliationRequest {
+  attempt: number;
+  clientMessageId: string;
+  connection: AgentConnection;
+  deviceId: string;
+  messageText: string;
+  sessionId: string;
+  startedAt: number;
+  turnId?: string | undefined;
 }
 
 function applyLoadedThreadState(
@@ -487,6 +509,7 @@ export function useWebConsoleController() {
   const eventFrameRefs = useRef(new Map<string, number>());
   const queuedEventsRef = useRef(new Map<string, LocalEvent[]>());
   const queuedSelectRef = useRef(new Map<string, boolean>());
+  const messageReconcileTimersRef = useRef(new Map<string, number>());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const historyPageCacheRef = useRef(
     new Map<string, { fetchedAt: number; page: LocalCodexHistoryPageResponse }>()
@@ -499,6 +522,7 @@ export function useWebConsoleController() {
   const previousSessionIdRef = useRef<string | null | undefined>(undefined);
   const latestThreadSidebarPrefsRef = useRef(threadSidebarPrefs);
   const latestProjectSidebarPrefsRef = useRef(projectSidebarPrefs);
+  const latestDeviceWorkspacesRef = useRef(deviceWorkspaces);
   const latestWorkspaceSidebarSnapshotRef = useRef("");
 
   const activeWorkspace = selectedDeviceId ? deviceWorkspaces[selectedDeviceId] ?? null : null;
@@ -806,6 +830,10 @@ export function useWebConsoleController() {
   useEffect(() => {
     selectedDeviceIdRef.current = selectedDeviceId;
   }, [selectedDeviceId]);
+
+  useEffect(() => {
+    latestDeviceWorkspacesRef.current = deviceWorkspaces;
+  }, [deviceWorkspaces]);
 
   useEffect(() => {
     if (!currentSessionId || !sessionHistoryOrigins[currentSessionId]) {
@@ -1189,8 +1217,12 @@ export function useWebConsoleController() {
       for (const stream of streamRefs.current.values()) {
         stream.close();
       }
+      for (const timer of messageReconcileTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
       eventFrameRefs.current.clear();
       streamRefs.current.clear();
+      messageReconcileTimersRef.current.clear();
     },
     []
   );
@@ -2233,6 +2265,165 @@ export function useWebConsoleController() {
     await hydrateHistorySelection(entry, { revealMain: true });
   }
 
+  function clearMessageReconciliation(
+    request: Pick<
+      MessageReconciliationRequest,
+      "clientMessageId" | "deviceId" | "sessionId"
+    >
+  ) {
+    const key = messageReconciliationKey(request);
+    const timer = messageReconcileTimersRef.current.get(key);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      messageReconcileTimersRef.current.delete(key);
+    }
+  }
+
+  function scheduleMessageReconciliation(
+    input: Omit<MessageReconciliationRequest, "attempt" | "startedAt">
+  ) {
+    const request: MessageReconciliationRequest = {
+      ...input,
+      attempt: 0,
+      startedAt: Date.now()
+    };
+    scheduleMessageReconciliationAttempt(request, MESSAGE_RECONCILE_INITIAL_DELAY_MS);
+  }
+
+  function scheduleMessageReconciliationAttempt(
+    request: MessageReconciliationRequest,
+    delayMs: number
+  ) {
+    clearMessageReconciliation(request);
+    const key = messageReconciliationKey(request);
+    const timer = window.setTimeout(() => {
+      messageReconcileTimersRef.current.delete(key);
+      void reconcileSentMessage(request);
+    }, delayMs);
+    messageReconcileTimersRef.current.set(key, timer);
+  }
+
+  async function reconcileSentMessage(request: MessageReconciliationRequest) {
+    const workspace = latestDeviceWorkspacesRef.current[request.deviceId];
+    if (!workspace || !isSameAgentConnection(workspace.connection, request.connection)) {
+      return;
+    }
+    if (hasLiveCompletionEvidence(workspace, request)) {
+      clearMessageReconciliation(request);
+      return;
+    }
+    if (request.attempt >= MESSAGE_RECONCILE_MAX_ATTEMPTS) {
+      patchDeviceWorkspace(request.deviceId, (currentWorkspace) =>
+        markOptimisticMessageFailed(
+          currentWorkspace,
+          request.clientMessageId,
+          "消息已发送，但长时间没有收到 Codex 的实时或历史确认。"
+        )
+      );
+      return;
+    }
+
+    try {
+      const loadedSessions = await listSessions(request.connection);
+      const selectionScopeKey = relayThreadPrefsScope(
+        request.connection.relayUrl,
+        request.connection.deviceId || "unbound"
+      );
+      const savedSelection: SavedSessionSelection | null =
+        sessionSelections[selectionScopeKey] ?? null;
+      const targetSession =
+        loadedSessions.sessions.find((session) => session.sessionId === request.sessionId) ??
+        null;
+
+      patchDeviceWorkspace(request.deviceId, (currentWorkspace) =>
+        mergeLiveSessionsIntoWorkspace(
+          currentWorkspace,
+          loadedSessions.sessions,
+          savedSelection
+        )
+      );
+
+      if (!targetSession) {
+        scheduleMessageReconciliationAttempt(
+          {
+            ...request,
+            attempt: request.attempt + 1
+          },
+          MESSAGE_RECONCILE_INTERVAL_MS
+        );
+        return;
+      }
+
+      let historyHasResponse = false;
+      if (targetSession.threadId) {
+        const page = await getCodexHistoryTurns(request.connection, {
+          id: targetSession.threadId,
+          cwd: targetSession.cwd,
+          limit: 40
+        });
+        const pageKey = codexHistoryKey(page.entry);
+        historyHasResponse = historyContainsResponseForMessage(
+          page.messages,
+          request.messageText,
+          request.startedAt
+        );
+        historyPageCacheRef.current.set(pageKey, {
+          fetchedAt: Date.now(),
+          page
+        });
+        patchDeviceWorkspace(request.deviceId, (currentWorkspace) => {
+          let next = upsertSessionInWorkspace(currentWorkspace, targetSession);
+          next = rememberSessionHistoryOrigin(next, targetSession.sessionId, page.entry.id);
+          next = hydrateSessionFromHistory(next, targetSession.sessionId, page.messages);
+          next = setSessionHistoryPageState(next, targetSession.sessionId, {
+            loadingOlder: false,
+            olderCursor: page.nextCursor,
+            sourceKey: pageKey
+          });
+          const turnId =
+            targetSession.currentTurnId ?? targetSession.activeTurnId ?? request.turnId;
+          return markOptimisticMessageSent(next, request.clientMessageId, {
+            sessionId: targetSession.sessionId,
+            ...(turnId ? { turnId } : {})
+          });
+        });
+      } else {
+        patchDeviceWorkspace(request.deviceId, (currentWorkspace) => {
+          const turnId =
+            targetSession.currentTurnId ?? targetSession.activeTurnId ?? request.turnId;
+          return markOptimisticMessageSent(
+            upsertSessionInWorkspace(currentWorkspace, targetSession),
+            request.clientMessageId,
+            {
+              sessionId: targetSession.sessionId,
+              ...(turnId ? { turnId } : {})
+            }
+          );
+        });
+      }
+
+      if (isReconciledTerminalSession(targetSession, request) || historyHasResponse) {
+        clearMessageReconciliation(request);
+        return;
+      }
+      scheduleMessageReconciliationAttempt(
+        {
+          ...request,
+          attempt: request.attempt + 1
+        },
+        MESSAGE_RECONCILE_INTERVAL_MS
+      );
+    } catch {
+      scheduleMessageReconciliationAttempt(
+        {
+          ...request,
+          attempt: request.attempt + 1
+        },
+        MESSAGE_RECONCILE_INTERVAL_MS
+      );
+    }
+  }
+
   async function resumeHistorySessionForMessage(
     entry: LocalCodexHistoryEntry,
     previewSession: LocalSessionSummary,
@@ -2313,6 +2504,16 @@ export function useWebConsoleController() {
           turnId: sent.turnId
         })
       );
+      if (selectedDeviceIdRef.current) {
+        scheduleMessageReconciliation({
+          clientMessageId,
+          connection,
+          deviceId: selectedDeviceIdRef.current,
+          messageText: message,
+          sessionId: result.session.sessionId,
+          turnId: sent.turnId
+        });
+      }
     } catch (err) {
       patchActiveWorkspace((workspace) =>
         markOptimisticMessageFailed(
@@ -2603,6 +2804,16 @@ export function useWebConsoleController() {
             turnId: result.turnId
           })
         );
+        if (selectedDeviceIdRef.current) {
+          scheduleMessageReconciliation({
+            clientMessageId,
+            connection,
+            deviceId: selectedDeviceIdRef.current,
+            messageText: message,
+            sessionId: currentSession.sessionId,
+            turnId: result.turnId
+          });
+        }
         return;
       }
 
@@ -2651,6 +2862,16 @@ export function useWebConsoleController() {
           )
         };
       });
+      if (selectedDeviceIdRef.current) {
+        scheduleMessageReconciliation({
+          clientMessageId,
+          connection,
+          deviceId: selectedDeviceIdRef.current,
+          messageText: message,
+          sessionId: result.session.sessionId,
+          turnId: result.session.currentTurnId ?? result.session.activeTurnId
+        });
+      }
       setActiveSheet(null);
     } catch (err) {
       patchActiveWorkspace((workspace) =>
@@ -3131,6 +3352,98 @@ function clampSidebarWidth(value: number): number {
 
 function isMissingHistoryCwdError(error: unknown): boolean {
   return formatError(error).includes("cwd does not exist:");
+}
+
+function messageReconciliationKey(
+  request: Pick<
+    MessageReconciliationRequest,
+    "clientMessageId" | "deviceId" | "sessionId"
+  >
+): string {
+  return `${request.deviceId}:${request.sessionId}:${request.clientMessageId}`;
+}
+
+function hasLiveCompletionEvidence(
+  workspace: DeviceWorkspace,
+  request: MessageReconciliationRequest
+): boolean {
+  if (
+    request.turnId &&
+    workspace.events.some(
+      (event) => event.type === "turn.completed" && event.turnId === request.turnId
+    )
+  ) {
+    return true;
+  }
+  const session =
+    workspace.sessions.find((item) => item.sessionId === request.sessionId) ?? null;
+  if (session && isReconciledTerminalSession(session, request)) {
+    return true;
+  }
+  return Boolean(
+    request.turnId &&
+      workspace.chatItems.some(
+        (item) =>
+          item.turnId === request.turnId &&
+          item.role === "assistant" &&
+          item.status === "complete"
+      )
+  );
+}
+
+function isReconciledTerminalSession(
+  session: LocalSessionSummary,
+  request: MessageReconciliationRequest
+): boolean {
+  return (
+    TERMINAL_SESSION_STATUSES.has(session.status) &&
+    !session.activeTurnId &&
+    sessionBelongsToReconciledTurn(session, request)
+  );
+}
+
+function sessionBelongsToReconciledTurn(
+  session: LocalSessionSummary,
+  request: MessageReconciliationRequest
+): boolean {
+  if (request.turnId) {
+    return session.currentTurnId === request.turnId || session.activeTurnId === request.turnId;
+  }
+  return session.updatedAt >= request.startedAt - 30_000;
+}
+
+function historyContainsResponseForMessage(
+  messages: LocalCodexHistoryPageResponse["messages"],
+  messageText: string,
+  startedAt: number
+): boolean {
+  const normalizedMessage = normalizeRenderableText(messageText);
+  const minMessageTs = startedAt - 30_000;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "user") {
+      continue;
+    }
+    if (normalizeRenderableText(message.text) !== normalizedMessage) {
+      continue;
+    }
+    const timestamp = Date.parse(message.ts);
+    if (Number.isFinite(timestamp) && timestamp < minMessageTs) {
+      continue;
+    }
+    return messages
+      .slice(index + 1)
+      .some(
+        (item) =>
+          (item.role === "assistant" || item.role === "command") &&
+          normalizeRenderableText(item.text).length > 0
+      );
+  }
+  return false;
+}
+
+function normalizeRenderableText(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

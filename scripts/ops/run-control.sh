@@ -20,7 +20,6 @@ cd "$ROOT_DIR"
 args=(
   --host "$HOST"
   --port "$PORT"
-  --owner-token "$CODEXNEXT_OWNER_TOKEN"
   --heartbeat-interval-ms "$HEARTBEAT_INTERVAL_MS"
   --rpc-timeout-ms "$RPC_TIMEOUT_MS"
 )

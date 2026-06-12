@@ -1,4 +1,7 @@
 import { execSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const workspaceRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 function parseAllowedOriginHost(value) {
   const trimmed = value.trim();
@@ -71,7 +74,11 @@ function resolveAllowedDevOrigins() {
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   allowedDevOrigins: resolveAllowedDevOrigins(),
-  reactStrictMode: true
+  outputFileTracingRoot: workspaceRoot,
+  reactStrictMode: true,
+  turbopack: {
+    root: workspaceRoot
+  }
 };
 
 export default nextConfig;

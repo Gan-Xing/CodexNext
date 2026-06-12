@@ -1,4 +1,5 @@
 import os from "node:os";
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { io } from "socket.io-client";
 import type {
@@ -33,6 +34,7 @@ export interface ConnectRuntimeDependencies {
   activeSessionCount?: typeof activeSessionCount;
   codexVersion?: typeof codexVersion;
   createLocalAgentRuntime?: typeof createLocalAgentRuntime;
+  createAgentRunId?: () => string;
   clearInterval?: typeof clearInterval;
   io?: (uri: string, options: Parameters<typeof io>[1]) => ConnectSocket;
   now?: () => number;
@@ -90,6 +92,7 @@ export async function startConnectAgent(
   const codexVersionFn = dependencies.codexVersion ?? codexVersion;
   const createLocalAgentRuntimeFn =
     dependencies.createLocalAgentRuntime ?? createLocalAgentRuntime;
+  const createAgentRunIdFn = dependencies.createAgentRunId ?? randomUUID;
   const ioFn = dependencies.io ?? io;
   const nowFn = dependencies.now ?? Date.now;
   const printLineFn = dependencies.printLine ?? printLine;
@@ -111,6 +114,7 @@ export async function startConnectAgent(
   });
   const codex = await codexVersionFn(options.codexBin);
   const startedAt = nowFn();
+  const agentRunId = createAgentRunIdFn();
 
   const socket: ConnectSocket = ioFn(`${relayUrl}${RelayNamespace.Machine}`, {
     path: RelaySocketPath,
@@ -121,7 +125,6 @@ export async function startConnectAgent(
       clientType: "machine",
       deviceId: identity.deviceId,
       deviceToken: identity.deviceToken,
-      lastSeq: runtime.eventStore.lastSeq(),
       ...(options.ownerToken ? { ownerToken: options.ownerToken } : {})
     }
   });
@@ -135,7 +138,6 @@ export async function startConnectAgent(
       clientType: "machine",
       deviceId: identity.deviceId,
       deviceToken: identity.deviceToken,
-      lastSeq: runtime.eventStore.lastSeq(),
       ...(options.ownerToken ? { ownerToken: options.ownerToken } : {})
     };
   };
@@ -170,6 +172,7 @@ export async function startConnectAgent(
     }
     socket.emit("machine:event", {
       deviceId: identity.deviceId,
+      agentRunId,
       event
     });
   });
@@ -183,6 +186,7 @@ export async function startConnectAgent(
       platform: process.platform,
       arch: process.arch,
       agentVersion: "0.1.0",
+      agentRunId,
       codexVersion: codex.version ?? null,
       startedAt
     };

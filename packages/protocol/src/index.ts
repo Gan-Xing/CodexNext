@@ -1454,7 +1454,6 @@ export interface RelayMachineAuth {
   deviceId: string;
   deviceToken?: string;
   devicePublicKey?: string;
-  lastSeq?: number;
 }
 
 export interface DeviceIdentityFile {
@@ -1475,6 +1474,7 @@ export interface MachineHelloPayload {
   platform: string;
   arch: string;
   agentVersion: string;
+  agentRunId: string;
   codexVersion?: string | null;
   startedAt: number;
 }
@@ -1486,6 +1486,7 @@ export const MachineHelloPayloadSchema = z.object({
   platform: z.string().min(1),
   arch: z.string().min(1),
   agentVersion: z.string().min(1),
+  agentRunId: z.string().min(1),
   codexVersion: z.string().nullable().optional(),
   startedAt: z.number()
 }).strict();
@@ -1546,6 +1547,7 @@ export interface RelayDeviceRecord extends DevicePresence {
   platform: string;
   arch: string;
   agentVersion: string;
+  agentRunId: string;
   codexVersion?: string | null;
   startedAt: number;
 }
@@ -1556,6 +1558,7 @@ export const RelayDeviceRecordSchema = DevicePresenceSchema.extend({
   platform: z.string().min(1),
   arch: z.string().min(1),
   agentVersion: z.string().min(1),
+  agentRunId: z.string().min(1),
   codexVersion: z.string().nullable().optional(),
   startedAt: z.number()
 }).strict();
@@ -1648,6 +1651,7 @@ export const RelayRpcResponseSchema = z.union([
 
 export interface MachineEventPayload {
   deviceId: string;
+  agentRunId: string;
   event: LocalEvent;
 }
 

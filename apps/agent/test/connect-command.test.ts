@@ -40,7 +40,7 @@ describe("startConnectAgent", () => {
       serverTime: 2,
       heartbeatIntervalMs: 1234
     });
-    const runtime = createFakeRuntime({ lastSeq: 7 });
+    const runtime = createFakeRuntime();
     const deps = createDeps(socket, runtime);
 
     const handle = await startConnectAgent(baseOptions, deps.dependencies);
@@ -56,7 +56,6 @@ describe("startConnectAgent", () => {
             clientType: "machine",
             deviceId: "device_1",
             deviceToken: "device-token",
-            lastSeq: 7,
             ownerToken: "owner-token"
           }
         })
@@ -64,6 +63,7 @@ describe("startConnectAgent", () => {
     ]);
     expect(socket.emitted.find((entry) => entry.event === "machine:hello")).toMatchObject({
       payload: {
+        agentRunId: "agent_run_1",
         agentVersion: "0.1.0",
         codexVersion: "codex 0.1.0",
         deviceId: "device_1",
@@ -97,12 +97,11 @@ describe("startConnectAgent", () => {
       serverTime: 3,
       heartbeatIntervalMs: 2000
     });
-    const runtime = createFakeRuntime({ lastSeq: 1 });
+    const runtime = createFakeRuntime();
     const deps = createDeps(socket, runtime);
 
     const handle = await startConnectAgent(baseOptions, deps.dependencies);
     socket.triggerConnect();
-    runtime.setLastSeq(9);
     await flushAsync();
 
     const helloEmits = socket.emitted.filter((entry) => entry.event === "machine:hello");
@@ -114,7 +113,6 @@ describe("startConnectAgent", () => {
         clientType: "machine",
         deviceId: "device_1",
         deviceToken: "device-token",
-        lastSeq: 9,
         ownerToken: "owner-token"
       }
     ]);
@@ -150,6 +148,7 @@ describe("startConnectAgent", () => {
     expect(socket.emitted.find((entry) => entry.event === "machine:event")).toEqual({
       event: "machine:event",
       payload: {
+        agentRunId: "agent_run_1",
         deviceId: "device_1",
         event
       }
@@ -324,6 +323,7 @@ function createDeps(socket: FakeSocket, runtime: FakeRuntime) {
       clearedIntervals.push(value);
     }) as typeof clearInterval,
     codexVersion: async () => ({ available: true, version: "codex 0.1.0" }),
+    createAgentRunId: () => "agent_run_1",
     createLocalAgentRuntime: () => runtime,
     io: (uri, options) => {
       ioCalls.push({ uri, options });
@@ -361,12 +361,10 @@ interface FakeRuntime extends LocalAgentRuntime {
   close: Mock<() => Promise<void>>;
   emitEvent(event: LocalEvent): void;
   invoke: Mock<(method: RelayMethod, params?: unknown) => Promise<unknown>>;
-  setLastSeq(seq: number): void;
 }
 
-function createFakeRuntime(input: { lastSeq?: number } = {}): FakeRuntime {
+function createFakeRuntime(): FakeRuntime {
   const emitter = new EventEmitter();
-  let lastSeq = input.lastSeq ?? 1;
   const runtime = {
     approvalBridge: {},
     close: vi.fn(async () => {}),
@@ -378,7 +376,7 @@ function createFakeRuntime(input: { lastSeq?: number } = {}): FakeRuntime {
       after: vi.fn(() => []),
       all: vi.fn(() => []),
       append: vi.fn(),
-      lastSeq: () => lastSeq,
+      lastSeq: () => 1,
       off: (event: string, listener: (...args: any[]) => void) => {
         emitter.off(event, listener);
         return runtime.eventStore;
@@ -401,9 +399,6 @@ function createFakeRuntime(input: { lastSeq?: number } = {}): FakeRuntime {
     sessionManager: {
       summaries: () => []
     },
-    setLastSeq: (seq: number) => {
-      lastSeq = seq;
-    }
   } as unknown as FakeRuntime;
   return runtime;
 }

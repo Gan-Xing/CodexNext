@@ -243,11 +243,13 @@ export function hydrateSessionFromHistory(
       .filter((message) => isRenderableHistoryRole(message.role))
       .map((message) => historyMessageToChatItem(sessionId, message))
   );
-  const preservedSessionItems = workspace.chatItems.filter(
-    (item) =>
-      item.sessionId === sessionId &&
-      !item.id.startsWith(`history-${sessionId}-`)
-  );
+  const preservedSessionItems = workspace.chatItems
+    .filter(
+      (item) =>
+        item.sessionId === sessionId &&
+        !item.id.startsWith(`history-${sessionId}-`)
+    )
+    .filter((item) => shouldPreserveAfterHistoryHydration(item, historyItems));
   const otherItems = workspace.chatItems.filter((item) => item.sessionId !== sessionId);
   const overlap = findHistoryOverlap(historyItems, preservedSessionItems);
   return {
@@ -658,6 +660,23 @@ function findHistoryOverlap(historyItems: ChatItem[], preservedItems: ChatItem[]
 
 function sameRenderableMessage(left: ChatItem, right: ChatItem): boolean {
   return left.role === right.role && left.text.trim() === right.text.trim();
+}
+
+function shouldPreserveAfterHistoryHydration(
+  item: ChatItem,
+  historyItems: ChatItem[]
+): boolean {
+  if (item.status === "failed") {
+    return true;
+  }
+  if (!isHistoryReplaceableRole(item.role)) {
+    return true;
+  }
+  return !historyItems.some((historyItem) => sameRenderableMessage(historyItem, item));
+}
+
+function isHistoryReplaceableRole(role: ChatItem["role"]): boolean {
+  return role === "user" || role === "assistant" || role === "command";
 }
 
 function appendStreamingItemToWorkspace(

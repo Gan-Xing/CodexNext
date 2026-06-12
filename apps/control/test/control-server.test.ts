@@ -73,6 +73,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         codexVersion: "codex-cli 0.1",
         startedAt: Date.now()
       })
@@ -122,6 +123,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -171,6 +173,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -262,6 +265,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -315,6 +319,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -357,6 +362,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -429,6 +435,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -466,6 +473,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -504,6 +512,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -531,6 +540,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -576,6 +586,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -645,6 +656,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -730,6 +742,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -791,6 +804,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -905,6 +919,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -989,6 +1004,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -1032,6 +1048,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -1088,12 +1105,14 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
 
     machine.emit("machine:event", {
       deviceId: "device_1",
+      agentRunId: "agent_run_1",
       event: {
         id: "evt_1",
         seq: 1,
@@ -1151,12 +1170,14 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
 
     machine.emit("machine:event", {
       deviceId: "device_1",
+      agentRunId: "agent_run_1",
       event: {
         id: "evt_1",
         seq: 1,
@@ -1167,6 +1188,7 @@ describe("control server relay", () => {
     });
     machine.emit("machine:event", {
       deviceId: "device_1",
+      agentRunId: "agent_run_1",
       event: {
         id: "evt_2",
         seq: 2,
@@ -1200,6 +1222,7 @@ describe("control server relay", () => {
     const livePromise = waitForDeviceEvent(browser);
     machine.emit("machine:event", {
       deviceId: "device_1",
+      agentRunId: "agent_run_1",
       event: {
         id: "evt_2_duplicate",
         seq: 2,
@@ -1210,6 +1233,7 @@ describe("control server relay", () => {
     });
     machine.emit("machine:event", {
       deviceId: "device_1",
+      agentRunId: "agent_run_1",
       event: {
         id: "evt_3",
         seq: 3,
@@ -1235,12 +1259,14 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
 
     machine.emit("machine:event", {
       deviceId: "device_1",
+      agentRunId: "agent_run_1",
       event: {
         id: "evt_1",
         seq: 1,
@@ -1251,6 +1277,7 @@ describe("control server relay", () => {
     });
     machine.emit("machine:event", {
       deviceId: "device_1",
+      agentRunId: "agent_run_1",
       event: {
         id: "evt_2",
         seq: 2,
@@ -1299,6 +1326,7 @@ describe("control server relay", () => {
     const secondLive = waitForDeviceEvent(secondBrowser);
     machine.emit("machine:event", {
       deviceId: "device_1",
+      agentRunId: "agent_run_1",
       event: {
         id: "evt_3",
         seq: 3,
@@ -1319,6 +1347,7 @@ describe("control server relay", () => {
     const eventCountBeforeDuplicate = observedLiveEvents.length;
     machine.emit("machine:event", {
       deviceId: "device_1",
+      agentRunId: "agent_run_1",
       event: {
         id: "evt_3_duplicate",
         seq: 3,
@@ -1335,6 +1364,89 @@ describe("control server relay", () => {
     ).toEqual([]);
   });
 
+  it("broadcasts events from a restarted agent run even when local seq restarts", async () => {
+    const { baseUrl } = await startServer();
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
+        startedAt: Date.now()
+      })
+    );
+
+    machine.emit("machine:event", {
+      deviceId: "device_1",
+      agentRunId: "agent_run_1",
+      event: {
+        id: "run_1_evt_1",
+        seq: 1,
+        ts: Date.now(),
+        type: "chat.user",
+        payload: { text: "first run" }
+      }
+    });
+
+    const session = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    const sessionPayload = (await session.json()) as { sessionToken: string };
+    const browser = createUserSocket(baseUrl, { device_1: 1 }, sessionPayload.sessionToken, false);
+    browser.connect();
+    await waitForConnect(browser, async () => undefined);
+
+    await emitAck(machine, "machine:hello", {
+      deviceId: "device_1",
+      deviceName: "MacBook Pro",
+      hostname: "macbook-pro.local",
+      platform: "darwin",
+      arch: "arm64",
+      agentVersion: "0.1.0",
+      agentRunId: "agent_run_2",
+      startedAt: Date.now()
+    });
+
+    const livePromise = waitForDeviceEvent(browser);
+    machine.emit("machine:event", {
+      deviceId: "device_1",
+      agentRunId: "agent_run_2",
+      event: {
+        id: "run_2_evt_1",
+        seq: 1,
+        ts: Date.now(),
+        type: "chat.assistant.delta",
+        payload: { text: "second run" }
+      }
+    });
+
+    await expect(livePromise).resolves.toMatchObject({
+      deviceId: "device_1",
+      event: {
+        id: "run_2_evt_1",
+        seq: 2
+      }
+    });
+
+    const replayResponse = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/events?after=0`
+    );
+    const replayPayload = (await replayResponse.json()) as {
+      events: Array<{ id: string; seq: number }>;
+    };
+    expect(replayPayload.events.map((event) => [event.id, event.seq])).toEqual([
+      ["run_1_evt_1", 1],
+      ["run_2_evt_1", 2]
+    ]);
+  });
+
   it("broadcasts the same presence state to two user clients", async () => {
     const { baseUrl } = await startServer();
     const machine = createMachineSocket(baseUrl, "device_1", {
@@ -1348,6 +1460,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -1471,6 +1584,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -2083,6 +2197,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -2170,6 +2285,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -2246,6 +2362,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );
@@ -2421,6 +2538,7 @@ describe("control server relay", () => {
         platform: "darwin",
         arch: "arm64",
         agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
         startedAt: Date.now()
       })
     );

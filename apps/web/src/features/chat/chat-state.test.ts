@@ -259,6 +259,33 @@ describe("chat state", () => {
     ]);
   });
 
+  it("removes an optimistic user message once canonical history contains it", () => {
+    const workspace = addOptimisticUserMessage(makeWorkspace(), {
+      sessionId: "session_1",
+      clientMessageId: "msg_1",
+      text: "你好"
+    });
+
+    const hydrated = hydrateSessionFromHistory(workspace, "session_1", [
+      { id: "item-1", role: "user", text: "你好", ts: new Date(1).toISOString() },
+      {
+        id: "item-2",
+        role: "assistant",
+        text: "你好！有什么可以帮你？",
+        ts: new Date(2).toISOString()
+      }
+    ]);
+
+    expect(hydrated.chatItems.map((item) => item.id)).toEqual([
+      "history-session_1-item-1",
+      "history-session_1-item-2"
+    ]);
+    expect(hydrated.chatItems.map((item) => item.text)).toEqual([
+      "你好",
+      "你好！有什么可以帮你？"
+    ]);
+  });
+
   it("merges assistant deltas into one streaming item", () => {
     const next = ingestEventsIntoWorkspace(
       makeWorkspace(),

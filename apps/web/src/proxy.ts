@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const SESSION_COOKIE_NAME = "codexnext_web_session";
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   if (!webLoginEnabled()) {
     return NextResponse.next();
   }
@@ -31,7 +31,9 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api/auth/login|api/auth/logout|api/auth/status|api/relay/session|_next|favicon.ico).*)"]
+  matcher: [
+    "/((?!api/auth/login|api/auth/logout|api/auth/status|api/relay/session|_next|favicon.ico).*)"
+  ]
 };
 
 function webLoginEnabled(): boolean {
@@ -61,7 +63,11 @@ async function verifyCookie(value: string): Promise<boolean> {
       exp?: number;
       sub?: string;
     };
-    return payload.sub === "codexnext-web" && typeof payload.exp === "number" && payload.exp * 1000 > Date.now();
+    return (
+      payload.sub === "codexnext-web" &&
+      typeof payload.exp === "number" &&
+      payload.exp * 1000 > Date.now()
+    );
   } catch {
     return false;
   }
@@ -88,7 +94,10 @@ function encodeBase64Url(bytes: Uint8Array): string {
   for (const byte of bytes) {
     binary += String.fromCharCode(byte);
   }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 }
 
 function decodeBase64Url(value: string): string {
