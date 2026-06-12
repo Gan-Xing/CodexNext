@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   hasRelayOnlyMigrationNoticeSeen,
+  readWorkspaceSidebarSnapshotsStorage,
   sessionSelectionStorageKey,
   writeConsoleStorageItem,
   writeProjectSidebarPrefsStorage,
@@ -8,7 +9,8 @@ import {
   writeSavedDevicesStorage,
   writeSessionSelectionStorage,
   writeSidebarWidthStorage,
-  writeThreadSidebarPrefsStorage
+  writeThreadSidebarPrefsStorage,
+  writeWorkspaceSidebarSnapshotsStorage
 } from "./console-storage";
 import {
   relayOnlyMigrationNoticeStorageKey,
@@ -25,6 +27,10 @@ describe("console localStorage helpers", () => {
 
   beforeEach(() => {
     storage = new MemoryStorage();
+    Object.defineProperty(globalThis, "window", {
+      value: { localStorage: storage },
+      configurable: true
+    });
   });
 
   it("only writes allowlisted console preference keys", () => {
@@ -125,6 +131,94 @@ describe("console localStorage helpers", () => {
         }
       })
     );
+  });
+
+  it("persists sidebar snapshots for instant workspace restore", () => {
+    writeWorkspaceSidebarSnapshotsStorage(storage, {
+      device_1: {
+        codexHistory: [
+          {
+            id: "thread_1",
+            cwd: "/repo",
+            title: "优化首页体验",
+            createdAt: "2026-06-12T10:00:00.000Z",
+            updatedAt: "2026-06-12T10:05:00.000Z",
+            source: "history",
+            loaded: true
+          }
+        ],
+        currentSessionId: "history-preview:thread_1::/repo",
+        cwd: "/repo",
+        loadedThreadIds: ["thread_1", "" as never],
+        selectedHistoryKey: "thread_1::/repo",
+        sessionHistoryOrigins: {
+          "history-preview:thread_1::/repo": "thread_1",
+          "": "ignored"
+        },
+        sessions: [
+          {
+            sessionId: "history-preview:thread_1::/repo",
+            threadId: "thread_1",
+            status: "idle",
+            cwd: "/repo",
+            title: "优化首页体验",
+            model: "gpt-5.5",
+            reasoningEffort: "high",
+            permissionMode: "request-approval",
+            approvalPolicy: "on-request",
+            approvalsReviewer: "user",
+            sandbox: "workspace-write",
+            goal: {
+              objective: "should not persist",
+              status: "active"
+            } as never,
+            createdAt: 1,
+            updatedAt: 2
+          }
+        ]
+      }
+    });
+
+    expect(readWorkspaceSidebarSnapshotsStorage()).toEqual({
+      device_1: {
+        codexHistory: [
+          {
+            id: "thread_1",
+            cwd: "/repo",
+            title: "优化首页体验",
+            createdAt: "2026-06-12T10:00:00.000Z",
+            updatedAt: "2026-06-12T10:05:00.000Z",
+            source: "history",
+            loaded: true
+          }
+        ],
+        currentSessionId: "history-preview:thread_1::/repo",
+        cwd: "/repo",
+        loadedThreadIds: ["thread_1"],
+        selectedHistoryKey: "thread_1::/repo",
+        sessionHistoryOrigins: {
+          "history-preview:thread_1::/repo": "thread_1"
+        },
+        sessions: [
+          {
+            sessionId: "history-preview:thread_1::/repo",
+            threadId: "thread_1",
+            status: "idle",
+            cwd: "/repo",
+            title: "优化首页体验",
+            model: "gpt-5.5",
+            reasoningEffort: "high",
+            permissionMode: "request-approval",
+            approvalPolicy: "on-request",
+            approvalsReviewer: "user",
+            sandbox: "workspace-write",
+            goal: null,
+            createdAt: 1,
+            updatedAt: 2
+          }
+        ]
+      }
+    });
   });
 });
 

@@ -70,12 +70,15 @@ import {
 import {
   hasRelayOnlyMigrationNoticeSeen,
   readSessionSelectionStorage,
+  readWorkspaceSidebarSnapshotsStorage,
   writeSessionSelectionStorage,
   writeProjectSidebarPrefsStorage,
   writeRelayOnlyMigrationNoticeSeen,
   writeSavedDevicesStorage,
   writeSidebarWidthStorage,
-  writeThreadSidebarPrefsStorage
+  writeThreadSidebarPrefsStorage,
+  writeWorkspaceSidebarSnapshotsStorage,
+  type WorkspaceSidebarSnapshot
 } from "./console-storage";
 import {
   createSavedDeviceId,
@@ -237,6 +240,88 @@ function removeArchivedThreadFromWorkspace(
   };
 }
 
+function restoreWorkspaceFromSidebarSnapshot(
+  connection: AgentConnection,
+  snapshot: WorkspaceSidebarSnapshot
+): DeviceWorkspace {
+  const restoredSessionIds = new Set(
+    snapshot.sessions.map((session) => session.sessionId)
+  );
+  const restoredHistoryKeys = new Set(
+    snapshot.codexHistory.map((entry) => codexHistoryKey(entry))
+  );
+  const resumeStates = Object.fromEntries(
+    Object.keys(snapshot.sessionHistoryOrigins)
+      .filter((sessionId) => restoredSessionIds.has(sessionId))
+      .map((sessionId) => [
+        sessionId,
+        sessionId.startsWith("history-preview:") ? "history" : "resuming"
+      ] as const)
+  ) as Record<string, ResumeState>;
+
+  return {
+    ...createDeviceWorkspace(connection),
+    codexHistory: applyLoadedThreadState(
+      snapshot.codexHistory,
+      snapshot.loadedThreadIds
+    ),
+    currentSessionId:
+      snapshot.currentSessionId &&
+      restoredSessionIds.has(snapshot.currentSessionId)
+        ? snapshot.currentSessionId
+        : null,
+    cwd: snapshot.cwd,
+    loadedThreadIds: snapshot.loadedThreadIds,
+    resumeStates,
+    selectedHistoryKey:
+      snapshot.selectedHistoryKey &&
+      restoredHistoryKeys.has(snapshot.selectedHistoryKey)
+        ? snapshot.selectedHistoryKey
+        : null,
+    sessionHistoryOrigins: snapshot.sessionHistoryOrigins,
+    sessions: snapshot.sessions
+  };
+}
+
+function buildWorkspaceSidebarSnapshots(
+  savedDevices: SavedDevice[],
+  deviceWorkspaces: Record<string, DeviceWorkspace>
+): Record<string, WorkspaceSidebarSnapshot> {
+  return Object.fromEntries(
+    savedDevices
+      .map((device) => {
+        const workspace = deviceWorkspaces[device.id];
+        if (!workspace) {
+          return null;
+        }
+        const hasSidebarState =
+          workspace.sessions.length > 0 ||
+          workspace.codexHistory.length > 0 ||
+          workspace.loadedThreadIds.length > 0 ||
+          workspace.currentSessionId !== null ||
+          workspace.selectedHistoryKey !== null ||
+          Object.keys(workspace.sessionHistoryOrigins).length > 0 ||
+          workspace.cwd.trim().length > 0;
+        if (!hasSidebarState) {
+          return null;
+        }
+        return [
+          device.id,
+          {
+            codexHistory: workspace.codexHistory,
+            currentSessionId: workspace.currentSessionId,
+            cwd: workspace.cwd,
+            loadedThreadIds: workspace.loadedThreadIds,
+            selectedHistoryKey: workspace.selectedHistoryKey,
+            sessionHistoryOrigins: workspace.sessionHistoryOrigins,
+            sessions: workspace.sessions
+          }
+        ] as const;
+      })
+      .filter((entry): entry is readonly [string, WorkspaceSidebarSnapshot] => Boolean(entry))
+  );
+}
+
 export function useWebConsoleController() {
   const [error, setError] = useState<string | null>(null);
   const [migrationNotice, setMigrationNotice] = useState<string | null>(null);
@@ -257,6 +342,7 @@ export function useWebConsoleController() {
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [threadHoverPreview, setThreadHoverPreview] = useState<ThreadHoverPreview | null>(null);
   const [deviceWorkspaces, setDeviceWorkspaces] = useState<Record<string, DeviceWorkspace>>({});
+  const [localStorageReady, setLocalStorageReady] = useState(false);
   const [model, setModel] = useState("gpt-5.5");
   const [reasoningEffort, setReasoningEffort] = useState<LocalReasoningEffort>("xhigh");
   const [permissionMode, setPermissionMode] = useState<LocalPermissionMode>("request-approval");
@@ -286,6 +372,7 @@ export function useWebConsoleController() {
   const previousSessionIdRef = useRef<string | null | undefined>(undefined);
   const latestThreadSidebarPrefsRef = useRef(threadSidebarPrefs);
   const latestProjectSidebarPrefsRef = useRef(projectSidebarPrefs);
+  const latestWorkspaceSidebarSnapshotRef = useRef("");
 
   const activeWorkspace = selectedDeviceId ? deviceWorkspaces[selectedDeviceId] ?? null : null;
   const selectedSavedDevice =
@@ -460,6 +547,9 @@ export function useWebConsoleController() {
       if (!workspace) {
         return;
       }
+      if (workspace.connection.mode === "relay" && !workspace.connection.sessionToken) {
+        return;
+      }
       const session = workspace.sessions.find((item) => item.sessionId === sessionId) ?? null;
       if (!session) {
         return;
@@ -550,16 +640,43 @@ export function useWebConsoleController() {
     const storedThreadPrefs = readThreadSidebarPrefs();
     const storedProjectPrefs = readProjectSidebarPrefs();
     const storedSessionSelections = readSessionSelectionStorage();
+    const storedWorkspaceSnapshots = readWorkspaceSidebarSnapshotsStorage();
     const params = new URLSearchParams(window.location.search);
     const queryDeviceId = params.get("deviceId");
 
     setSavedDevices(storedDevices);
+    setDeviceWorkspaces(
+      Object.fromEntries(
+        storedDevices
+          .map((device) => {
+            const snapshot = storedWorkspaceSnapshots[device.id];
+            if (!snapshot) {
+              return null;
+            }
+            return [
+              device.id,
+              restoreWorkspaceFromSidebarSnapshot(
+                {
+                  mode: "relay",
+                  relayUrl: device.relayUrl,
+                  sessionToken: "",
+                  deviceId: device.deviceId
+                },
+                snapshot
+              )
+            ] as const;
+          })
+          .filter((entry): entry is readonly [string, DeviceWorkspace] => Boolean(entry))
+      )
+    );
     if (storedSidebarWidth !== null) {
       setSidebarWidth(storedSidebarWidth);
     }
     setThreadSidebarPrefs(storedThreadPrefs);
     setProjectSidebarPrefs(storedProjectPrefs);
     setSessionSelections(storedSessionSelections);
+    latestWorkspaceSidebarSnapshotRef.current = JSON.stringify(storedWorkspaceSnapshots);
+    setLocalStorageReady(true);
 
     if (droppedLegacyDirectDevices > 0) {
       const noticeSeen = hasRelayOnlyMigrationNoticeSeen(window.localStorage);
@@ -601,6 +718,23 @@ export function useWebConsoleController() {
         setError(formatConsoleError(sessionError));
       });
   }, []);
+
+  useEffect(() => {
+    if (!localStorageReady) {
+      return;
+    }
+    const snapshots = buildWorkspaceSidebarSnapshots(savedDevices, deviceWorkspaces);
+    const serialized = JSON.stringify(snapshots);
+    if (serialized === latestWorkspaceSidebarSnapshotRef.current) {
+      return;
+    }
+    latestWorkspaceSidebarSnapshotRef.current = serialized;
+    try {
+      writeWorkspaceSidebarSnapshotsStorage(window.localStorage, snapshots);
+    } catch {
+      // Ignore local snapshot persistence failures; live data remains authoritative.
+    }
+  }, [deviceWorkspaces, localStorageReady, savedDevices]);
 
   const refreshRelayDevices = useCallback(async () => {
     if (!relayBootstrap) {

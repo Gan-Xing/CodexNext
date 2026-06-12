@@ -5328,6 +5328,30 @@ summary {
   position: relative;
 }
 
+.cn-thread-empty {
+  background: linear-gradient(180deg, rgba(246, 247, 245, 0.96), rgba(241, 243, 240, 0.9));
+  border: 1px solid rgba(113, 118, 123, 0.18);
+  border-radius: 24px;
+  display: grid;
+  gap: 0.38rem;
+  margin: 1rem 0 0;
+  max-width: 34rem;
+  padding: 1.15rem 1.2rem;
+}
+
+.cn-thread-empty strong {
+  font-size: 1rem;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+}
+
+.cn-thread-empty span {
+  color: var(--cn-muted);
+  font-size: 0.9rem;
+  font-weight: 620;
+  line-height: 1.55;
+}
+
 .cn-history-preview-strip {
   align-items: center;
   background: var(--cn-soft);

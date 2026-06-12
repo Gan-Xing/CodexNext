@@ -136,7 +136,12 @@ export function ChatCanvas(props: {
             {showThinkingRow ? <ThinkingRow key="thinking" text="正在思考" /> : null}
           </div>
         </>
-      ) : null}
+      ) : (
+        <div className="cn-thread-empty">
+          <strong>正在恢复这条会话</strong>
+          <span>侧栏已经恢复，消息内容会在后台继续同步，不需要重新点一次。</span>
+        </div>
+      )}
 
       <div ref={endRef} className="cn-thread-end" />
 
