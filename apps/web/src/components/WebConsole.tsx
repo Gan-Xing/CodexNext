@@ -1,8 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { sessionTitle } from "../features/sessions/session-utils";
+import type {
+  ProjectThreadGroupData,
+  ThreadListItem
+} from "../features/sessions/session-utils";
 import {
   modelOptions,
   permissionOptions,
@@ -19,8 +23,37 @@ import { DeviceSheet } from "./sheets/DeviceSheet";
 import { SummarySheet } from "./sheets/SummarySheet";
 import { SessionSetupSheet } from "./sheets/SessionSetupSheet";
 
+function matchesSidebarQuery(item: ThreadListItem, query: string): boolean {
+  return (
+    item.title.toLocaleLowerCase().includes(query) ||
+    item.timeLabel.toLocaleLowerCase().includes(query)
+  );
+}
+
+function filterProjectGroups(
+  groups: ProjectThreadGroupData[],
+  query: string
+): ProjectThreadGroupData[] {
+  if (!query) {
+    return groups;
+  }
+  return groups
+    .map((group) => {
+      const projectMatches =
+        group.name.toLocaleLowerCase().includes(query) ||
+        group.cwd.toLocaleLowerCase().includes(query);
+      if (projectMatches) {
+        return group;
+      }
+      const items = group.items.filter((item) => matchesSidebarQuery(item, query));
+      return items.length > 0 ? { ...group, items } : null;
+    })
+    .filter((group): group is ProjectThreadGroupData => Boolean(group));
+}
+
 export function WebConsole() {
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
+  const [sidebarQuery, setSidebarQuery] = useState("");
   const {
     activeMenu,
     activeSheet,
@@ -118,6 +151,25 @@ export function WebConsole() {
     loadingOlderHistory,
     visibleChatItems
   } = useWebConsoleController();
+  const deferredSidebarQuery = useDeferredValue(sidebarQuery);
+  const normalizedSidebarQuery = deferredSidebarQuery.trim().toLocaleLowerCase();
+  const filteredPinnedThreadItems = useMemo(
+    () =>
+      normalizedSidebarQuery
+        ? pinnedThreadItems.filter((item) => matchesSidebarQuery(item, normalizedSidebarQuery))
+        : pinnedThreadItems,
+    [normalizedSidebarQuery, pinnedThreadItems]
+  );
+  const filteredProjectGroups = useMemo(
+    () => filterProjectGroups(projectGroups, normalizedSidebarQuery),
+    [normalizedSidebarQuery, projectGroups]
+  );
+  const sidebarEmptyMessage =
+    normalizedSidebarQuery.length > 0
+      ? "没有匹配的项目或会话"
+      : connected
+        ? "还没有对话"
+        : "先连接设备";
 
   const headerTitle = selectedHistoryEntry
     ? selectedHistoryEntry.title
@@ -210,8 +262,28 @@ export function WebConsole() {
           </div>
 
           <div className="cn-project-tree">
+            <div className="cn-sidebar-search" role="search">
+              <CodexIcon name="search" />
+              <input
+                type="search"
+                value={sidebarQuery}
+                onChange={(event) => setSidebarQuery(event.target.value)}
+                placeholder="搜索项目或会话"
+                aria-label="搜索项目或会话"
+              />
+              {sidebarQuery.trim().length > 0 ? (
+                <button
+                  className="cn-sidebar-search-clear"
+                  type="button"
+                  aria-label="清空搜索"
+                  onClick={() => setSidebarQuery("")}
+                >
+                  <CodexIcon name="x" />
+                </button>
+              ) : null}
+            </div>
             <PinnedThreadSection
-              items={pinnedThreadItems}
+              items={filteredPinnedThreadItems}
               historyLoadingKey={historyLoadingKey}
               onArchiveThread={archiveThread}
               onHideThreadPreview={clearThreadHoverPreview}
@@ -230,7 +302,7 @@ export function WebConsole() {
             </button>
             {projectsCollapsed ? null : (
               <div className="cn-project-scroll" onScroll={clearThreadHoverPreview}>
-                {projectGroups.map((group) => (
+                {filteredProjectGroups.map((group) => (
                   <ProjectThreadGroup
                     key={group.cwd}
                     group={group}
@@ -248,9 +320,10 @@ export function WebConsole() {
                     onSelectSession={selectSession}
                   />
                 ))}
-                {projectGroups.length === 0 && pinnedThreadItems.length === 0 ? (
+                {filteredProjectGroups.length === 0 &&
+                filteredPinnedThreadItems.length === 0 ? (
                   <div className="cn-empty-sidebar">
-                    {connected ? "还没有对话" : "先连接设备"}
+                    {sidebarEmptyMessage}
                   </div>
                 ) : null}
               </div>

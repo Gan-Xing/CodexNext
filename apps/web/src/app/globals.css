@@ -4556,6 +4556,65 @@ summary {
   padding: 0.08rem 0 0;
 }
 
+.cn-sidebar-search {
+  align-items: center;
+  background: rgba(242, 244, 241, 0.96);
+  border: 1px solid rgba(101, 107, 113, 0.14);
+  border-radius: 14px;
+  color: var(--cn-muted);
+  display: grid;
+  gap: 0.4rem;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  min-height: 38px;
+  padding: 0.2rem 0.72rem;
+}
+
+.cn-sidebar-search .cn-codex-icon {
+  height: 14px;
+  width: 14px;
+}
+
+.cn-sidebar-search input {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: var(--cn-ink);
+  font-size: 0.86rem;
+  font-weight: 560;
+  min-width: 0;
+  padding: 0;
+}
+
+.cn-sidebar-search input::placeholder {
+  color: #8d9297;
+}
+
+.cn-sidebar-search input:focus {
+  box-shadow: none;
+}
+
+.cn-sidebar-search-clear {
+  align-items: center;
+  background: transparent;
+  border-radius: 999px;
+  color: #7b8086;
+  display: inline-flex;
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+}
+
+.cn-sidebar-search-clear:hover {
+  background: rgba(31, 35, 40, 0.06);
+  color: var(--cn-ink);
+  transform: none;
+}
+
+.cn-sidebar-search-clear .cn-codex-icon {
+  height: 12px;
+  width: 12px;
+}
+
 .cn-project-scroll {
   display: grid;
   flex: 1 1 auto;
