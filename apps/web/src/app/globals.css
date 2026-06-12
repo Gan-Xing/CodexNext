@@ -2191,6 +2191,62 @@ summary {
   padding: 0.48rem 0.2rem;
 }
 
+.cn-sidebar-skeleton {
+  display: grid;
+  gap: 0.42rem;
+  padding: 0.32rem 0.12rem 0.4rem;
+}
+
+.cn-sidebar-skeleton-line {
+  animation: cn-sidebar-shimmer 1.35s linear infinite;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(222, 226, 230, 0.58) 0%,
+      rgba(244, 246, 248, 0.92) 48%,
+      rgba(222, 226, 230, 0.58) 100%
+    );
+  background-size: 180% 100%;
+  border-radius: 999px;
+  height: 11px;
+  width: 72%;
+}
+
+.cn-sidebar-skeleton-line.wide {
+  width: 92%;
+}
+
+.cn-sidebar-skeleton-line.medium {
+  width: 63%;
+}
+
+.cn-sidebar-skeleton-line.short {
+  width: 48%;
+}
+
+@keyframes cn-sidebar-shimmer {
+  0% {
+    background-position: 180% 0;
+  }
+
+  100% {
+    background-position: -20% 0;
+  }
+}
+
+@keyframes cn-sidebar-pulse {
+  0%,
+  100% {
+    opacity: 0.52;
+    transform: scale(0.92);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .cn-live-dot.offline {
   background: var(--cn-faint);
 }
@@ -4630,6 +4686,39 @@ summary {
 .cn-sidebar-search-clear .cn-codex-icon {
   height: 12px;
   width: 12px;
+}
+
+.cn-sidebar-status {
+  align-items: center;
+  color: #7c8288;
+  display: inline-flex;
+  font-size: 0.7rem;
+  font-weight: 620;
+  gap: 0.38rem;
+  letter-spacing: 0.01em;
+  min-height: 18px;
+  padding: 0 0.08rem;
+}
+
+.cn-sidebar-status-dot {
+  background: rgba(108, 112, 117, 0.44);
+  border-radius: 999px;
+  display: inline-block;
+  height: 6px;
+  width: 6px;
+}
+
+.cn-sidebar-status-dot.ready {
+  background: var(--cn-green);
+}
+
+.cn-sidebar-status-dot.offline {
+  background: rgba(108, 112, 117, 0.38);
+}
+
+.cn-sidebar-status-dot.syncing {
+  animation: cn-sidebar-pulse 1.4s ease-in-out infinite;
+  background: #a48a4f;
 }
 
 .cn-project-scroll {

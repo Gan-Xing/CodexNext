@@ -21,6 +21,7 @@ export interface AttachmentDraft {
 }
 
 export type ResumeState = "history" | "resuming" | "failed" | "missing";
+export type WorkspaceSyncState = "idle" | "loading" | "ready" | "error";
 export type StateUpdater<T> = T | ((previous: T) => T);
 
 export interface DeviceWorkspace {
@@ -34,12 +35,14 @@ export interface DeviceWorkspace {
   directoryLoading: boolean;
   events: LocalEvent[];
   healthStatus: LocalHealthResponse | null;
+  historySyncState: WorkspaceSyncState;
   historyLoadingKey: string | null;
   historyPages: Record<string, SessionHistoryPageState>;
   loadedThreadIds: string[];
   pendingApprovals: PendingApprovalView[];
   resumeStates: Record<string, ResumeState>;
   selectedHistoryKey: string | null;
+  sessionSyncState: WorkspaceSyncState;
   sessionHistoryOrigins: Record<string, string>;
   sessions: LocalSessionSummary[];
   streamStatus: string;
@@ -65,12 +68,14 @@ export function createDeviceWorkspace(connection: AgentConnection): DeviceWorksp
     directoryLoading: false,
     events: [],
     healthStatus: null,
+    historySyncState: "idle",
     historyLoadingKey: null,
     historyPages: {},
     loadedThreadIds: [],
     pendingApprovals: [],
     resumeStates: {},
     selectedHistoryKey: null,
+    sessionSyncState: "idle",
     sessionHistoryOrigins: {},
     sessions: [],
     streamStatus: "disconnected"

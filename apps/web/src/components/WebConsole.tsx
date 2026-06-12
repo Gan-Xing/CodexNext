@@ -137,6 +137,7 @@ export function WebConsole() {
     setReasoningEffort,
     setSidebarCollapsed,
     showThreadHoverPreview,
+    sidebarSyncing,
     sidebarCollapsed,
     sidebarResizing,
     startSidebarResize,
@@ -164,9 +165,27 @@ export function WebConsole() {
     () => filterProjectGroups(projectGroups, normalizedSidebarQuery),
     [normalizedSidebarQuery, projectGroups]
   );
+  const totalThreadCount =
+    pinnedThreadItems.length +
+    projectGroups.reduce((total, group) => total + group.items.length, 0);
+  const sidebarStatusMessage = !connected
+    ? "先连接设备，侧栏才会开始同步"
+    : sidebarSyncing
+      ? "正在恢复最近的项目、会话和历史预览"
+      : totalThreadCount > 0
+        ? `已同步 ${projectGroups.length} 个项目 · ${totalThreadCount} 条会话`
+        : "设备已连接，等待第一条会话";
+  const showSidebarSkeleton =
+    connected &&
+    sidebarSyncing &&
+    normalizedSidebarQuery.length === 0 &&
+    filteredProjectGroups.length === 0 &&
+    filteredPinnedThreadItems.length === 0;
   const sidebarEmptyMessage =
     normalizedSidebarQuery.length > 0
       ? "没有匹配的项目或会话"
+      : sidebarSyncing
+        ? "正在恢复最近项目与会话"
       : connected
         ? "还没有对话"
         : "先连接设备";
@@ -282,6 +301,18 @@ export function WebConsole() {
                 </button>
               ) : null}
             </div>
+            <div className="cn-sidebar-status" role="status" aria-live="polite">
+              <span
+                className={
+                  sidebarSyncing
+                    ? "cn-sidebar-status-dot syncing"
+                    : connected
+                      ? "cn-sidebar-status-dot ready"
+                      : "cn-sidebar-status-dot offline"
+                }
+              />
+              <span>{sidebarStatusMessage}</span>
+            </div>
             <PinnedThreadSection
               items={filteredPinnedThreadItems}
               historyLoadingKey={historyLoadingKey}
@@ -302,6 +333,15 @@ export function WebConsole() {
             </button>
             {projectsCollapsed ? null : (
               <div className="cn-project-scroll" onScroll={clearThreadHoverPreview}>
+                {showSidebarSkeleton ? (
+                  <div className="cn-sidebar-skeleton" aria-hidden="true">
+                    <span className="cn-sidebar-skeleton-line wide" />
+                    <span className="cn-sidebar-skeleton-line" />
+                    <span className="cn-sidebar-skeleton-line medium" />
+                    <span className="cn-sidebar-skeleton-line wide" />
+                    <span className="cn-sidebar-skeleton-line short" />
+                  </div>
+                ) : null}
                 {filteredProjectGroups.map((group) => (
                   <ProjectThreadGroup
                     key={group.cwd}
@@ -321,7 +361,8 @@ export function WebConsole() {
                   />
                 ))}
                 {filteredProjectGroups.length === 0 &&
-                filteredPinnedThreadItems.length === 0 ? (
+                filteredPinnedThreadItems.length === 0 &&
+                !showSidebarSkeleton ? (
                   <div className="cn-empty-sidebar">
                     {sidebarEmptyMessage}
                   </div>
@@ -423,10 +464,8 @@ export function WebConsole() {
               permissionLabel={selectedPermission.label}
               pinnedCount={pinnedThreadItems.length}
               projectCount={projectGroups.length}
-              threadCount={
-                pinnedThreadItems.length +
-                projectGroups.reduce((total, group) => total + group.items.length, 0)
-              }
+              restoringWorkspace={sidebarSyncing}
+              threadCount={totalThreadCount}
               onOpenSetup={openNewSessionSetup}
             />
           )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type { LocalReasoningEffort, ThreadGoal } from "@codexnext/protocol";
 import {
@@ -80,6 +80,13 @@ import {
   writeWorkspaceSidebarSnapshotsStorage,
   type WorkspaceSidebarSnapshot
 } from "./console-storage";
+import {
+  mergeLiveHistoryIntoWorkspace,
+  mergeLiveSessionsIntoWorkspace,
+  mergeSelectedHistoryPreviewSession,
+  resolveHistoryPreviewEntryToHydrate,
+  type SavedSessionSelection
+} from "./console-hydration";
 import {
   createSavedDeviceId,
   connectionFromSavedDevice,
@@ -322,35 +329,6 @@ function buildWorkspaceSidebarSnapshots(
   );
 }
 
-function mergeSelectedHistoryPreviewSession(
-  sessions: LocalSessionSummary[],
-  historyEntries: LocalCodexHistoryEntry[],
-  workspace: Pick<DeviceWorkspace, "currentSessionId" | "selectedHistoryKey" | "sessions">
-): LocalSessionSummary[] {
-  const previewSessionId = workspace.currentSessionId;
-  if (
-    !previewSessionId ||
-    !isHistoryPreviewSessionId(previewSessionId) ||
-    !workspace.selectedHistoryKey
-  ) {
-    return sessions;
-  }
-  const entry =
-    historyEntries.find(
-      (historyEntry) => codexHistoryKey(historyEntry) === workspace.selectedHistoryKey
-    ) ?? null;
-  if (!entry) {
-    return sessions;
-  }
-  const previewSession =
-    workspace.sessions.find((session) => session.sessionId === previewSessionId) ??
-    makeHistoryPreviewSession(entry);
-  return [
-    previewSession,
-    ...sessions.filter((session) => session.sessionId !== previewSession.sessionId)
-  ];
-}
-
 export function useWebConsoleController() {
   const [error, setError] = useState<string | null>(null);
   const [migrationNotice, setMigrationNotice] = useState<string | null>(null);
@@ -394,6 +372,7 @@ export function useWebConsoleController() {
   const historyPageCacheRef = useRef(
     new Map<string, { fetchedAt: number; page: LocalCodexHistoryPageResponse }>()
   );
+  const deviceHydrationVersionsRef = useRef(new Map<string, number>());
   const pendingHistoryHydrationsRef = useRef(new Set<string>());
   const desktopFrameRef = useRef<HTMLDivElement | null>(null);
   const sessionSidebarRef = useRef<HTMLElement | null>(null);
@@ -434,6 +413,8 @@ export function useWebConsoleController() {
   const directoryError = activeWorkspace?.directoryError ?? null;
   const directoryLoading = activeWorkspace?.directoryLoading ?? false;
   const resumeStates = activeWorkspace?.resumeStates ?? {};
+  const sessionSyncState = activeWorkspace?.sessionSyncState ?? "idle";
+  const historySyncState = activeWorkspace?.historySyncState ?? "idle";
   const historyLoadingKey = activeWorkspace?.historyLoadingKey ?? null;
   const historyPages = activeWorkspace?.historyPages ?? {};
   const loadedThreadIds = activeWorkspace?.loadedThreadIds ?? [];
@@ -469,6 +450,8 @@ export function useWebConsoleController() {
   const activeProjectPrefs = getProjectSidebarPrefs(projectSidebarPrefs, sidebarPrefsScopeKey);
   const relayEnabled =
     RELAY_CONFIGURED || Boolean(relayBootstrap) || savedDevices.length > 0;
+  const sidebarSyncing =
+    sessionSyncState === "loading" || historySyncState === "loading";
   const availablePermissionOptions = useMemo(
     () =>
       availableRelayPermissionOptions(permissionOptions, {
@@ -565,6 +548,16 @@ export function useWebConsoleController() {
     },
     [patchDeviceWorkspace]
   );
+
+  const beginDeviceHydration = useCallback((deviceId: string) => {
+    const nextVersion = (deviceHydrationVersionsRef.current.get(deviceId) ?? 0) + 1;
+    deviceHydrationVersionsRef.current.set(deviceId, nextVersion);
+    return nextVersion;
+  }, []);
+
+  const isCurrentDeviceHydration = useCallback((deviceId: string, version: number) => {
+    return deviceHydrationVersionsRef.current.get(deviceId) === version;
+  }, []);
 
   const ensureSessionHistoryHydrated = useCallback(
     async (sessionId: string) => {
@@ -1551,119 +1544,176 @@ export function useWebConsoleController() {
       setSelectedDeviceId(device.id);
       setDeviceName(device.name);
     }
-    patchDeviceWorkspace(device.id, (workspace) => ({
-      ...workspace,
-      connection: deviceConnection,
-      healthStatus: status,
-      streamStatus: "connecting"
-    }));
-
-    const replay = await replayEvents(deviceConnection, 0);
-    patchDeviceWorkspace(device.id, (workspace) =>
-      ingestEventsIntoWorkspace(workspace, replay.events, { selectSessions: false })
-    );
-
-    const [loadedSessions, history] = await Promise.all([
-      listSessions(deviceConnection),
-      listCodexHistory(deviceConnection)
-    ]);
-    const latestSession = [...loadedSessions.sessions].sort((a, b) => b.updatedAt - a.updatedAt)[0];
     const selectionScopeKey = relayThreadPrefsScope(
       deviceConnection.relayUrl,
       deviceConnection.deviceId || "unbound"
     );
-    const savedSelection = sessionSelections[selectionScopeKey] ?? null;
-    const restoredSessionId =
-      savedSelection?.currentSessionId &&
-      loadedSessions.sessions.some((session) => session.sessionId === savedSelection.currentSessionId)
-        ? savedSelection.currentSessionId
-        : null;
-    const restoredHistoryEntry =
-      savedSelection?.selectedHistoryKey
-        ? history.entries.find(
-            (entry) => codexHistoryKey(entry) === savedSelection.selectedHistoryKey
-          ) ?? null
-        : null;
+    const savedSelection: SavedSessionSelection | null =
+      sessionSelections[selectionScopeKey] ?? null;
+    const hydrationVersion = beginDeviceHydration(device.id);
+    const restoredWorkspace = deviceWorkspaces[device.id] ?? null;
+    const directoryPathHint = restoredWorkspace?.cwd || undefined;
 
-    patchDeviceWorkspace(device.id, (workspace) => {
-      const nextSessions = mergeSelectedHistoryPreviewSession(
-        loadedSessions.sessions,
-        history.entries,
-        workspace
-      );
-      const nextSelectedHistoryKey =
-        workspace.selectedHistoryKey &&
-        history.entries.some(
-          (entry) => codexHistoryKey(entry) === workspace.selectedHistoryKey
-        )
-          ? workspace.selectedHistoryKey
-          : restoredHistoryEntry
-            ? codexHistoryKey(restoredHistoryEntry)
-            : null;
-      return {
+    startTransition(() => {
+      patchDeviceWorkspace(device.id, (workspace) => ({
         ...workspace,
-        codexHistory: history.entries,
-        currentSessionId:
-          workspace.currentSessionId ?? restoredSessionId ?? latestSession?.sessionId ?? null,
-        cwd: workspace.cwd || latestSession?.cwd || "",
+        connection: deviceConnection,
         directoryError: null,
         directoryLoading: true,
-        selectedHistoryKey: nextSelectedHistoryKey,
-        sessions: nextSessions
-      };
+        healthStatus: status,
+        historySyncState: "loading",
+        sessionSyncState: "loading",
+        streamStatus: "connecting"
+      }));
     });
 
-    void getLoadedCodexThreads(deviceConnection)
-      .then((loadedThreads) => {
+    const replayPromise = replayEvents(deviceConnection, 0).then((replay) => {
+      if (!isCurrentDeviceHydration(device.id, hydrationVersion)) {
+        return replay;
+      }
+      startTransition(() => {
         patchDeviceWorkspace(device.id, (workspace) =>
-          setLoadedThreadIds(
-            {
-              ...workspace,
-              codexHistory: applyLoadedThreadState(
-                workspace.codexHistory,
-                loadedThreads.threadIds
-              )
-            },
-            loadedThreads.threadIds
-          )
+          ingestEventsIntoWorkspace(workspace, replay.events, { selectSessions: false })
         );
+      });
+      openDeviceStream(device.id, deviceConnection, replay.events.at(-1)?.seq ?? 0, status);
+      return replay;
+    });
+
+    const sessionsPromise = listSessions(deviceConnection)
+      .then((loadedSessions) => {
+        if (!isCurrentDeviceHydration(device.id, hydrationVersion)) {
+          return loadedSessions;
+        }
+        startTransition(() => {
+          patchDeviceWorkspace(device.id, (workspace) => ({
+            ...mergeLiveSessionsIntoWorkspace(
+              workspace,
+              loadedSessions.sessions,
+              savedSelection
+            ),
+            sessionSyncState: "ready"
+          }));
+        });
+        return loadedSessions;
+      })
+      .catch((err) => {
+        if (isCurrentDeviceHydration(device.id, hydrationVersion)) {
+          patchDeviceWorkspace(device.id, (workspace) => ({
+            ...workspace,
+            sessionSyncState: "error"
+          }));
+          if (selectedDeviceIdRef.current === device.id) {
+            setError(formatConsoleError(err));
+          }
+        }
+        return null;
+      });
+
+    const historyPromise = listCodexHistory(deviceConnection)
+      .then((history) => {
+        if (!isCurrentDeviceHydration(device.id, hydrationVersion)) {
+          return history;
+        }
+        const previewEntry = resolveHistoryPreviewEntryToHydrate(
+          restoredWorkspace ?? createDeviceWorkspace(deviceConnection),
+          history.entries,
+          savedSelection
+        );
+        startTransition(() => {
+          patchDeviceWorkspace(device.id, (workspace) => ({
+            ...mergeLiveHistoryIntoWorkspace(
+              workspace,
+              history.entries,
+              savedSelection
+            ),
+            historySyncState: "ready"
+          }));
+        });
+        if (previewEntry) {
+          void hydrateHistorySelection(previewEntry, {
+            deviceId: device.id,
+            deviceConnection,
+            revealMain: false
+          });
+        }
+        return history;
+      })
+      .catch((err) => {
+        if (isCurrentDeviceHydration(device.id, hydrationVersion)) {
+          patchDeviceWorkspace(device.id, (workspace) => ({
+            ...workspace,
+            historySyncState: "error"
+          }));
+          if (selectedDeviceIdRef.current === device.id) {
+            setError(formatConsoleError(err));
+          }
+        }
+        return null;
+      });
+
+    const loadedThreadsPromise = getLoadedCodexThreads(deviceConnection)
+      .then((loadedThreads) => {
+        if (!isCurrentDeviceHydration(device.id, hydrationVersion)) {
+          return loadedThreads;
+        }
+        startTransition(() => {
+          patchDeviceWorkspace(device.id, (workspace) =>
+            setLoadedThreadIds(
+              {
+                ...workspace,
+                codexHistory: applyLoadedThreadState(
+                  workspace.codexHistory,
+                  loadedThreads.threadIds
+                )
+              },
+              loadedThreads.threadIds
+            )
+          );
+        });
+        return loadedThreads;
       })
       .catch(() => {
         // Older app-server builds may not expose thread/loaded/list yet.
+        return null;
       });
 
-    if (
-      restoredHistoryEntry &&
-      !deviceWorkspaces[device.id]?.currentSessionId &&
-      !deviceWorkspaces[device.id]?.selectedHistoryKey
-    ) {
-      void hydrateHistorySelection(restoredHistoryEntry, {
-        deviceId: device.id,
-        deviceConnection,
-        revealMain: false
+    const directoriesPromise = listDirectories(deviceConnection, directoryPathHint)
+      .then((directories) => {
+        if (!isCurrentDeviceHydration(device.id, hydrationVersion)) {
+          return directories;
+        }
+        patchDeviceWorkspace(device.id, (workspace) => ({
+          ...workspace,
+          directoryList: directories
+        }));
+        return directories;
+      })
+      .catch((err) => {
+        if (isCurrentDeviceHydration(device.id, hydrationVersion)) {
+          patchDeviceWorkspace(device.id, (workspace) => ({
+            ...workspace,
+            directoryError: formatError(err)
+          }));
+        }
+        return null;
+      })
+      .finally(() => {
+        if (isCurrentDeviceHydration(device.id, hydrationVersion)) {
+          patchDeviceWorkspace(device.id, (workspace) => ({
+            ...workspace,
+            directoryLoading: false
+          }));
+        }
       });
-    }
 
-    const directoryPath = activeWorkspace?.cwd || latestSession?.cwd || undefined;
-    try {
-      const directories = await listDirectories(deviceConnection, directoryPath);
-      patchDeviceWorkspace(device.id, (workspace) => ({
-        ...workspace,
-        directoryList: directories
-      }));
-    } catch (err) {
-      patchDeviceWorkspace(device.id, (workspace) => ({
-        ...workspace,
-        directoryError: formatError(err)
-      }));
-    } finally {
-      patchDeviceWorkspace(device.id, (workspace) => ({
-        ...workspace,
-        directoryLoading: false
-      }));
-    }
-
-    openDeviceStream(device.id, deviceConnection, replay.events.at(-1)?.seq ?? 0, status);
+    void Promise.allSettled([
+      sessionsPromise,
+      historyPromise,
+      loadedThreadsPromise,
+      directoriesPromise
+    ]);
+    await replayPromise;
   }
 
   async function refreshActiveWorkspaceThreads() {
@@ -1676,43 +1726,44 @@ export function useWebConsoleController() {
     }
 
     const deviceConnection = deviceWorkspaces[deviceId]?.connection ?? connection;
-    const [loadedSessions, history] = await Promise.all([
-      listSessions(deviceConnection),
-      listCodexHistory(deviceConnection)
-    ]);
-    const historyThreadIds = new Set(history.entries.map((entry) => entry.id));
-    const sessionThreadIds = new Set(
-      loadedSessions.sessions
-        .map((session) => session.threadId)
-        .filter((threadId): threadId is string => Boolean(threadId))
+    const selectionScopeKey = relayThreadPrefsScope(
+      deviceConnection.relayUrl,
+      deviceConnection.deviceId || "unbound"
     );
-
-    patchDeviceWorkspace(deviceId, (workspace) => {
-      const nextSessions = mergeSelectedHistoryPreviewSession(
-        loadedSessions.sessions,
-        history.entries,
-        workspace
-      );
-      const nextSessionIds = new Set(
-        nextSessions.map((session) => session.sessionId)
-      );
-      return {
-        ...workspace,
-        codexHistory: history.entries,
-        currentSessionId:
-          workspace.currentSessionId && nextSessionIds.has(workspace.currentSessionId)
-            ? workspace.currentSessionId
-            : null,
-        selectedHistoryKey:
-          workspace.selectedHistoryKey &&
-          history.entries.some(
-            (entry) => codexHistoryKey(entry) === workspace.selectedHistoryKey
-          )
-            ? workspace.selectedHistoryKey
-            : null,
-        sessions: nextSessions
-      };
-    });
+    const savedSelection: SavedSessionSelection | null =
+      sessionSelections[selectionScopeKey] ?? null;
+    const sessionsPromise = listSessions(deviceConnection)
+      .then((loadedSessions) => {
+        startTransition(() => {
+          patchDeviceWorkspace(deviceId, (workspace) =>
+            mergeLiveSessionsIntoWorkspace(
+              workspace,
+              loadedSessions.sessions,
+              savedSelection
+            )
+          );
+        });
+        return new Set(
+          loadedSessions.sessions
+            .map((session) => session.threadId)
+            .filter((threadId): threadId is string => Boolean(threadId))
+        );
+      })
+      .catch(() => new Set<string>());
+    const historyPromise = listCodexHistory(deviceConnection)
+      .then((history) => {
+        startTransition(() => {
+          patchDeviceWorkspace(deviceId, (workspace) =>
+            mergeLiveHistoryIntoWorkspace(
+              workspace,
+              history.entries,
+              savedSelection
+            )
+          );
+        });
+        return new Set(history.entries.map((entry) => entry.id));
+      })
+      .catch(() => new Set<string>());
 
     void getLoadedCodexThreads(deviceConnection)
       .then((loadedThreads) => {
@@ -1732,6 +1783,11 @@ export function useWebConsoleController() {
       .catch(() => {
         // Older app-server builds may not expose thread/loaded/list yet.
       });
+
+    const [sessionThreadIds, historyThreadIds] = await Promise.all([
+      sessionsPromise,
+      historyPromise
+    ]);
 
     return { historyThreadIds, sessionThreadIds };
   }
@@ -1817,6 +1873,7 @@ export function useWebConsoleController() {
   }
 
   function deleteSavedDevice(deviceId: string) {
+    deviceHydrationVersionsRef.current.delete(deviceId);
     persistDevices(savedDevices.filter((device) => device.id !== deviceId));
     closeDeviceStream(deviceId);
     setDevicePresence((previous) => {
@@ -2873,6 +2930,7 @@ export function useWebConsoleController() {
     setReasoningEffort,
     setSidebarCollapsed,
     showThreadHoverPreview,
+    sidebarSyncing,
     sidebarCollapsed,
     sidebarResizing,
     startSidebarResize,

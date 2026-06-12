@@ -65,29 +65,35 @@ function LoginShell(props?: {
         <span className="cn-login-kicker">CodexNext</span>
         <h1>登录控制台</h1>
         <p>先完成登录，再进入 relay 控制平面。</p>
-        <label className="cn-login-field">
-          <span>访问口令</span>
-          <input
-            autoComplete="current-password"
-            type="password"
-            value={props?.password ?? ""}
-            onChange={(event) => props?.onChange?.(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && props?.password?.trim()) {
-                void props.onSubmit?.();
-              }
-            }}
-          />
-        </label>
-        {props?.error ? <p className="cn-login-error">{props.error}</p> : null}
-        <button
-          className="cn-login-submit"
-          type="button"
-          disabled={!props?.password?.trim() || props?.submitting}
-          onClick={() => void props?.onSubmit?.()}
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!props?.password?.trim()) {
+              return;
+            }
+            void props.onSubmit?.();
+          }}
         >
-          {props?.submitting ? "登录中…" : "登录"}
-        </button>
+          <label className="cn-login-field" htmlFor="cn-login-password">
+            <span>访问口令</span>
+            <input
+              id="cn-login-password"
+              name="password"
+              autoComplete="current-password"
+              type="password"
+              value={props?.password ?? ""}
+              onChange={(event) => props?.onChange?.(event.target.value)}
+            />
+          </label>
+          {props?.error ? <p className="cn-login-error">{props.error}</p> : null}
+          <button
+            className="cn-login-submit"
+            type="submit"
+            disabled={!props?.password?.trim() || props?.submitting}
+          >
+            {props?.submitting ? "登录中…" : "登录"}
+          </button>
+        </form>
       </section>
     </main>
   );
