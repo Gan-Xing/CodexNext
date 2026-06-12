@@ -89,9 +89,9 @@ function SidebarThreadRow(
           </span>
         )}
       </button>
-      {pinnedVariant ? (
+      <div className="cn-thread-actions">
         <button
-          className="cn-thread-pin-inline"
+          className={props.item.pinned ? "cn-thread-action active" : "cn-thread-action"}
           type="button"
           aria-label={props.item.pinned ? "取消置顶" : "置顶"}
           onClick={() => {
@@ -101,32 +101,18 @@ function SidebarThreadRow(
         >
           <CodexIcon name="pin" />
         </button>
-      ) : (
-        <div className="cn-thread-actions">
-          <button
-            className={props.item.pinned ? "cn-thread-action active" : "cn-thread-action"}
-            type="button"
-            aria-label={props.item.pinned ? "取消置顶" : "置顶"}
-            onClick={() => {
-              props.onHideThreadPreview();
-              props.onTogglePinnedThread(props.item.threadId);
-            }}
-          >
-            <CodexIcon name="pin" />
-          </button>
-          <button
-            className="cn-thread-action"
-            type="button"
-            aria-label="归档"
-            onClick={() => {
-              props.onHideThreadPreview();
-              props.onArchiveThread(props.item);
-            }}
-          >
-            <CodexIcon name="archive" />
-          </button>
-        </div>
-      )}
+        <button
+          className="cn-thread-action"
+          type="button"
+          aria-label="归档"
+          onClick={() => {
+            props.onHideThreadPreview();
+            props.onArchiveThread(props.item);
+          }}
+        >
+          <CodexIcon name="archive" />
+        </button>
+      </div>
     </article>
   );
 }
@@ -324,8 +310,10 @@ export function ProjectThreadGroup(props: {
               type="button"
               onClick={() => setExpandedItems((value) => !value)}
             >
-              {expandedItems ? "折叠显示" : "展开显示"}
-              {!expandedItems && hiddenCount > 0 ? ` · ${hiddenCount}` : ""}
+              <span className="cn-thread-list-toggle-label">
+                {expandedItems ? "折叠显示" : "展开显示"}
+                {!expandedItems && hiddenCount > 0 ? ` · ${hiddenCount}` : ""}
+              </span>
             </button>
           ) : null}
         </div>
