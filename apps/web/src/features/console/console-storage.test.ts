@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   hasRelayOnlyMigrationNoticeSeen,
+  sessionSelectionStorageKey,
   writeConsoleStorageItem,
   writeProjectSidebarPrefsStorage,
   writeRelayOnlyMigrationNoticeSeen,
   writeSavedDevicesStorage,
+  writeSessionSelectionStorage,
   writeSidebarWidthStorage,
   writeThreadSidebarPrefsStorage
 } from "./console-storage";
@@ -97,6 +99,32 @@ describe("console localStorage helpers", () => {
     );
     expect(storage.getItem(sidebarWidthStorageKey)).toBe("311");
     expect(hasRelayOnlyMigrationNoticeSeen(storage)).toBe(true);
+  });
+
+  it("round-trips and sanitizes persisted session selections", () => {
+    writeSessionSelectionStorage(storage, {
+      "relay|http://relay.local|device_1": {
+        currentSessionId: "session_1",
+        selectedHistoryKey: "thread_1::/repo"
+      },
+      "relay|http://relay.local|device_2": {
+        currentSessionId: "session-token-must-not-persist",
+        selectedHistoryKey: "thread_2::/repo"
+      }
+    });
+
+    expect(storage.getItem(sessionSelectionStorageKey)).toBe(
+      JSON.stringify({
+        "relay|http://relay.local|device_1": {
+          currentSessionId: "session_1",
+          selectedHistoryKey: "thread_1::/repo"
+        },
+        "relay|http://relay.local|device_2": {
+          currentSessionId: null,
+          selectedHistoryKey: "thread_2::/repo"
+        }
+      })
+    );
   });
 });
 

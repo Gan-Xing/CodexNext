@@ -14,10 +14,18 @@ import {
   type ThreadSidebarPrefs
 } from "../sessions/session-utils";
 
+export const sessionSelectionStorageKey = "codexnext.sessionSelection.v1";
+
+export interface SessionSelectionState {
+  currentSessionId: string | null;
+  selectedHistoryKey: string | null;
+}
+
 export const consoleLocalStorageKeys = [
   savedDevicesStorageKey,
   threadSidebarPrefsStorageKey,
   projectSidebarPrefsStorageKey,
+  sessionSelectionStorageKey,
   sidebarWidthStorageKey,
   relayOnlyMigrationNoticeStorageKey
 ] as const;
@@ -107,6 +115,70 @@ export function writeProjectSidebarPrefsStorage(
   return safePrefs;
 }
 
+export function readSessionSelectionStorage(): Record<string, SessionSelectionState> {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const raw = window.localStorage.getItem(sessionSelectionStorageKey);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(([scope, value]) => isSafePreferenceString(scope) && isRecord(value))
+        .map(([scope, value]) => {
+          const record = value as Record<string, unknown>;
+          const currentSessionId =
+            typeof record.currentSessionId === "string" &&
+            isSafePreferenceString(record.currentSessionId)
+              ? record.currentSessionId
+              : null;
+          const selectedHistoryKey =
+            typeof record.selectedHistoryKey === "string" &&
+            isSafePreferenceString(record.selectedHistoryKey)
+              ? record.selectedHistoryKey
+              : null;
+          return [scope, { currentSessionId, selectedHistoryKey }] as const;
+        })
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function writeSessionSelectionStorage(
+  storage: Storage,
+  selectionsByScope: Record<string, SessionSelectionState>
+): Record<string, SessionSelectionState> {
+  const safeSelections = Object.fromEntries(
+    Object.entries(selectionsByScope)
+      .filter(([scope]) => isSafePreferenceString(scope))
+      .map(([scope, selection]) => [
+        scope,
+        {
+          currentSessionId:
+            typeof selection.currentSessionId === "string" &&
+            isSafePreferenceString(selection.currentSessionId)
+              ? selection.currentSessionId
+              : null,
+          selectedHistoryKey:
+            typeof selection.selectedHistoryKey === "string" &&
+            isSafePreferenceString(selection.selectedHistoryKey)
+              ? selection.selectedHistoryKey
+              : null
+        }
+      ])
+  );
+  writeConsoleStorageItem(
+    storage,
+    sessionSelectionStorageKey,
+    JSON.stringify(safeSelections)
+  );
+  return safeSelections;
+}
+
 export function writeConsoleStorageItem(
   storage: Storage,
   key: string,
@@ -172,6 +244,10 @@ function safeOptionalString(value: string | null | undefined): string | null | u
 
 function isSafePreferenceString(value: string): boolean {
   return value.trim().length > 0 && !containsSensitiveStorageMarker(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function containsSensitiveStorageMarker(value: string): boolean {

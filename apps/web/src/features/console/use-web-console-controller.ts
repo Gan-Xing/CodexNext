@@ -69,6 +69,8 @@ import {
 } from "./console-utils";
 import {
   hasRelayOnlyMigrationNoticeSeen,
+  readSessionSelectionStorage,
+  writeSessionSelectionStorage,
   writeProjectSidebarPrefsStorage,
   writeRelayOnlyMigrationNoticeSeen,
   writeSavedDevicesStorage,
@@ -241,6 +243,9 @@ export function useWebConsoleController() {
   const [savedDevices, setSavedDevices] = useState<SavedDevice[]>([]);
   const [threadSidebarPrefs, setThreadSidebarPrefs] = useState<Record<string, ThreadSidebarPrefs>>({});
   const [projectSidebarPrefs, setProjectSidebarPrefs] = useState<Record<string, ProjectSidebarPrefs>>({});
+  const [sessionSelections, setSessionSelections] = useState<
+    Record<string, { currentSessionId: string | null; selectedHistoryKey: string | null }>
+  >({});
   const [devicePresence, setDevicePresence] = useState<Record<string, DevicePresenceState>>({});
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [deviceName, setDeviceName] = useState("");
@@ -544,6 +549,7 @@ export function useWebConsoleController() {
     const storedSidebarWidth = readSidebarWidth(clampSidebarWidth);
     const storedThreadPrefs = readThreadSidebarPrefs();
     const storedProjectPrefs = readProjectSidebarPrefs();
+    const storedSessionSelections = readSessionSelectionStorage();
     const params = new URLSearchParams(window.location.search);
     const queryDeviceId = params.get("deviceId");
 
@@ -553,6 +559,7 @@ export function useWebConsoleController() {
     }
     setThreadSidebarPrefs(storedThreadPrefs);
     setProjectSidebarPrefs(storedProjectPrefs);
+    setSessionSelections(storedSessionSelections);
 
     if (droppedLegacyDirectDevices > 0) {
       const noticeSeen = hasRelayOnlyMigrationNoticeSeen(window.localStorage);
@@ -769,6 +776,36 @@ export function useWebConsoleController() {
   }, [currentSessionId]);
 
   useEffect(() => {
+    if (!connection.deviceId) {
+      return;
+    }
+    const nextSelection = {
+      currentSessionId:
+        currentSessionId && !isHistoryPreviewSessionId(currentSessionId)
+          ? currentSessionId
+          : null,
+      selectedHistoryKey
+    };
+    const existing = sessionSelections[sidebarPrefsScopeKey];
+    if (
+      existing?.currentSessionId === nextSelection.currentSessionId &&
+      existing?.selectedHistoryKey === nextSelection.selectedHistoryKey
+    ) {
+      return;
+    }
+    persistSessionSelections((previous) => ({
+      ...previous,
+      [sidebarPrefsScopeKey]: nextSelection
+    }));
+  }, [
+    connection.deviceId,
+    currentSessionId,
+    selectedHistoryKey,
+    sessionSelections,
+    sidebarPrefsScopeKey
+  ]);
+
+  useEffect(() => {
     if (!connection.deviceId || !connection.sessionToken) {
       return;
     }
@@ -942,6 +979,19 @@ export function useWebConsoleController() {
     setProjectSidebarPrefs((previous) => {
       const next = resolveStateUpdater(previous, updater);
       return writeProjectSidebarPrefsStorage(window.localStorage, next);
+    });
+  }
+
+  function persistSessionSelections(
+    updater:
+      | Record<string, { currentSessionId: string | null; selectedHistoryKey: string | null }>
+      | ((
+          previous: Record<string, { currentSessionId: string | null; selectedHistoryKey: string | null }>
+        ) => Record<string, { currentSessionId: string | null; selectedHistoryKey: string | null }>)
+  ) {
+    setSessionSelections((previous) => {
+      const next = resolveStateUpdater(previous, updater);
+      return writeSessionSelectionStorage(window.localStorage, next);
     });
   }
 
@@ -1355,11 +1405,28 @@ export function useWebConsoleController() {
       listCodexHistory(deviceConnection)
     ]);
     const latestSession = [...loadedSessions.sessions].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    const selectionScopeKey = relayThreadPrefsScope(
+      deviceConnection.relayUrl,
+      deviceConnection.deviceId || "unbound"
+    );
+    const savedSelection = sessionSelections[selectionScopeKey] ?? null;
+    const restoredSessionId =
+      savedSelection?.currentSessionId &&
+      loadedSessions.sessions.some((session) => session.sessionId === savedSelection.currentSessionId)
+        ? savedSelection.currentSessionId
+        : null;
+    const restoredHistoryEntry =
+      savedSelection?.selectedHistoryKey
+        ? history.entries.find(
+            (entry) => codexHistoryKey(entry) === savedSelection.selectedHistoryKey
+          ) ?? null
+        : null;
 
     patchDeviceWorkspace(device.id, (workspace) => ({
       ...workspace,
       codexHistory: history.entries,
-      currentSessionId: workspace.currentSessionId ?? latestSession?.sessionId ?? null,
+      currentSessionId:
+        workspace.currentSessionId ?? restoredSessionId ?? latestSession?.sessionId ?? null,
       cwd: workspace.cwd || latestSession?.cwd || "",
       directoryError: null,
       directoryLoading: true,
@@ -1384,6 +1451,18 @@ export function useWebConsoleController() {
       .catch(() => {
         // Older app-server builds may not expose thread/loaded/list yet.
       });
+
+    if (
+      restoredHistoryEntry &&
+      !deviceWorkspaces[device.id]?.currentSessionId &&
+      !deviceWorkspaces[device.id]?.selectedHistoryKey
+    ) {
+      void hydrateHistorySelection(restoredHistoryEntry, {
+        deviceId: device.id,
+        deviceConnection,
+        revealMain: false
+      });
+    }
 
     const directoryPath = activeWorkspace?.cwd || latestSession?.cwd || undefined;
     try {
@@ -1593,26 +1672,35 @@ export function useWebConsoleController() {
     }
   }
 
-  async function selectHistory(entry: LocalCodexHistoryEntry) {
-    if (!connected) {
-      setActiveSheet("device");
+  async function hydrateHistorySelection(
+    entry: LocalCodexHistoryEntry,
+    input?: {
+      deviceConnection?: AgentConnection;
+      deviceId?: string | null;
+      revealMain?: boolean;
+    }
+  ) {
+    const deviceId = input?.deviceId ?? selectedDeviceIdRef.current;
+    const deviceConnection = input?.deviceConnection ?? connection;
+    if (!deviceId) {
       return;
     }
     const key = codexHistoryKey(entry);
     const previewSession = makeHistoryPreviewSession(entry);
-    const threadIsLoaded = entry.loaded || loadedThreadIds.includes(entry.id);
+    const workspace = deviceWorkspaces[deviceId];
+    const threadIsLoaded = entry.loaded || workspace?.loadedThreadIds.includes(entry.id) || false;
     setError(null);
-    patchActiveWorkspace((workspace) =>
+    patchDeviceWorkspace(deviceId, (currentWorkspace) =>
       rememberSessionHistoryOrigin(
         upsertSessionInWorkspace(
           {
-            ...workspace,
+            ...currentWorkspace,
             selectedHistoryKey: key,
             historyLoadingKey: threadIsLoaded ? null : key,
             currentSessionId: previewSession.sessionId,
             cwd: entry.cwd,
             resumeStates: {
-              ...workspace.resumeStates,
+              ...currentWorkspace.resumeStates,
               [previewSession.sessionId]: isPreviewOnlyHistoryEntry(entry) ? "missing" : "history"
             }
           },
@@ -1622,8 +1710,10 @@ export function useWebConsoleController() {
         entry.id
       )
     );
-    setActiveSheet(null);
-    revealMainOnMobile();
+    if (input?.revealMain ?? true) {
+      setActiveSheet(null);
+      revealMainOnMobile();
+    }
     let showedCachedPage = false;
     try {
       const cachedRecord = historyPageCacheRef.current.get(key) ?? null;
@@ -1632,14 +1722,14 @@ export function useWebConsoleController() {
 
       if (cachedRecord) {
         showedCachedPage = true;
-        patchActiveWorkspace((workspace) =>
+        patchDeviceWorkspace(deviceId, (currentWorkspace) =>
           setSessionHistoryPageState(
             hydrateSessionFromHistory(
               {
-                ...workspace,
+                ...currentWorkspace,
                 historyLoadingKey: null,
                 resumeStates: {
-                  ...workspace.resumeStates,
+                  ...currentWorkspace.resumeStates,
                   [previewSession.sessionId]: isPreviewOnlyHistoryEntry(cachedRecord.page.entry)
                     ? "missing"
                     : "history"
@@ -1662,7 +1752,7 @@ export function useWebConsoleController() {
         return;
       }
 
-      const page = await getCodexHistoryTurns(connection, {
+      const page = await getCodexHistoryTurns(deviceConnection, {
         id: entry.id,
         cwd: entry.cwd,
         limit: 40
@@ -1671,14 +1761,14 @@ export function useWebConsoleController() {
         fetchedAt: Date.now(),
         page
       });
-      patchActiveWorkspace((workspace) =>
+      patchDeviceWorkspace(deviceId, (currentWorkspace) =>
         setSessionHistoryPageState(
           hydrateSessionFromHistory(
             {
-              ...workspace,
+              ...currentWorkspace,
               historyLoadingKey: null,
               resumeStates: {
-                ...workspace.resumeStates,
+                ...currentWorkspace.resumeStates,
                 [previewSession.sessionId]: isPreviewOnlyHistoryEntry(page.entry) ? "missing" : "history"
               }
             },
@@ -1694,17 +1784,17 @@ export function useWebConsoleController() {
         )
       );
     } catch (err) {
-      patchActiveWorkspace((workspace) =>
+      patchDeviceWorkspace(deviceId, (currentWorkspace) =>
         showedCachedPage
           ? {
-              ...workspace,
+              ...currentWorkspace,
               historyLoadingKey: null
             }
           : {
-              ...workspace,
+              ...currentWorkspace,
               historyLoadingKey: null,
               resumeStates: {
-                ...workspace.resumeStates,
+                ...currentWorkspace.resumeStates,
                 [previewSession.sessionId]: isMissingHistoryCwdError(err) ? "missing" : "failed"
               }
             }
@@ -1713,6 +1803,14 @@ export function useWebConsoleController() {
         setError(formatConsoleError(err));
       }
     }
+  }
+
+  async function selectHistory(entry: LocalCodexHistoryEntry) {
+    if (!connected) {
+      setActiveSheet("device");
+      return;
+    }
+    await hydrateHistorySelection(entry, { revealMain: true });
   }
 
   async function resumeHistorySessionForMessage(
