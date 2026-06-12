@@ -2,7 +2,7 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
-import type { LocalReasoningEffort, LocalSessionStatus, ThreadGoal } from "@codexnext/protocol";
+import type { LocalReasoningEffort, ThreadGoal } from "@codexnext/protocol";
 import {
   agentFetch,
   archiveCodexHistory,
@@ -131,6 +131,10 @@ import {
   type ThreadSidebarNotice,
   type ThreadSidebarPrefs
 } from "../sessions/session-utils";
+import {
+  decideMessageHistoryReconciliation,
+  isReconciledTerminalSession
+} from "./message-reconciliation";
 import type { CodexIconName } from "../../components/DesignLab";
 
 export type ActiveSheet = "device" | "session" | "goal" | "summary" | null;
@@ -199,14 +203,6 @@ const MESSAGE_RECONCILE_MAX_ATTEMPTS = 720;
 const RELAY_CONFIGURED = Boolean(process.env.NEXT_PUBLIC_CODEXNEXT_RELAY_URL);
 const RELAY_FULL_ACCESS_ENABLED =
   process.env.NEXT_PUBLIC_CODEXNEXT_DISABLE_RELAY_FULL_ACCESS !== "1";
-
-const TERMINAL_SESSION_STATUSES = new Set<LocalSessionStatus>([
-  "idle",
-  "completed",
-  "failed",
-  "interrupted",
-  "error"
-]);
 
 interface RelayBootstrapConfig {
   sessionToken: string;
@@ -2354,7 +2350,7 @@ export function useWebConsoleController() {
         return;
       }
 
-      let historyHasResponse = false;
+      let shouldStopReconciliation = false;
       if (targetSession.threadId) {
         const page = await getCodexHistoryTurns(request.connection, {
           id: targetSession.threadId,
@@ -2362,11 +2358,12 @@ export function useWebConsoleController() {
           limit: 40
         });
         const pageKey = codexHistoryKey(page.entry);
-        historyHasResponse = historyContainsResponseForMessage(
-          page.messages,
-          request.messageText,
-          request.startedAt
-        );
+        const historyDecision = decideMessageHistoryReconciliation({
+          messages: page.messages,
+          request,
+          session: targetSession
+        });
+        shouldStopReconciliation = historyDecision.shouldStopReconciliation;
         historyPageCacheRef.current.set(pageKey, {
           fetchedAt: Date.now(),
           page
@@ -2374,12 +2371,14 @@ export function useWebConsoleController() {
         patchDeviceWorkspace(request.deviceId, (currentWorkspace) => {
           let next = upsertSessionInWorkspace(currentWorkspace, targetSession);
           next = rememberSessionHistoryOrigin(next, targetSession.sessionId, page.entry.id);
-          next = hydrateSessionFromHistory(next, targetSession.sessionId, page.messages);
-          next = setSessionHistoryPageState(next, targetSession.sessionId, {
-            loadingOlder: false,
-            olderCursor: page.nextCursor,
-            sourceKey: pageKey
-          });
+          if (historyDecision.shouldApplyHistory) {
+            next = hydrateSessionFromHistory(next, targetSession.sessionId, page.messages);
+            next = setSessionHistoryPageState(next, targetSession.sessionId, {
+              loadingOlder: false,
+              olderCursor: page.nextCursor,
+              sourceKey: pageKey
+            });
+          }
           const turnId =
             targetSession.currentTurnId ?? targetSession.activeTurnId ?? request.turnId;
           return markOptimisticMessageSent(next, request.clientMessageId, {
@@ -2400,9 +2399,10 @@ export function useWebConsoleController() {
             }
           );
         });
+        shouldStopReconciliation = isReconciledTerminalSession(targetSession, request);
       }
 
-      if (isReconciledTerminalSession(targetSession, request) || historyHasResponse) {
+      if (shouldStopReconciliation) {
         clearMessageReconciliation(request);
         return;
       }
@@ -3367,83 +3367,15 @@ function hasLiveCompletionEvidence(
   workspace: DeviceWorkspace,
   request: MessageReconciliationRequest
 ): boolean {
-  if (
-    request.turnId &&
-    workspace.events.some(
-      (event) => event.type === "turn.completed" && event.turnId === request.turnId
-    )
-  ) {
-    return true;
-  }
-  const session =
-    workspace.sessions.find((item) => item.sessionId === request.sessionId) ?? null;
-  if (session && isReconciledTerminalSession(session, request)) {
-    return true;
-  }
   return Boolean(
     request.turnId &&
       workspace.chatItems.some(
         (item) =>
           item.turnId === request.turnId &&
-          item.role === "assistant" &&
+          (item.role === "assistant" || item.role === "command") &&
           item.status === "complete"
       )
   );
-}
-
-function isReconciledTerminalSession(
-  session: LocalSessionSummary,
-  request: MessageReconciliationRequest
-): boolean {
-  return (
-    TERMINAL_SESSION_STATUSES.has(session.status) &&
-    !session.activeTurnId &&
-    sessionBelongsToReconciledTurn(session, request)
-  );
-}
-
-function sessionBelongsToReconciledTurn(
-  session: LocalSessionSummary,
-  request: MessageReconciliationRequest
-): boolean {
-  if (request.turnId) {
-    return session.currentTurnId === request.turnId || session.activeTurnId === request.turnId;
-  }
-  return session.updatedAt >= request.startedAt - 30_000;
-}
-
-function historyContainsResponseForMessage(
-  messages: LocalCodexHistoryPageResponse["messages"],
-  messageText: string,
-  startedAt: number
-): boolean {
-  const normalizedMessage = normalizeRenderableText(messageText);
-  const minMessageTs = startedAt - 30_000;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message || message.role !== "user") {
-      continue;
-    }
-    if (normalizeRenderableText(message.text) !== normalizedMessage) {
-      continue;
-    }
-    const timestamp = Date.parse(message.ts);
-    if (Number.isFinite(timestamp) && timestamp < minMessageTs) {
-      continue;
-    }
-    return messages
-      .slice(index + 1)
-      .some(
-        (item) =>
-          (item.role === "assistant" || item.role === "command") &&
-          normalizeRenderableText(item.text).length > 0
-      );
-  }
-  return false;
-}
-
-function normalizeRenderableText(value: string): string {
-  return value.trim().replace(/\s+/g, " ");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
