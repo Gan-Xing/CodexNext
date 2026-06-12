@@ -32,6 +32,9 @@ export interface LocalServerOptions {
   codexBin: string;
   eventLimit?: number;
   clientFactory?: CodexClientFactory;
+  historySource?: "auto" | "disabled";
+  historySessionsRoot?: string;
+  historyStateDbPath?: string;
 }
 
 export interface LocalServerHandle {
@@ -49,7 +52,12 @@ export function createLocalServer(options: LocalServerOptions): LocalServerHandl
     approvalTimeoutMs: options.approvalTimeoutMs,
     codexBin: options.codexBin,
     ...(options.eventLimit !== undefined ? { eventLimit: options.eventLimit } : {}),
-    ...(options.clientFactory ? { clientFactory: options.clientFactory } : {})
+    ...(options.clientFactory ? { clientFactory: options.clientFactory } : {}),
+    ...(options.historySource ? { historySource: options.historySource } : {}),
+    ...(options.historySessionsRoot
+      ? { historySessionsRoot: options.historySessionsRoot }
+      : {}),
+    ...(options.historyStateDbPath ? { historyStateDbPath: options.historyStateDbPath } : {})
   });
 
   const server = http.createServer((request, response) => {

@@ -1,0 +1,420 @@
+import os from "node:os";
+import path from "node:path";
+import { readFile, readdir, stat } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
+import type {
+  LocalCodexHistoryDetailResponse,
+  LocalCodexHistoryEntry,
+  LocalCodexHistoryMessage
+} from "@codexnext/protocol";
+
+interface CodexHistoryStoreOptions {
+  sessionsRoot?: string;
+  stateDbPath?: string;
+}
+
+interface HistoryThreadRow {
+  id: string;
+  rolloutPath: string;
+  cwd: string;
+  title: string;
+  source: string;
+  firstUserMessage: string;
+  preview: string;
+  createdAt: number | null;
+  updatedAt: number | null;
+  createdAtMs: number | null;
+  updatedAtMs: number | null;
+}
+
+export class CodexHistoryStore {
+  private database: DatabaseSync | null = null;
+  private resolvedStateDbPath: string | null | undefined;
+
+  public constructor(private readonly options: CodexHistoryStoreOptions = {}) {}
+
+  public async listEntries(input: {
+    limit: number;
+    searchTerm?: string | null;
+    loadedThreadIds?: Set<string>;
+  }): Promise<LocalCodexHistoryEntry[] | null> {
+    const database = await this.getDatabase();
+    if (!database) {
+      return null;
+    }
+
+    const normalizedLimit = Math.max(1, Math.min(200, Math.floor(input.limit)));
+    const normalizedSearch = normalizeSearchTerm(input.searchTerm);
+    const params: Array<string | number> = [];
+    let query = `
+      SELECT
+        id,
+        rollout_path AS rolloutPath,
+        cwd,
+        title,
+        source,
+        first_user_message AS firstUserMessage,
+        preview,
+        created_at AS createdAt,
+        updated_at AS updatedAt,
+        created_at_ms AS createdAtMs,
+        updated_at_ms AS updatedAtMs
+      FROM threads
+      WHERE archived = 0
+    `;
+
+    if (normalizedSearch) {
+      const searchValue = `%${escapeLikePattern(normalizedSearch.toLowerCase())}%`;
+      query += `
+        AND (
+          LOWER(title) LIKE ? ESCAPE '\\'
+          OR LOWER(first_user_message) LIKE ? ESCAPE '\\'
+          OR LOWER(preview) LIKE ? ESCAPE '\\'
+          OR LOWER(cwd) LIKE ? ESCAPE '\\'
+        )
+      `;
+      params.push(searchValue, searchValue, searchValue, searchValue);
+    }
+
+    query += `
+      ORDER BY COALESCE(updated_at_ms, updated_at * 1000) DESC, id DESC
+      LIMIT ?
+    `;
+    params.push(normalizedLimit);
+
+    const rows = database.prepare(query).all(...params) as unknown as HistoryThreadRow[];
+    const cwdExistsCache = new Map<string, Promise<boolean>>();
+    return Promise.all(
+      rows.map((row) => rowToHistoryEntry(row, input.loadedThreadIds, cwdExistsCache))
+    );
+  }
+
+  public async readEntry(
+    threadId: string,
+    loadedThreadIds?: Set<string>
+  ): Promise<LocalCodexHistoryEntry | null> {
+    const database = await this.getDatabase();
+    if (!database) {
+      return null;
+    }
+    const row = database
+      .prepare(
+        `
+          SELECT
+            id,
+            rollout_path AS rolloutPath,
+            cwd,
+            title,
+            source,
+            first_user_message AS firstUserMessage,
+            preview,
+            created_at AS createdAt,
+            updated_at AS updatedAt,
+            created_at_ms AS createdAtMs,
+            updated_at_ms AS updatedAtMs
+          FROM threads
+          WHERE id = ?
+          LIMIT 1
+        `
+      )
+      .get(threadId) as HistoryThreadRow | undefined;
+    if (!row) {
+      return null;
+    }
+    return rowToHistoryEntry(row, loadedThreadIds);
+  }
+
+  public async readDetail(
+    threadId: string,
+    loadedThreadIds?: Set<string>
+  ): Promise<LocalCodexHistoryDetailResponse | null> {
+    const database = await this.getDatabase();
+    if (!database) {
+      return null;
+    }
+    const row = database
+      .prepare(
+        `
+          SELECT
+            id,
+            rollout_path AS rolloutPath,
+            cwd,
+            title,
+            source,
+            first_user_message AS firstUserMessage,
+            preview,
+            created_at AS createdAt,
+            updated_at AS updatedAt,
+            created_at_ms AS createdAtMs,
+            updated_at_ms AS updatedAtMs
+          FROM threads
+          WHERE id = ?
+          LIMIT 1
+        `
+      )
+      .get(threadId) as HistoryThreadRow | undefined;
+    if (!row) {
+      return null;
+    }
+
+    const [entry, messages] = await Promise.all([
+      rowToHistoryEntry(row, loadedThreadIds),
+      this.readRolloutMessages(row)
+    ]);
+    if (!messages || messages.length === 0) {
+      return null;
+    }
+
+    return {
+      entry,
+      messages
+    };
+  }
+
+  public close(): void {
+    this.database?.close();
+    this.database = null;
+  }
+
+  private async getDatabase(): Promise<DatabaseSync | null> {
+    if (this.database) {
+      return this.database;
+    }
+    const stateDbPath = await this.resolveStateDbPath();
+    if (!stateDbPath) {
+      return null;
+    }
+    this.database = new DatabaseSync(stateDbPath, { readOnly: true });
+    return this.database;
+  }
+
+  private async resolveStateDbPath(): Promise<string | null> {
+    if (this.resolvedStateDbPath !== undefined) {
+      return this.resolvedStateDbPath;
+    }
+
+    if (this.options.stateDbPath) {
+      this.resolvedStateDbPath = await fileExists(this.options.stateDbPath)
+        ? this.options.stateDbPath
+        : null;
+      return this.resolvedStateDbPath;
+    }
+
+    const codexHome = path.join(os.homedir(), ".codex");
+    try {
+      const entries = await readdir(codexHome, { withFileTypes: true });
+      const candidates = entries
+        .filter(
+          (entry) => entry.isFile() && /^state_(\d+)\.sqlite$/.test(entry.name)
+        )
+        .map((entry) => {
+          const match = entry.name.match(/^state_(\d+)\.sqlite$/);
+          return {
+            version: Number(match?.[1] ?? 0),
+            fullPath: path.join(codexHome, entry.name)
+          };
+        })
+        .sort((left, right) => right.version - left.version);
+      this.resolvedStateDbPath = candidates[0]?.fullPath ?? null;
+    } catch {
+      this.resolvedStateDbPath = null;
+    }
+
+    return this.resolvedStateDbPath;
+  }
+
+  private async readRolloutMessages(
+    row: HistoryThreadRow
+  ): Promise<LocalCodexHistoryMessage[] | null> {
+    const rolloutPath = path.isAbsolute(row.rolloutPath)
+      ? row.rolloutPath
+      : path.join(
+          this.options.sessionsRoot ?? path.join(os.homedir(), ".codex", "sessions"),
+          row.rolloutPath
+        );
+    if (!(await fileExists(rolloutPath))) {
+      return null;
+    }
+
+    const contents = await readFile(rolloutPath, "utf8");
+    const lines = contents.split(/\r?\n/);
+    const messages: LocalCodexHistoryMessage[] = [];
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index]?.trim();
+      if (!line) {
+        continue;
+      }
+
+      let record: Record<string, unknown>;
+      try {
+        record = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+
+      if (record.type !== "event_msg" || !isRecord(record.payload)) {
+        continue;
+      }
+
+      const timestamp = normalizeIsoTimestamp(record.timestamp, row.updatedAtMs, row.updatedAt);
+      switch (record.payload.type) {
+        case "user_message": {
+          const text = typeof record.payload.message === "string" ? record.payload.message : "";
+          const message = makeHistoryMessage(`rollout-user-${index}`, "user", text, timestamp);
+          if (message) {
+            messages.push(message);
+          }
+          break;
+        }
+        case "agent_message": {
+          const text = typeof record.payload.message === "string" ? record.payload.message : "";
+          const message = makeHistoryMessage(
+            `rollout-assistant-${index}`,
+            "assistant",
+            text,
+            timestamp
+          );
+          if (message) {
+            messages.push(message);
+          }
+          break;
+        }
+        case "patch_apply_end": {
+          const diffText = formatPatchApplyDiff(record.payload);
+          const message = makeHistoryMessage(`rollout-diff-${index}`, "diff", diffText, timestamp);
+          if (message) {
+            messages.push(message);
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    }
+
+    return messages;
+  }
+}
+
+async function rowToHistoryEntry(
+  row: HistoryThreadRow,
+  loadedThreadIds?: Set<string>,
+  cwdExistsCache?: Map<string, Promise<boolean>>
+): Promise<LocalCodexHistoryEntry> {
+  const cwdExists =
+    cwdExistsCache?.get(row.cwd) ??
+    directoryExists(row.cwd);
+  if (cwdExistsCache && !cwdExistsCache.has(row.cwd)) {
+    cwdExistsCache.set(row.cwd, cwdExists);
+  }
+
+  const loaded = loadedThreadIds?.has(row.id) ?? false;
+  return {
+    id: row.id,
+    cwd: row.cwd,
+    cwdExists: await cwdExists,
+    title:
+      normalizeNonEmpty(row.title) ??
+      normalizeNonEmpty(row.firstUserMessage) ??
+      normalizeNonEmpty(row.preview) ??
+      "Untitled Codex thread",
+    createdAt: normalizeIsoTimestamp(undefined, row.createdAtMs, row.createdAt),
+    updatedAt: normalizeIsoTimestamp(undefined, row.updatedAtMs, row.updatedAt),
+    source: normalizeNonEmpty(row.source) ?? "unknown",
+    loaded,
+    threadStatus: loaded ? "idle" : "notLoaded"
+  };
+}
+
+function normalizeIsoTimestamp(
+  rawTimestamp: unknown,
+  timestampMs?: number | null,
+  timestampSeconds?: number | null
+): string {
+  if (typeof rawTimestamp === "string") {
+    const parsed = Date.parse(rawTimestamp);
+    if (Number.isFinite(parsed)) {
+      return new Date(parsed).toISOString();
+    }
+  }
+  if (typeof timestampMs === "number" && Number.isFinite(timestampMs) && timestampMs > 0) {
+    return new Date(timestampMs).toISOString();
+  }
+  if (
+    typeof timestampSeconds === "number" &&
+    Number.isFinite(timestampSeconds) &&
+    timestampSeconds > 0
+  ) {
+    return new Date(timestampSeconds * 1000).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+function normalizeNonEmpty(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeSearchTerm(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatPatchApplyDiff(payload: Record<string, unknown>): string {
+  if (isRecord(payload.changes) && Object.keys(payload.changes).length > 0) {
+    return JSON.stringify(payload.changes, null, 2);
+  }
+  if (typeof payload.stdout === "string" && payload.stdout.trim()) {
+    return payload.stdout;
+  }
+  return "";
+}
+
+function makeHistoryMessage(
+  id: string,
+  role: LocalCodexHistoryMessage["role"],
+  text: string,
+  ts: string
+): LocalCodexHistoryMessage | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return {
+    id,
+    role,
+    text: trimmed.slice(0, 16_000),
+    ts
+  };
+}
+
+async function directoryExists(candidatePath: string): Promise<boolean> {
+  try {
+    return (await stat(candidatePath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function fileExists(candidatePath: string): Promise<boolean> {
+  try {
+    return (await stat(candidatePath)).isFile();
+  } catch {
+    return false;
+  }
+}

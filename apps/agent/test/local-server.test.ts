@@ -1,4 +1,8 @@
 import { EventEmitter } from "node:events";
+import os from "node:os";
+import path from "node:path";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AppServerNotification,
@@ -439,6 +443,7 @@ describe("local HTTP server guards", () => {
       token: "secret",
       approvalTimeoutMs: 1_000,
       codexBin: "codex",
+      historySource: "disabled",
       clientFactory: () => new FakeCodexClient()
     });
     const address = await listen(handle, "127.0.0.1", 0);
@@ -467,6 +472,7 @@ describe("local HTTP server guards", () => {
       token: "secret",
       approvalTimeoutMs: 1_000,
       codexBin: "codex",
+      historySource: "disabled",
       clientFactory: () => new FakeCodexClient()
     });
     const address = await listen(handle, "127.0.0.1", 0);
@@ -538,6 +544,7 @@ describe("local HTTP server guards", () => {
       token: "secret",
       approvalTimeoutMs: 1_000,
       codexBin: "codex",
+      historySource: "disabled",
       clientFactory: () => fake
     });
     const address = await listen(handle, "127.0.0.1", 0);
@@ -574,7 +581,116 @@ describe("local HTTP server guards", () => {
       const loaded = await fetch(`${base}/api/codex-history/loaded?token=secret`);
       const loadedBody = await loaded.json() as { threadIds: string[] };
       expect(loaded.status).toBe(200);
-      expect(fake.threadLoadedListCalls).toBe(1);
+      expect(fake.threadLoadedListCalls).toBe(0);
+      expect(loadedBody.threadIds).toEqual([]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("reads Codex history from the local state db and rollout files without metadata RPCs", async () => {
+    const historyFixture = await createHistoryFixture({
+      threads: [
+        {
+          id: "thread_local",
+          cwd: process.cwd(),
+          title: "本地历史线程",
+          source: "cli",
+          rolloutEvents: [
+            historyUserMessage("继续这个项目", "2026-06-11T20:22:57.299Z"),
+            historyAgentMessage("我会先查看文件结构。", "2026-06-11T20:23:11.029Z"),
+            historyPatchApplyEnd(
+              {
+                "/repo/src/app.ts": {
+                  type: "update",
+                  content: "console.log('ok')\n"
+                }
+              },
+              "2026-06-11T20:33:13.973Z"
+            )
+          ]
+        }
+      ]
+    });
+    const fake = new FakeCodexClient();
+    const handle = createLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      webOrigin: "http://127.0.0.1:3000",
+      token: "secret",
+      approvalTimeoutMs: 1_000,
+      codexBin: "codex",
+      historyStateDbPath: historyFixture.stateDbPath,
+      clientFactory: () => fake
+    });
+    const address = await listen(handle, "127.0.0.1", 0);
+    const base = `http://${address.address}:${address.port}`;
+
+    try {
+      const list = await fetch(`${base}/api/codex-history?token=secret`);
+      const listBody = await list.json() as {
+        entries: Array<{
+          cwdExists?: boolean;
+          id: string;
+          cwd: string;
+          title: string;
+          source: string;
+          loaded?: boolean;
+          threadStatus?: string | null;
+        }>;
+      };
+      expect(list.status).toBe(200);
+      expect(fake.threadListParams).toHaveLength(0);
+      expect(listBody.entries).toEqual([
+        expect.objectContaining({
+          id: "thread_local",
+          cwd: process.cwd(),
+          cwdExists: true,
+          title: "本地历史线程",
+          source: "cli",
+          loaded: false,
+          threadStatus: "notLoaded"
+        })
+      ]);
+
+      const detail = await fetch(`${base}/api/codex-history/detail?token=secret&id=thread_local`);
+      const detailBody = await detail.json() as {
+        messages: Array<{ role: string; text: string }>;
+      };
+      expect(detail.status).toBe(200);
+      expect(fake.threadReadParams).toHaveLength(0);
+      expect(detailBody.messages).toMatchObject([
+        { role: "user", text: "继续这个项目" },
+        { role: "assistant", text: "我会先查看文件结构。" },
+        { role: "diff", text: expect.stringContaining("/repo/src/app.ts") }
+      ]);
+
+      const turns = await fetch(
+        `${base}/api/codex-history/turns?token=secret&id=thread_local&limit=20&sortDirection=desc&itemsView=summary`
+      );
+      const turnsBody = await turns.json() as {
+        messages: Array<{ role: string; text: string }>;
+        nextCursor: string | null;
+      };
+      expect(turns.status).toBe(200);
+      expect(fake.threadTurnsListParams).toHaveLength(0);
+      expect(turnsBody.messages).toMatchObject([
+        { role: "user", text: "继续这个项目" },
+        { role: "assistant", text: "我会先查看文件结构。" },
+        { role: "diff", text: expect.stringContaining("/repo/src/app.ts") }
+      ]);
+      expect(turnsBody.nextCursor).toBeNull();
+
+      await handle.sessionManager.startSession({
+        cwd: process.cwd(),
+        permissionMode: "request-approval",
+        approvalPolicy: "on-request"
+      });
+
+      const loaded = await fetch(`${base}/api/codex-history/loaded?token=secret`);
+      const loadedBody = await loaded.json() as { threadIds: string[] };
+      expect(loaded.status).toBe(200);
+      expect(fake.threadLoadedListCalls).toBe(0);
       expect(loadedBody.threadIds).toEqual(["thread_1"]);
     } finally {
       await handle.close();
@@ -645,6 +761,7 @@ describe("local HTTP server guards", () => {
       token: "secret",
       approvalTimeoutMs: 1_000,
       codexBin: "codex",
+      historySource: "disabled",
       clientFactory: () => {
         clientFactoryCalls += 1;
         return fake;
@@ -939,4 +1056,169 @@ function mockRequest(headers: Record<string, string> = {}) {
 function eventPayload(event: LocalEvent | undefined): Record<string, unknown> {
   expect(event?.payload).toBeTruthy();
   return event?.payload as Record<string, unknown>;
+}
+
+async function createHistoryFixture(input: {
+  threads: Array<{
+    id: string;
+    cwd: string;
+    title: string;
+    source: string;
+    rolloutEvents: Record<string, unknown>[];
+  }>;
+}): Promise<{ rootDir: string; stateDbPath: string }> {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "codexnext-history-"));
+  const stateDbPath = path.join(rootDir, "state_5.sqlite");
+  const database = new DatabaseSync(stateDbPath);
+  database.exec(`
+    CREATE TABLE threads (
+      id TEXT PRIMARY KEY,
+      rollout_path TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      model_provider TEXT NOT NULL,
+      cwd TEXT NOT NULL,
+      title TEXT NOT NULL,
+      sandbox_policy TEXT NOT NULL,
+      approval_mode TEXT NOT NULL,
+      tokens_used INTEGER NOT NULL DEFAULT 0,
+      has_user_event INTEGER NOT NULL DEFAULT 0,
+      archived INTEGER NOT NULL DEFAULT 0,
+      archived_at INTEGER,
+      git_sha TEXT,
+      git_branch TEXT,
+      git_origin_url TEXT,
+      cli_version TEXT NOT NULL DEFAULT '',
+      first_user_message TEXT NOT NULL DEFAULT '',
+      agent_nickname TEXT,
+      agent_role TEXT,
+      memory_mode TEXT NOT NULL DEFAULT 'enabled',
+      model TEXT,
+      reasoning_effort TEXT,
+      agent_path TEXT,
+      created_at_ms INTEGER,
+      updated_at_ms INTEGER,
+      thread_source TEXT,
+      preview TEXT NOT NULL DEFAULT ''
+    );
+  `);
+
+  for (const [index, thread] of input.threads.entries()) {
+    const rolloutDir = path.join(rootDir, "sessions", "2026", "06", "12");
+    await mkdir(rolloutDir, { recursive: true });
+    const rolloutPath = path.join(rolloutDir, `rollout-${thread.id}.jsonl`);
+    await writeFile(
+      rolloutPath,
+      `${thread.rolloutEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8"
+    );
+    const firstUserMessage = thread.rolloutEvents.find(
+      (event) =>
+        event.type === "event_msg" &&
+        isRecord(event.payload) &&
+        event.payload.type === "user_message"
+    );
+    const firstMessageText =
+      firstUserMessage &&
+      isRecord(firstUserMessage.payload) &&
+      typeof firstUserMessage.payload.message === "string"
+        ? firstUserMessage.payload.message
+        : thread.title;
+    const createdAt = 1_786_000_000 + index;
+    const updatedAt = createdAt + 60;
+    database
+      .prepare(
+        `
+          INSERT INTO threads (
+            id,
+            rollout_path,
+            created_at,
+            updated_at,
+            source,
+            model_provider,
+            cwd,
+            title,
+            sandbox_policy,
+            approval_mode,
+            first_user_message,
+            created_at_ms,
+            updated_at_ms,
+            thread_source,
+            preview
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+      )
+      .run(
+        thread.id,
+        rolloutPath,
+        createdAt,
+        updatedAt,
+        thread.source,
+        "openai",
+        thread.cwd,
+        thread.title,
+        "danger-full-access",
+        "never",
+        firstMessageText,
+        createdAt * 1000,
+        updatedAt * 1000,
+        "user",
+        firstMessageText
+      );
+  }
+
+  database.close();
+  return { rootDir, stateDbPath };
+}
+
+function historyUserMessage(message: string, timestamp: string): Record<string, unknown> {
+  return {
+    timestamp,
+    type: "event_msg",
+    payload: {
+      type: "user_message",
+      message,
+      images: [],
+      local_images: [],
+      text_elements: []
+    }
+  };
+}
+
+function historyAgentMessage(message: string, timestamp: string): Record<string, unknown> {
+  return {
+    timestamp,
+    type: "event_msg",
+    payload: {
+      type: "agent_message",
+      message,
+      phase: "commentary",
+      memory_citation: null
+    }
+  };
+}
+
+function historyPatchApplyEnd(
+  changes: Record<string, unknown>,
+  timestamp: string
+): Record<string, unknown> {
+  return {
+    timestamp,
+    type: "event_msg",
+    payload: {
+      type: "patch_apply_end",
+      call_id: "call_patch",
+      turn_id: "turn_patch",
+      stdout: "Success.",
+      stderr: "",
+      success: true,
+      changes,
+      status: "completed"
+    }
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

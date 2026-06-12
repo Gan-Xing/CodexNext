@@ -31,6 +31,7 @@ import {
   RelayMethod as RelayMethodValue
 } from "@codexnext/protocol";
 import { ApprovalBridge } from "./approval-bridge.js";
+import { CodexHistoryStore } from "./codex-history-store.js";
 import { EventStore } from "./event-store.js";
 import {
   SessionManager,
@@ -44,6 +45,9 @@ export interface LocalAgentRuntimeOptions {
   codexBin: string;
   eventLimit?: number;
   clientFactory?: CodexClientFactory;
+  historySource?: "auto" | "disabled";
+  historySessionsRoot?: string;
+  historyStateDbPath?: string;
 }
 
 export interface LocalAgentRuntime {
@@ -65,6 +69,17 @@ export function createLocalAgentRuntime(
     timeoutMs: options.approvalTimeoutMs,
     eventStore
   });
+  const historyStore =
+    options.historySource === "disabled"
+      ? null
+      : new CodexHistoryStore({
+          ...(options.historySessionsRoot
+            ? { sessionsRoot: options.historySessionsRoot }
+            : {}),
+          ...(options.historyStateDbPath
+            ? { stateDbPath: options.historyStateDbPath }
+            : {})
+        });
   const sessionManager = new SessionManager({
     eventStore,
     approvalBridge,
@@ -78,6 +93,7 @@ export function createLocalAgentRuntime(
     sessionManager,
     close: async () => {
       await sessionManager.closeAll();
+      historyStore?.close();
     },
     directories: (requestedPath?: string) => listDirectories(requestedPath),
     health: async () => health(options),
@@ -122,18 +138,22 @@ export function createLocalAgentRuntime(
         case RelayMethodValue.DirectoriesList:
           return listDirectories(readOptionalPath(params));
         case RelayMethodValue.CodexHistoryList:
-          return listCodexHistory(params, sessionManager);
+          return listCodexHistory(params, sessionManager, historyStore);
         case RelayMethodValue.CodexHistoryLoaded:
           return listLoadedCodexHistoryThreads(sessionManager);
         case RelayMethodValue.CodexHistoryDetail:
-          return readCodexHistoryDetail(params, sessionManager);
+          return readCodexHistoryDetail(params, sessionManager, historyStore);
         case RelayMethodValue.CodexHistoryTurns:
-          return listCodexHistoryTurns(params, sessionManager);
+          return listCodexHistoryTurns(params, sessionManager, historyStore);
         case RelayMethodValue.CodexHistoryArchive:
           return archiveCodexHistoryThread(params, sessionManager);
         case RelayMethodValue.CodexHistoryResume: {
           const body = LocalResumeSessionSchema.parse(params ?? {});
-          const historyEntry = await readCodexHistoryEntryById(body.id, sessionManager);
+          const historyEntry = await readCodexHistoryEntryById(
+            body.id,
+            sessionManager,
+            historyStore
+          );
           const resumed = await sessionManager.resumeSessionWithInitialTurns({
             ...body,
             threadId: historyEntry.id,
@@ -245,7 +265,8 @@ async function listDirectories(
 
 async function listCodexHistory(
   params: unknown,
-  sessionManager: SessionManager
+  sessionManager: SessionManager,
+  historyStore: CodexHistoryStore | null
 ): Promise<LocalCodexHistoryResponse> {
   const limit =
     isPlainObject(params) && typeof params.limit === "number"
@@ -255,6 +276,20 @@ async function listCodexHistory(
     isPlainObject(params) && typeof params.search === "string"
       ? params.search.trim() || null
       : null;
+  const loadedThreadIds = loadedHistoryThreadIds(sessionManager);
+  if (historyStore) {
+    const directEntries = await historyStore.listEntries({
+      limit,
+      searchTerm,
+      loadedThreadIds
+    });
+    if (directEntries) {
+      return {
+        root: "local codex state db",
+        entries: directEntries.filter((entry) => !isHiddenCodexHistoryEntry(entry))
+      };
+    }
+  }
   const response = await sessionManager.listThreads({
     limit,
     sortKey: "updated_at",
@@ -276,29 +311,26 @@ async function listCodexHistory(
 async function listLoadedCodexHistoryThreads(
   sessionManager: SessionManager
 ): Promise<LocalLoadedThreadsResponse> {
-  try {
-    const response = await sessionManager.listLoadedThreads();
-    return {
-      threadIds: response.data.map((thread) => thread.id)
-    };
-  } catch {
-    return { threadIds: [] };
-  }
+  return {
+    threadIds: [...loadedHistoryThreadIds(sessionManager)]
+  };
 }
 
 async function readCodexHistoryDetail(
   params: unknown,
-  sessionManager: SessionManager
+  sessionManager: SessionManager,
+  historyStore: CodexHistoryStore | null
 ): Promise<LocalCodexHistoryDetailResponse> {
   if (!isPlainObject(params) || typeof params.id !== "string" || !params.id.trim()) {
     throw new Error("Missing codex thread id");
   }
-  return readCodexHistoryDetailById(params.id, sessionManager);
+  return readCodexHistoryDetailById(params.id, sessionManager, historyStore);
 }
 
 async function listCodexHistoryTurns(
   params: unknown,
-  sessionManager: SessionManager
+  sessionManager: SessionManager,
+  historyStore: CodexHistoryStore | null
 ): Promise<LocalCodexHistoryPageResponse> {
   if (!isPlainObject(params) || typeof params.id !== "string" || !params.id.trim()) {
     throw new Error("Missing codex thread id");
@@ -314,7 +346,7 @@ async function listCodexHistoryTurns(
   // Initial history open does not need a paged turns lookup. `thread/read`
   // already returns the full thread faster than `thread/read + thread/turns/list`.
   if (!(typeof params.cursor === "string" && params.cursor.trim())) {
-    const detail = await readCodexHistoryDetailById(params.id, sessionManager);
+    const detail = await readCodexHistoryDetailById(params.id, sessionManager, historyStore);
     return {
       entry: detail.entry,
       messages: detail.messages,
@@ -323,7 +355,7 @@ async function listCodexHistoryTurns(
     };
   }
 
-  const entry = await readCodexHistoryEntryById(params.id, sessionManager);
+  const entry = await readCodexHistoryEntryById(params.id, sessionManager, historyStore);
   const turnsPage = await sessionManager.listThreadTurns({
     threadId: params.id,
     cursor: typeof params.cursor === "string" && params.cursor.trim() ? params.cursor : null,
@@ -348,8 +380,16 @@ async function archiveCodexHistoryThread(
 
 async function readCodexHistoryDetailById(
   id: string,
-  sessionManager: SessionManager
+  sessionManager: SessionManager,
+  historyStore: CodexHistoryStore | null
 ): Promise<LocalCodexHistoryDetailResponse> {
+  const loadedThreadIds = loadedHistoryThreadIds(sessionManager);
+  if (historyStore) {
+    const detail = await historyStore.readDetail(id, loadedThreadIds);
+    if (detail) {
+      return detail;
+    }
+  }
   const response = await sessionManager.readThread({
     threadId: id,
     includeTurns: true
@@ -362,13 +402,30 @@ async function readCodexHistoryDetailById(
 
 async function readCodexHistoryEntryById(
   id: string,
-  sessionManager: SessionManager
+  sessionManager: SessionManager,
+  historyStore: CodexHistoryStore | null
 ): Promise<LocalCodexHistoryEntry> {
+  const loadedThreadIds = loadedHistoryThreadIds(sessionManager);
+  if (historyStore) {
+    const entry = await historyStore.readEntry(id, loadedThreadIds);
+    if (entry) {
+      return entry;
+    }
+  }
   const response = await sessionManager.readThread({
     threadId: id,
     includeTurns: false
   });
   return threadToHistoryEntry(response.thread);
+}
+
+function loadedHistoryThreadIds(sessionManager: SessionManager): Set<string> {
+  return new Set(
+    sessionManager
+      .summaries()
+      .map((session) => session.threadId)
+      .filter((threadId): threadId is string => Boolean(threadId))
+  );
 }
 
 async function threadToHistoryEntry(
