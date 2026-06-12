@@ -59,12 +59,19 @@ export function groupProjectThreads(
   const hiddenProjects = new Set(projectPrefs.hidden);
   const sessionThreadIds = new Set(
     sessions
-      .filter((session) => !isHistoryPreviewSessionId(session.sessionId))
+      .filter(
+        (session) =>
+          !isHistoryPreviewSessionId(session.sessionId) &&
+          !isPendingSessionId(session.sessionId)
+      )
       .map((session) => session.threadId)
   );
 
   for (const session of sessions) {
-    if (isHistoryPreviewSessionId(session.sessionId)) {
+    if (
+      isHistoryPreviewSessionId(session.sessionId) ||
+      isPendingSessionId(session.sessionId)
+    ) {
       continue;
     }
     const existing = groups.get(session.cwd);

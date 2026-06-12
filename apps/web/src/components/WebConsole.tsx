@@ -342,7 +342,13 @@ export function WebConsole() {
               onOpenSummary={openSummarySheet}
             />
           ) : (
-            <NewSessionCanvas />
+            <NewSessionCanvas
+              cwd={cwd}
+              deviceName={deviceDisplayName}
+              modelLabel={selectedModel.label}
+              permissionLabel={selectedPermission.label}
+              onOpenSetup={openNewSessionSetup}
+            />
           )}
 
           <LiveComposer

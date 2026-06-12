@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ChatItem, LocalCodexHistoryEntry, LocalSessionSummary } from "../../lib/types";
-import { makeHistoryPreviewSession, sessionTitle } from "./session-utils";
+import {
+  groupProjectThreads,
+  makeHistoryPreviewSession,
+  sessionTitle
+} from "./session-utils";
 
 function makeSession(overrides: Partial<LocalSessionSummary> = {}): LocalSessionSummary {
   return {
@@ -64,5 +68,32 @@ describe("session sidebar titles", () => {
   it("hydrates history preview sessions with the history title", () => {
     const entry = makeHistoryEntry({ title: "从历史线程恢复的标题" });
     expect(makeHistoryPreviewSession(entry).title).toBe("从历史线程恢复的标题");
+  });
+
+  it("excludes pending sessions from sidebar groups", () => {
+    const groups = groupProjectThreads(
+      [
+        makeSession({
+          sessionId: "pending-session:msg_1",
+          threadId: "pending-session:msg_1",
+          updatedAt: 10
+        }),
+        makeSession({
+          sessionId: "session_2",
+          threadId: "thread_2",
+          updatedAt: 20,
+          cwd: "/tmp/codexnext"
+        })
+      ],
+      [],
+      [],
+      { pinned: [] },
+      { hidden: [], pinned: [], renamed: {} },
+      null,
+      null
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.items.map((item) => item.id)).toEqual(["session_2"]);
   });
 });

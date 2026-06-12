@@ -5125,6 +5125,10 @@ summary {
   font-size: 0.98rem;
 }
 
+.cn-new-session-guide {
+  gap: 0.72rem;
+}
+
 .cn-flow-card span,
 .cn-no-goal-card {
   color: var(--cn-muted);
@@ -5136,6 +5140,42 @@ summary {
 .cn-no-goal-card {
   background: var(--cn-blue-soft);
   border: 0;
+}
+
+.cn-new-session-guide-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.52rem;
+}
+
+.cn-new-session-guide-pill {
+  background: var(--cn-surface);
+  border: 1px solid var(--cn-line);
+  border-radius: 14px;
+  display: grid;
+  gap: 0.14rem;
+  min-width: min(100%, 11rem);
+  padding: 0.6rem 0.72rem;
+}
+
+.cn-new-session-guide-pill b {
+  color: var(--cn-muted);
+  font-size: 0.72rem;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+}
+
+.cn-new-session-guide-pill span {
+  color: var(--cn-ink);
+  font-size: 0.88rem;
+  font-weight: 620;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.cn-new-session-guide-actions {
+  display: flex;
+  gap: 0.6rem;
 }
 
 .cn-desktop-composer {
