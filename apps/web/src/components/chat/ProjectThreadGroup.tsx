@@ -55,7 +55,6 @@ function SidebarThreadRow(
               ? "cn-thread-row cn-pinned-thread-row"
               : "cn-thread-row"
       }
-      title={props.item.title}
       onBlur={(event) => {
         if (event.relatedTarget instanceof Node) {
           if (event.currentTarget.contains(event.relatedTarget)) {
@@ -74,6 +73,7 @@ function SidebarThreadRow(
     >
       <button
         className={pinnedVariant ? "cn-thread-main cn-pinned-thread-main" : "cn-thread-main"}
+        title={props.item.title}
         type="button"
         onClick={() => {
           props.onHideThreadPreview();
@@ -100,11 +100,16 @@ function SidebarThreadRow(
           </span>
         )}
       </button>
-      <div className="cn-thread-actions">
+      <div
+        className="cn-thread-actions"
+        onFocus={props.onHideThreadPreview}
+        onMouseEnter={props.onHideThreadPreview}
+      >
         <button
           className={props.item.pinned ? "cn-thread-action active" : "cn-thread-action"}
           type="button"
-          aria-label={props.item.pinned ? "取消置顶" : "置顶"}
+          aria-label={props.item.pinned ? "取消置顶会话" : "置顶会话"}
+          title={props.item.pinned ? "取消置顶会话" : "置顶会话"}
           onClick={() => {
             props.onHideThreadPreview();
             props.onTogglePinnedThread(props.item.threadId);
@@ -115,7 +120,8 @@ function SidebarThreadRow(
         <button
           className="cn-thread-action"
           type="button"
-          aria-label="归档"
+          aria-label="归档会话"
+          title="归档会话"
           onClick={() => {
             props.onHideThreadPreview();
             props.onArchiveThread(props.item);

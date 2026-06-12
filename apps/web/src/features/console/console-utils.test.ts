@@ -7,6 +7,7 @@ import {
   formatConsoleError,
   formatRelaySessionError,
   mergeDevicePresenceResults,
+  resolveComposerResumeBlock,
   seedSavedDevicePresence
 } from "./console-utils";
 
@@ -104,6 +105,18 @@ describe("relay session error classification", () => {
         "https://relay.example"
       )
     ).toBe("socket hang up");
+  });
+});
+
+describe("composer resume guards", () => {
+  it("only blocks composer sends for missing history projects", () => {
+    expect(resolveComposerResumeBlock("missing")).toBe(
+      "原项目已不存在，无法继续这条历史。"
+    );
+    expect(resolveComposerResumeBlock("failed")).toBeNull();
+    expect(resolveComposerResumeBlock("resuming")).toBeNull();
+    expect(resolveComposerResumeBlock("history")).toBeNull();
+    expect(resolveComposerResumeBlock(null)).toBeNull();
   });
 });
 

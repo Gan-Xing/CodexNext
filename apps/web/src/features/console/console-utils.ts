@@ -1,4 +1,5 @@
 import type { LocalPermissionMode } from "../../lib/types";
+import type { ResumeState } from "../chat/chat-state";
 import type { DevicePresenceState, SavedDevice } from "../devices/device-utils";
 import { formatConnectionError, formatError } from "../../lib/format/text";
 
@@ -64,6 +65,15 @@ export function formatConsoleConnectionError(
   relayUrl: string
 ): string {
   return formatRelaySessionError(error) ?? formatConnectionError(error, relayUrl);
+}
+
+export function resolveComposerResumeBlock(
+  resumeState: ResumeState | null
+): string | null {
+  if (resumeState === "missing") {
+    return "原项目已不存在，无法继续这条历史。";
+  }
+  return null;
 }
 
 export interface PresenceRefreshResult {

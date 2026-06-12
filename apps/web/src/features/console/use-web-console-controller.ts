@@ -65,6 +65,7 @@ import {
   formatConsoleConnectionError,
   formatConsoleError,
   mergeDevicePresenceResults,
+  resolveComposerResumeBlock,
   seedSavedDevicePresence
 } from "./console-utils";
 import {
@@ -2327,11 +2328,9 @@ export function useWebConsoleController() {
       setActiveSheet("device");
       return;
     }
-    if (
-      currentResumeState === "resuming" ||
-      currentResumeState === "failed" ||
-      currentResumeState === "missing"
-    ) {
+    const resumeBlockMessage = resolveComposerResumeBlock(currentResumeState);
+    if (resumeBlockMessage) {
+      setError(resumeBlockMessage);
       return;
     }
     if (!currentSession && !cwd.trim()) {
