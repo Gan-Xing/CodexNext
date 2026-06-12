@@ -3057,7 +3057,6 @@ export function useWebConsoleController() {
   }
 
   function openDeviceSheet() {
-    revealMainOnMobile();
     setActiveSheet("device");
   }
 

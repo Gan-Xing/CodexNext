@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeferredValue, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { sessionTitle } from "../features/sessions/session-utils";
 import type {
@@ -80,9 +80,19 @@ function summarizeSidebarIssue(message: string): string {
   return firstLine.length > 34 ? `${firstLine.slice(0, 31)}...` : firstLine;
 }
 
+type MobileConsoleScreen = "directory" | "chat";
+
+function isMobileConsoleViewport(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(max-width: 900px)").matches;
+}
+
 export function WebConsole() {
+  const [mobileScreen, setMobileScreen] = useState<MobileConsoleScreen>("directory");
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const [sidebarQuery, setSidebarQuery] = useState("");
+  const sidebarSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const restoredMobileSessionRef = useRef<string | null>(null);
   const {
     activeMenu,
     activeSheet,
@@ -242,20 +252,79 @@ export function WebConsole() {
   const composerDisabledReason = missingHistoryCwd
     ? formatMissingHistoryFolderMessage(missingHistoryCwd)
     : null;
+  const frameClassName = [
+    "cn-desktop-frame",
+    "cn-app-frame",
+    sidebarCollapsed ? "sidebar-collapsed" : "",
+    sidebarResizing ? "resizing" : "",
+    `mobile-screen-${mobileScreen}`,
+    mobileSearchOpen || sidebarQuery.trim().length > 0 ? "mobile-search-open" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  useEffect(() => {
+    if (currentSession && restoredMobileSessionRef.current === null) {
+      restoredMobileSessionRef.current = currentSession.sessionId;
+      setMobileScreen("chat");
+    }
+  }, [currentSession?.sessionId]);
+
+  function showMobileChat() {
+    setMobileScreen("chat");
+    if (isMobileConsoleViewport()) {
+      setSidebarCollapsed(true);
+    }
+  }
+
+  function showMobileDirectory() {
+    clearThreadHoverPreview();
+    setMobileScreen("directory");
+    if (isMobileConsoleViewport()) {
+      setSidebarCollapsed(false);
+    }
+  }
+
+  function handleSelectHistory(entry: Parameters<typeof selectHistory>[0]) {
+    showMobileChat();
+    void selectHistory(entry);
+  }
+
+  function handleSelectSession(sessionId: string) {
+    showMobileChat();
+    selectSession(sessionId);
+  }
+
+  function handleStartProjectSession(projectCwd: string) {
+    showMobileChat();
+    startProjectSession(projectCwd);
+  }
+
+  function handleOpenNewSessionSetup() {
+    showMobileChat();
+    openNewSessionSetup();
+  }
+
+  function openMobileSearch() {
+    setMobileSearchOpen(true);
+    window.setTimeout(() => sidebarSearchInputRef.current?.focus(), 0);
+  }
+
+  function handleCollapseSidebar() {
+    if (isMobileConsoleViewport()) {
+      if (currentSession) {
+        showMobileChat();
+      }
+      return;
+    }
+    setSidebarCollapsed(true);
+  }
 
   return (
     <main className="cn-live-console">
       <div
         ref={desktopFrameRef}
-        className={
-          sidebarCollapsed
-            ? sidebarResizing
-              ? "cn-desktop-frame cn-app-frame sidebar-collapsed resizing"
-              : "cn-desktop-frame cn-app-frame sidebar-collapsed"
-            : sidebarResizing
-              ? "cn-desktop-frame cn-app-frame resizing"
-              : "cn-desktop-frame cn-app-frame"
-        }
+        className={frameClassName}
         style={desktopFrameStyle}
       >
         <nav className="cn-nav-rail" aria-label="CodexNext navigation">
@@ -282,7 +351,7 @@ export function WebConsole() {
           <button
             className="cn-rail-button"
             type="button"
-            onClick={openNewSessionSetup}
+            onClick={handleOpenNewSessionSetup}
             aria-label="新建对话"
           >
             <CodexIcon name="compose" />
@@ -303,7 +372,7 @@ export function WebConsole() {
               <span className="cn-window-dot red" />
               <span className="cn-window-dot yellow" />
               <span className="cn-window-dot green" />
-              <button type="button" aria-label="折叠会话栏" onClick={() => setSidebarCollapsed(true)}>
+              <button type="button" aria-label="折叠会话栏" onClick={handleCollapseSidebar}>
                 <CodexIcon name="collapse" />
               </button>
               <button type="button" aria-label="后退" onClick={() => window.history.back()}>
@@ -325,15 +394,44 @@ export function WebConsole() {
                 <strong>{deviceDisplayName}</strong>
               </span>
             </button>
+            <button
+              className="cn-mobile-directory-search cn-rail-button"
+              type="button"
+              onClick={openMobileSearch}
+              aria-label="搜索会话"
+              title="搜索会话"
+            >
+              <CodexIcon name="search" />
+            </button>
+            <button
+              className="cn-mobile-directory-action cn-rail-button"
+              type="button"
+              onClick={handleOpenNewSessionSetup}
+              aria-label="新建对话"
+              title="新建对话"
+            >
+              <CodexIcon name="compose" />
+            </button>
           </div>
 
           <div className="cn-project-tree">
             <div className="cn-sidebar-search" role="search">
               <CodexIcon name="search" />
               <input
+                ref={sidebarSearchInputRef}
                 type="search"
                 value={sidebarQuery}
-                onChange={(event) => setSidebarQuery(event.target.value)}
+                onChange={(event) => {
+                  setSidebarQuery(event.target.value);
+                  if (event.target.value.trim().length > 0) {
+                    setMobileSearchOpen(true);
+                  }
+                }}
+                onBlur={() => {
+                  if (sidebarQuery.trim().length === 0) {
+                    setMobileSearchOpen(false);
+                  }
+                }}
                 placeholder="搜索项目或会话"
                 aria-label="搜索项目或会话"
               />
@@ -342,7 +440,10 @@ export function WebConsole() {
                   className="cn-sidebar-search-clear"
                   type="button"
                   aria-label="清空搜索"
-                  onClick={() => setSidebarQuery("")}
+                  onClick={() => {
+                    setSidebarQuery("");
+                    setMobileSearchOpen(false);
+                  }}
                 >
                   <CodexIcon name="x" />
                 </button>
@@ -373,8 +474,8 @@ export function WebConsole() {
               onHideThreadPreview={clearThreadHoverPreview}
               onShowThreadPreview={showThreadHoverPreview}
               onTogglePinnedThread={togglePinnedThread}
-              onSelectHistory={(entry) => void selectHistory(entry)}
-              onSelectSession={selectSession}
+              onSelectHistory={handleSelectHistory}
+              onSelectSession={handleSelectSession}
             />
             <button
               className="cn-project-tree-toggle"
@@ -406,11 +507,11 @@ export function WebConsole() {
                     onRemoveProject={removeProject}
                     onRenameProject={renameProject}
                     onShowThreadPreview={showThreadHoverPreview}
-                    onStartProjectSession={startProjectSession}
+                    onStartProjectSession={handleStartProjectSession}
                     onTogglePinnedProject={togglePinnedProject}
                     onTogglePinnedThread={togglePinnedThread}
-                    onSelectHistory={(entry) => void selectHistory(entry)}
-                    onSelectSession={selectSession}
+                    onSelectHistory={handleSelectHistory}
+                    onSelectSession={handleSelectSession}
                   />
                 ))}
                 {filteredProjectGroups.length === 0 &&
@@ -469,10 +570,10 @@ export function WebConsole() {
             <button
               className="cn-mobile-menu-button"
               type="button"
-              onClick={() => setSidebarCollapsed(false)}
-              aria-label="显示目录"
+              onClick={showMobileDirectory}
+              aria-label="返回目录"
             >
-              <CodexIcon name="collapse" />
+              <CodexIcon name="back" />
             </button>
             <div>
               <h1>{headerTitle}</h1>
