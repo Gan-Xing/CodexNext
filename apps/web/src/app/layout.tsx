@@ -3,7 +3,10 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "CodexNext",
-  description: "Your personal Codex control plane."
+  description: "Your personal Codex control plane.",
+  icons: {
+    icon: "/icon.svg"
+  }
 };
 
 export default function RootLayout({
