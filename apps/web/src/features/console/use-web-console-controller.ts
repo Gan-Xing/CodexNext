@@ -84,6 +84,7 @@ import {
   mergeLiveHistoryIntoWorkspace,
   mergeLiveSessionsIntoWorkspace,
   mergeSelectedHistoryPreviewSession,
+  resolvePreferredWorkspaceCwd,
   resolveHistoryPreviewEntryToHydrate,
   type SavedSessionSelection
 } from "./console-hydration";
@@ -266,7 +267,7 @@ function restoreWorkspaceFromSidebarSnapshot(
       ] as const)
   ) as Record<string, ResumeState>;
 
-  return {
+  const nextWorkspace = {
     ...createDeviceWorkspace(connection),
     codexHistory: applyLoadedThreadState(
       snapshot.codexHistory,
@@ -277,7 +278,6 @@ function restoreWorkspaceFromSidebarSnapshot(
       restoredSessionIds.has(snapshot.currentSessionId)
         ? snapshot.currentSessionId
         : null,
-    cwd: snapshot.cwd,
     loadedThreadIds: snapshot.loadedThreadIds,
     resumeStates,
     selectedHistoryKey:
@@ -287,6 +287,32 @@ function restoreWorkspaceFromSidebarSnapshot(
         : null,
     sessionHistoryOrigins: snapshot.sessionHistoryOrigins,
     sessions: snapshot.sessions
+  };
+
+  return {
+    ...nextWorkspace,
+    cwd: resolvePreferredWorkspaceCwd({
+      ...nextWorkspace,
+      cwd: snapshot.cwd
+    }),
+    resumeStates: Object.fromEntries(
+      Object.keys(nextWorkspace.sessionHistoryOrigins)
+        .filter((sessionId) =>
+          nextWorkspace.sessions.some((session) => session.sessionId === sessionId)
+        )
+        .map((sessionId) => {
+          const previewEntry = nextWorkspace.codexHistory.find(
+            (entry) => historyPreviewSessionId(entry) === sessionId
+          );
+          const resumeState: ResumeState =
+            previewEntry && isPreviewOnlyHistoryEntry(previewEntry)
+              ? "missing"
+              : sessionId.startsWith("history-preview:")
+                ? "history"
+                : "resuming";
+          return [sessionId, resumeState] as const;
+        })
+    ) as Record<string, ResumeState>
   };
 }
 
@@ -317,7 +343,7 @@ function buildWorkspaceSidebarSnapshots(
           {
             codexHistory: workspace.codexHistory,
             currentSessionId: workspace.currentSessionId,
-            cwd: workspace.cwd,
+            cwd: resolvePreferredWorkspaceCwd(workspace),
             loadedThreadIds: workspace.loadedThreadIds,
             selectedHistoryKey: workspace.selectedHistoryKey,
             sessionHistoryOrigins: workspace.sessionHistoryOrigins,
@@ -1552,7 +1578,9 @@ export function useWebConsoleController() {
       sessionSelections[selectionScopeKey] ?? null;
     const hydrationVersion = beginDeviceHydration(device.id);
     const restoredWorkspace = deviceWorkspaces[device.id] ?? null;
-    const directoryPathHint = restoredWorkspace?.cwd || undefined;
+    const directoryPathHint = restoredWorkspace
+      ? resolvePreferredWorkspaceCwd(restoredWorkspace) || undefined
+      : undefined;
 
     startTransition(() => {
       patchDeviceWorkspace(device.id, (workspace) => ({
@@ -1939,24 +1967,32 @@ export function useWebConsoleController() {
     const threadIsLoaded = entry.loaded || workspace?.loadedThreadIds.includes(entry.id) || false;
     setError(null);
     patchDeviceWorkspace(deviceId, (currentWorkspace) =>
-      rememberSessionHistoryOrigin(
-        upsertSessionInWorkspace(
-          {
-            ...currentWorkspace,
-            selectedHistoryKey: key,
-            historyLoadingKey: threadIsLoaded ? null : key,
-            currentSessionId: previewSession.sessionId,
-            cwd: entry.cwd,
-            resumeStates: {
-              ...currentWorkspace.resumeStates,
-              [previewSession.sessionId]: isPreviewOnlyHistoryEntry(entry) ? "missing" : "history"
-            }
-          },
-          previewSession
-        ),
-        previewSession.sessionId,
-        entry.id
-      )
+      {
+        const nextWorkspace = rememberSessionHistoryOrigin(
+          upsertSessionInWorkspace(
+            {
+              ...currentWorkspace,
+              selectedHistoryKey: key,
+              historyLoadingKey: threadIsLoaded ? null : key,
+              currentSessionId: previewSession.sessionId,
+              cwd: isPreviewOnlyHistoryEntry(entry) ? currentWorkspace.cwd : entry.cwd,
+              resumeStates: {
+                ...currentWorkspace.resumeStates,
+                [previewSession.sessionId]: isPreviewOnlyHistoryEntry(entry)
+                  ? "missing"
+                  : "history"
+              }
+            },
+            previewSession
+          ),
+          previewSession.sessionId,
+          entry.id
+        );
+        return {
+          ...nextWorkspace,
+          cwd: resolvePreferredWorkspaceCwd(nextWorkspace)
+        };
+      }
     );
     if (input?.revealMain ?? true) {
       setActiveSheet(null);

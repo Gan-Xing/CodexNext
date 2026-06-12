@@ -67,15 +67,19 @@ export function mergeLiveSessionsIntoWorkspace(
       ? workspace.currentSessionId
       : restoredSessionId ?? latestSession?.sessionId ?? null;
 
-  return {
+  const nextWorkspace = {
     ...workspace,
     currentSessionId: nextCurrentSessionId,
-    cwd: workspace.cwd || latestSession?.cwd || "",
     selectedHistoryKey:
       nextCurrentSessionId && !isHistoryPreviewSessionId(nextCurrentSessionId)
         ? null
         : workspace.selectedHistoryKey,
     sessions: nextSessions
+  };
+
+  return {
+    ...nextWorkspace,
+    cwd: resolvePreferredWorkspaceCwd(nextWorkspace)
   };
 }
 
@@ -107,12 +111,12 @@ export function mergeLiveHistoryIntoWorkspace(
     ...workspace,
     codexHistory: historyEntries,
     currentSessionId: nextCurrentSessionId,
-    cwd: workspace.cwd || nextSelectedHistoryEntry?.cwd || "",
     selectedHistoryKey: nextSelectedHistoryKey
   };
 
   return {
     ...nextWorkspace,
+    cwd: resolvePreferredWorkspaceCwd(nextWorkspace),
     sessions: mergeSelectedHistoryPreviewSession(
       nextWorkspace.sessions,
       historyEntries,
@@ -137,6 +141,52 @@ export function resolveHistoryPreviewEntryToHydrate(
     findHistoryEntryByKey(historyEntries, workspace.selectedHistoryKey) ??
     findHistoryEntryByKey(historyEntries, savedSelection?.selectedHistoryKey ?? null) ??
     null
+  );
+}
+
+export function resolvePreferredWorkspaceCwd(
+  workspace: Pick<
+    DeviceWorkspace,
+    "codexHistory" | "currentSessionId" | "cwd" | "selectedHistoryKey" | "sessions"
+  >
+): string {
+  const activeLiveSession =
+    workspace.currentSessionId &&
+    !isHistoryPreviewSessionId(workspace.currentSessionId)
+      ? workspace.sessions.find(
+          (session) => session.sessionId === workspace.currentSessionId
+        ) ?? null
+      : null;
+  if (activeLiveSession?.cwd) {
+    return activeLiveSession.cwd;
+  }
+
+  const selectedHistoryEntry = findHistoryEntryByKey(
+    workspace.codexHistory,
+    workspace.selectedHistoryKey
+  );
+  const selectedHistoryCwdMissing =
+    selectedHistoryEntry?.cwdExists === false &&
+    selectedHistoryEntry.cwd === workspace.cwd;
+  if (workspace.cwd.trim().length > 0 && !selectedHistoryCwdMissing) {
+    return workspace.cwd;
+  }
+
+  const liveSessionFallback =
+    workspace.sessions.find(
+      (session) =>
+        !isHistoryPreviewSessionId(session.sessionId) && session.cwd.trim().length > 0
+    )?.cwd ?? null;
+  if (liveSessionFallback) {
+    return liveSessionFallback;
+  }
+
+  if (selectedHistoryEntry && selectedHistoryEntry.cwdExists !== false) {
+    return selectedHistoryEntry.cwd;
+  }
+
+  return (
+    workspace.codexHistory.find((entry) => entry.cwdExists !== false)?.cwd ?? ""
   );
 }
 

@@ -4,6 +4,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 import type { ChatItem, LocalSessionSummary } from "../../lib/types";
 import { buildChatTailSignature } from "../../lib/format/text";
 import type { ResumeState } from "../../features/chat/chat-state";
+import { isHistoryPreviewSessionId } from "../../features/sessions/session-utils";
 import { CommandOutputBlock } from "./CommandOutputBlock";
 import { DiffBlock } from "./DiffBlock";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -11,10 +12,12 @@ import { MessageCopyButton } from "./MessageCopyButton";
 import { PlanBlock } from "./PlanBlock";
 import { SystemStatusRow } from "./SystemStatusRow";
 import { ThinkingRow } from "./ThinkingRow";
+import { resolveThreadEmptyState } from "./chat-canvas-state";
 
 export function ChatCanvas(props: {
   active: boolean;
   canLoadOlderHistory?: boolean;
+  historyLoading?: boolean;
   items: ChatItem[];
   loadingOlderHistory?: boolean;
   onLoadOlderHistory?: () => void;
@@ -35,6 +38,12 @@ export function ChatCanvas(props: {
   const tailSignature = buildChatTailSignature(props.items.at(-1));
   const visibleItems = useMemo(() => props.items, [props.items]);
   const activeTurnId = props.active ? props.session.activeTurnId ?? null : null;
+  const historyPreview = isHistoryPreviewSessionId(props.session.sessionId);
+  const emptyState = resolveThreadEmptyState({
+    historyLoading: props.historyLoading ?? false,
+    historyPreview,
+    resumeState: props.resumeState
+  });
   const showThinkingRow = shouldShowThinkingRow(visibleItems, activeTurnId, props.active);
 
   useEffect(() => {
@@ -138,8 +147,8 @@ export function ChatCanvas(props: {
         </>
       ) : (
         <div className="cn-thread-empty">
-          <strong>正在恢复这条会话</strong>
-          <span>侧栏已经恢复，消息内容会在后台继续同步，不需要重新点一次。</span>
+          <strong>{emptyState.title}</strong>
+          <span>{emptyState.detail}</span>
         </div>
       )}
 

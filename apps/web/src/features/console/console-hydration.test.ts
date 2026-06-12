@@ -4,6 +4,7 @@ import { createDeviceWorkspace } from "../chat/chat-state";
 import {
   mergeLiveHistoryIntoWorkspace,
   mergeLiveSessionsIntoWorkspace,
+  resolvePreferredWorkspaceCwd,
   resolveHistoryPreviewEntryToHydrate
 } from "./console-hydration";
 import {
@@ -112,6 +113,49 @@ describe("console hydration helpers", () => {
       )
     ).toEqual(entry);
   });
+
+  it("keeps the last good cwd when a restored history preview points at a missing project", () => {
+    const missingEntry = historyEntry({
+      cwd: "/missing/repo",
+      cwdExists: false
+    });
+    const workspace = {
+      ...createDeviceWorkspace(connection()),
+      cwd: "/repo",
+      sessions: [liveSession()],
+      currentSessionId: historyPreviewSessionId(missingEntry),
+      selectedHistoryKey: codexHistoryKey(missingEntry)
+    };
+
+    const result = mergeLiveHistoryIntoWorkspace(
+      workspace,
+      [missingEntry],
+      {
+        currentSessionId: null,
+        selectedHistoryKey: codexHistoryKey(missingEntry)
+      }
+    );
+
+    expect(result.cwd).toBe("/repo");
+  });
+
+  it("skips a missing history cwd when choosing the workspace directory hint", () => {
+    const missingEntry = historyEntry({
+      cwd: "/missing/repo",
+      cwdExists: false
+    });
+
+    expect(
+      resolvePreferredWorkspaceCwd({
+        ...createDeviceWorkspace(connection()),
+        codexHistory: [missingEntry],
+        currentSessionId: historyPreviewSessionId(missingEntry),
+        cwd: "/missing/repo",
+        selectedHistoryKey: codexHistoryKey(missingEntry),
+        sessions: [liveSession()]
+      })
+    ).toBe("/repo");
+  });
 });
 
 function connection() {
@@ -123,7 +167,16 @@ function connection() {
   };
 }
 
-function historyEntry() {
+function historyEntry(
+  overrides: Partial<ReturnType<typeof historyEntryBase>> = {}
+) {
+  return {
+    ...historyEntryBase(),
+    ...overrides
+  };
+}
+
+function historyEntryBase() {
   return {
     id: "thread_1",
     cwd: "/repo",

@@ -2,7 +2,7 @@
 
 import { useDeferredValue, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import { sessionTitle } from "../features/sessions/session-utils";
+import { codexHistoryKey, sessionTitle } from "../features/sessions/session-utils";
 import type {
   ProjectThreadGroupData,
   ThreadListItem
@@ -447,6 +447,14 @@ export function WebConsole() {
             <ChatCanvas
               active={activeTurn}
               canLoadOlderHistory={canLoadOlderHistory}
+              historyLoading={
+                Boolean(
+                  currentSession &&
+                    selectedHistoryEntry &&
+                    currentSession.sessionId.startsWith("history-preview:") &&
+                    historyLoadingKey === codexHistoryKey(selectedHistoryEntry)
+                )
+              }
               items={visibleChatItems}
               loadingOlderHistory={loadingOlderHistory}
               onLoadOlderHistory={() => void loadOlderHistory()}

@@ -27,6 +27,14 @@ interface HistoryThreadRow {
   updatedAtMs: number | null;
 }
 
+type HistoryMessagePresence = "unknown" | "empty" | "hasMessages";
+
+interface HistoryRowDisplayInfo {
+  messages: LocalCodexHistoryMessage[] | null;
+  presence: HistoryMessagePresence;
+  title: string | null;
+}
+
 export class CodexHistoryStore {
   private database: DatabaseSync | null = null;
   private resolvedStateDbPath: string | null | undefined;
@@ -84,9 +92,16 @@ export class CodexHistoryStore {
 
     const rows = database.prepare(query).all(...params) as unknown as HistoryThreadRow[];
     const cwdExistsCache = new Map<string, Promise<boolean>>();
-    return Promise.all(
-      rows.map((row) => rowToHistoryEntry(row, input.loadedThreadIds, cwdExistsCache))
+    const entries = await Promise.all(
+      rows.map(async (row) => {
+        const display = await this.inspectRowDisplay(row);
+        if (display.presence === "empty") {
+          return null;
+        }
+        return rowToHistoryEntry(row, input.loadedThreadIds, cwdExistsCache, display.title);
+      })
     );
+    return entries.filter((entry): entry is LocalCodexHistoryEntry => entry !== null);
   }
 
   public async readEntry(
@@ -121,7 +136,8 @@ export class CodexHistoryStore {
     if (!row) {
       return null;
     }
-    return rowToHistoryEntry(row, loadedThreadIds);
+    const display = await this.inspectRowDisplay(row);
+    return rowToHistoryEntry(row, loadedThreadIds, undefined, display.title);
   }
 
   public async readDetail(
@@ -157,17 +173,22 @@ export class CodexHistoryStore {
       return null;
     }
 
-    const [entry, messages] = await Promise.all([
-      rowToHistoryEntry(row, loadedThreadIds),
-      this.readRolloutMessages(row)
-    ]);
-    if (!messages || messages.length === 0) {
+    const display = await this.inspectRowDisplay(row, {
+      includeRolloutMessages: true
+    });
+    const entry = await rowToHistoryEntry(
+      row,
+      loadedThreadIds,
+      undefined,
+      display.title
+    );
+    if (display.presence === "unknown") {
       return null;
     }
 
     return {
       entry,
-      messages
+      messages: display.messages ?? []
     };
   }
 
@@ -295,12 +316,45 @@ export class CodexHistoryStore {
 
     return messages;
   }
+
+  private async inspectRowDisplay(
+    row: HistoryThreadRow,
+    input?: { includeRolloutMessages?: boolean }
+  ): Promise<HistoryRowDisplayInfo> {
+    const metadataTitle =
+      normalizeNonEmpty(row.title) ??
+      normalizeNonEmpty(row.firstUserMessage) ??
+      normalizeNonEmpty(row.preview);
+    if (metadataTitle && !input?.includeRolloutMessages) {
+      return {
+        title: metadataTitle,
+        messages: null,
+        presence: "unknown"
+      };
+    }
+
+    const rolloutMessages = await this.readRolloutMessages(row);
+    if (rolloutMessages === null) {
+      return {
+        title: null,
+        messages: null,
+        presence: "unknown"
+      };
+    }
+
+    return {
+      title: metadataTitle ?? deriveHistoryTitleFromMessages(rolloutMessages),
+      messages: rolloutMessages,
+      presence: rolloutMessages.length > 0 ? "hasMessages" : "empty"
+    };
+  }
 }
 
 async function rowToHistoryEntry(
   row: HistoryThreadRow,
   loadedThreadIds?: Set<string>,
-  cwdExistsCache?: Map<string, Promise<boolean>>
+  cwdExistsCache?: Map<string, Promise<boolean>>,
+  titleOverride?: string | null
 ): Promise<LocalCodexHistoryEntry> {
   const cwdExists =
     cwdExistsCache?.get(row.cwd) ??
@@ -314,11 +368,7 @@ async function rowToHistoryEntry(
     id: row.id,
     cwd: row.cwd,
     cwdExists: await cwdExists,
-    title:
-      normalizeNonEmpty(row.title) ??
-      normalizeNonEmpty(row.firstUserMessage) ??
-      normalizeNonEmpty(row.preview) ??
-      "Untitled Codex thread",
+    title: titleOverride ?? "Untitled Codex thread",
     createdAt: normalizeIsoTimestamp(undefined, row.createdAtMs, row.createdAt),
     updatedAt: normalizeIsoTimestamp(undefined, row.updatedAtMs, row.updatedAt),
     source: normalizeNonEmpty(row.source) ?? "unknown",
@@ -357,6 +407,20 @@ function normalizeNonEmpty(value: string | null | undefined): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function deriveHistoryTitleFromMessages(
+  messages: LocalCodexHistoryMessage[]
+): string | null {
+  for (const role of ["user", "assistant", "command", "diff"] as const) {
+    const match = messages.find((message) => message.role === role);
+    const line = normalizeNonEmpty(match?.text?.split(/\r?\n/)[0] ?? null);
+    if (!line) {
+      continue;
+    }
+    return line.length > 140 ? `${line.slice(0, 137)}...` : line;
+  }
+  return null;
 }
 
 function normalizeSearchTerm(value: string | null | undefined): string | null {
