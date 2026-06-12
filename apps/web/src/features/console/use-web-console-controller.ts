@@ -322,6 +322,35 @@ function buildWorkspaceSidebarSnapshots(
   );
 }
 
+function mergeSelectedHistoryPreviewSession(
+  sessions: LocalSessionSummary[],
+  historyEntries: LocalCodexHistoryEntry[],
+  workspace: Pick<DeviceWorkspace, "currentSessionId" | "selectedHistoryKey" | "sessions">
+): LocalSessionSummary[] {
+  const previewSessionId = workspace.currentSessionId;
+  if (
+    !previewSessionId ||
+    !isHistoryPreviewSessionId(previewSessionId) ||
+    !workspace.selectedHistoryKey
+  ) {
+    return sessions;
+  }
+  const entry =
+    historyEntries.find(
+      (historyEntry) => codexHistoryKey(historyEntry) === workspace.selectedHistoryKey
+    ) ?? null;
+  if (!entry) {
+    return sessions;
+  }
+  const previewSession =
+    workspace.sessions.find((session) => session.sessionId === previewSessionId) ??
+    makeHistoryPreviewSession(entry);
+  return [
+    previewSession,
+    ...sessions.filter((session) => session.sessionId !== previewSession.sessionId)
+  ];
+}
+
 export function useWebConsoleController() {
   const [error, setError] = useState<string | null>(null);
   const [migrationNotice, setMigrationNotice] = useState<string | null>(null);
@@ -1556,16 +1585,33 @@ export function useWebConsoleController() {
           ) ?? null
         : null;
 
-    patchDeviceWorkspace(device.id, (workspace) => ({
-      ...workspace,
-      codexHistory: history.entries,
-      currentSessionId:
-        workspace.currentSessionId ?? restoredSessionId ?? latestSession?.sessionId ?? null,
-      cwd: workspace.cwd || latestSession?.cwd || "",
-      directoryError: null,
-      directoryLoading: true,
-      sessions: loadedSessions.sessions
-    }));
+    patchDeviceWorkspace(device.id, (workspace) => {
+      const nextSessions = mergeSelectedHistoryPreviewSession(
+        loadedSessions.sessions,
+        history.entries,
+        workspace
+      );
+      const nextSelectedHistoryKey =
+        workspace.selectedHistoryKey &&
+        history.entries.some(
+          (entry) => codexHistoryKey(entry) === workspace.selectedHistoryKey
+        )
+          ? workspace.selectedHistoryKey
+          : restoredHistoryEntry
+            ? codexHistoryKey(restoredHistoryEntry)
+            : null;
+      return {
+        ...workspace,
+        codexHistory: history.entries,
+        currentSessionId:
+          workspace.currentSessionId ?? restoredSessionId ?? latestSession?.sessionId ?? null,
+        cwd: workspace.cwd || latestSession?.cwd || "",
+        directoryError: null,
+        directoryLoading: true,
+        selectedHistoryKey: nextSelectedHistoryKey,
+        sessions: nextSessions
+      };
+    });
 
     void getLoadedCodexThreads(deviceConnection)
       .then((loadedThreads) => {
@@ -1641,21 +1687,32 @@ export function useWebConsoleController() {
         .filter((threadId): threadId is string => Boolean(threadId))
     );
 
-    patchDeviceWorkspace(deviceId, (workspace) => ({
-      ...workspace,
-      codexHistory: history.entries,
-      currentSessionId: loadedSessions.sessions.some(
-        (session) => session.sessionId === workspace.currentSessionId
-      )
-        ? workspace.currentSessionId
-        : null,
-      selectedHistoryKey:
-        workspace.selectedHistoryKey &&
-        history.entries.some((entry) => codexHistoryKey(entry) === workspace.selectedHistoryKey)
-          ? workspace.selectedHistoryKey
-          : null,
-      sessions: loadedSessions.sessions
-    }));
+    patchDeviceWorkspace(deviceId, (workspace) => {
+      const nextSessions = mergeSelectedHistoryPreviewSession(
+        loadedSessions.sessions,
+        history.entries,
+        workspace
+      );
+      const nextSessionIds = new Set(
+        nextSessions.map((session) => session.sessionId)
+      );
+      return {
+        ...workspace,
+        codexHistory: history.entries,
+        currentSessionId:
+          workspace.currentSessionId && nextSessionIds.has(workspace.currentSessionId)
+            ? workspace.currentSessionId
+            : null,
+        selectedHistoryKey:
+          workspace.selectedHistoryKey &&
+          history.entries.some(
+            (entry) => codexHistoryKey(entry) === workspace.selectedHistoryKey
+          )
+            ? workspace.selectedHistoryKey
+            : null,
+        sessions: nextSessions
+      };
+    });
 
     void getLoadedCodexThreads(deviceConnection)
       .then((loadedThreads) => {
