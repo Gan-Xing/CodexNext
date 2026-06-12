@@ -183,6 +183,20 @@ interface RelayBootstrapConfig {
   relayUrl: string;
 }
 
+function applyLoadedThreadState(
+  entries: LocalCodexHistoryEntry[],
+  threadIds: string[]
+): LocalCodexHistoryEntry[] {
+  const loadedSet = new Set(threadIds);
+  return entries.map((entry) => ({
+    ...entry,
+    loaded: entry.loaded || loadedSet.has(entry.id),
+    threadStatus:
+      entry.threadStatus ??
+      (loadedSet.has(entry.id) ? "loaded" : "notLoaded")
+  }));
+}
+
 export function useWebConsoleController() {
   const [error, setError] = useState<string | null>(null);
   const [migrationNotice, setMigrationNotice] = useState<string | null>(null);
@@ -405,6 +419,9 @@ export function useWebConsoleController() {
       }
       const session = workspace.sessions.find((item) => item.sessionId === sessionId) ?? null;
       if (!session) {
+        return;
+      }
+      if (isHistoryPreviewSessionId(sessionId)) {
         return;
       }
       const historyThreadId = workspace.sessionHistoryOrigins[sessionId];
@@ -1316,34 +1333,40 @@ export function useWebConsoleController() {
       ingestEventsIntoWorkspace(workspace, replay.events, { selectSessions: false })
     );
 
-    const [loadedSessions, history, loadedThreads] = await Promise.all([
+    const [loadedSessions, history] = await Promise.all([
       listSessions(deviceConnection),
-      listCodexHistory(deviceConnection),
-      getLoadedCodexThreads(deviceConnection).catch(() => ({ threadIds: [] }))
+      listCodexHistory(deviceConnection)
     ]);
     const latestSession = [...loadedSessions.sessions].sort((a, b) => b.updatedAt - a.updatedAt)[0];
-    const loadedSet = new Set(loadedThreads.threadIds);
 
-    patchDeviceWorkspace(device.id, (workspace) =>
-      setLoadedThreadIds(
-        {
-          ...workspace,
-          codexHistory: history.entries.map((entry) => ({
-            ...entry,
-            loaded: entry.loaded || loadedSet.has(entry.id),
-            threadStatus:
-              entry.threadStatus ??
-              (loadedSet.has(entry.id) ? "loaded" : "notLoaded")
-          })),
-          currentSessionId: workspace.currentSessionId ?? latestSession?.sessionId ?? null,
-          cwd: workspace.cwd || latestSession?.cwd || "",
-          directoryError: null,
-          directoryLoading: true,
-          sessions: loadedSessions.sessions
-        },
-        loadedThreads.threadIds
-      )
-    );
+    patchDeviceWorkspace(device.id, (workspace) => ({
+      ...workspace,
+      codexHistory: history.entries,
+      currentSessionId: workspace.currentSessionId ?? latestSession?.sessionId ?? null,
+      cwd: workspace.cwd || latestSession?.cwd || "",
+      directoryError: null,
+      directoryLoading: true,
+      sessions: loadedSessions.sessions
+    }));
+
+    void getLoadedCodexThreads(deviceConnection)
+      .then((loadedThreads) => {
+        patchDeviceWorkspace(device.id, (workspace) =>
+          setLoadedThreadIds(
+            {
+              ...workspace,
+              codexHistory: applyLoadedThreadState(
+                workspace.codexHistory,
+                loadedThreads.threadIds
+              )
+            },
+            loadedThreads.threadIds
+          )
+        );
+      })
+      .catch(() => {
+        // Older app-server builds may not expose thread/loaded/list yet.
+      });
 
     const directoryPath = activeWorkspace?.cwd || latestSession?.cwd || undefined;
     try {

@@ -263,25 +263,13 @@ async function listCodexHistory(
     useStateDbOnly: true,
     searchTerm
   });
-  const loadedThreadIds = new Set<string>();
-  try {
-    const loaded = await sessionManager.listLoadedThreads();
-    for (const thread of loaded.data) {
-      loadedThreadIds.add(thread.id);
-    }
-  } catch {
-    // Older app-server builds may not expose thread/loaded/list yet.
-  }
+  const cwdExistsCache = new Map<string, Promise<boolean>>();
   const entries = await Promise.all(
-    response.data.map((thread) => threadToHistoryEntry(thread, response.data))
+    response.data.map((thread) =>
+      threadToHistoryEntry(thread, response.data, cwdExistsCache)
+    )
   );
   const visibleEntries = entries.filter((entry) => !isHiddenCodexHistoryEntry(entry));
-  for (const entry of visibleEntries) {
-    if (loadedThreadIds.has(entry.id)) {
-      entry.loaded = true;
-      entry.threadStatus = entry.threadStatus ?? "loaded";
-    }
-  }
   return { root: "codex app-server thread/list", entries: visibleEntries };
 }
 
@@ -372,16 +360,23 @@ async function readCodexHistoryEntryById(
 
 async function threadToHistoryEntry(
   thread: CodexThread,
-  contextThreads?: CodexThread[]
+  contextThreads?: CodexThread[],
+  cwdExistsCache?: Map<string, Promise<boolean>>
 ): Promise<LocalCodexHistoryEntry> {
   const title =
     deriveCodexConversationTitle(thread, contextThreads) ??
     deriveCodexGeneratedTitle(thread.preview) ??
     "Untitled Codex thread";
+  const cwdExists =
+    cwdExistsCache?.get(thread.cwd) ??
+    directoryExists(thread.cwd);
+  if (cwdExistsCache && !cwdExistsCache.has(thread.cwd)) {
+    cwdExistsCache.set(thread.cwd, cwdExists);
+  }
   return {
     id: thread.id,
     cwd: thread.cwd,
-    cwdExists: await directoryExists(thread.cwd),
+    cwdExists: await cwdExists,
     title,
     createdAt: timestampToIso(thread.createdAt),
     updatedAt: timestampToIso(thread.updatedAt),

@@ -525,7 +525,8 @@ describe("local HTTP server guards", () => {
           cwd: process.cwd(),
           cwdExists: true,
           title: "官方 Codex 标题",
-          loaded: true
+          loaded: false,
+          threadStatus: null
         })
       ]);
       expect(listBody.entries).toHaveLength(1);
@@ -533,7 +534,7 @@ describe("local HTTP server guards", () => {
       const loaded = await fetch(`${base}/api/codex-history/loaded?token=secret`);
       const loadedBody = await loaded.json() as { threadIds: string[] };
       expect(loaded.status).toBe(200);
-      expect(fake.threadLoadedListCalls).toBe(2);
+      expect(fake.threadLoadedListCalls).toBe(1);
       expect(loadedBody.threadIds).toEqual(["thread_1"]);
     } finally {
       await handle.close();
