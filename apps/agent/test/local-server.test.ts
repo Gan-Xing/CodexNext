@@ -344,6 +344,46 @@ describe("SessionManager messages", () => {
     expect(fake.threadResumeParams).toHaveLength(2);
   });
 
+  it("loads a stored thread before retrying archive when rollout is missing", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    fake.failNextArchiveAsMissingRollout = true;
+    fake.threadReadResponse = {
+      thread: {
+        id: "history_1",
+        sessionId: "session_1",
+        preview: "",
+        createdAt: 1,
+        updatedAt: 1,
+        cwd: "/tmp/codexnext-history",
+        turns: []
+      }
+    };
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    await manager.archiveThread("history_1");
+
+    expect(fake.threadArchiveParams).toEqual([
+      { threadId: "history_1" },
+      { threadId: "history_1" }
+    ]);
+    expect(fake.threadReadParams).toContainEqual({
+      threadId: "history_1",
+      includeTurns: false
+    });
+    expect(fake.threadResumeParams).toContainEqual({
+      threadId: "history_1",
+      cwd: "/tmp/codexnext-history",
+      excludeTurns: true
+    });
+  });
+
   it("uses native-like titles for resumed and newly started sessions", async () => {
     const store = new EventStore();
     const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
@@ -709,6 +749,7 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
   public threadReadParams: unknown[] = [];
   public threadTurnsListParams: unknown[] = [];
   public failNextResumeAsArchived = false;
+  public failNextArchiveAsMissingRollout = false;
   public failNextTurnStart: Error | null = null;
   public failNextTurnSteer: Error | null = null;
   public threadListResponse: Awaited<ReturnType<ManagedCodexClient["threadList"]>> = {
@@ -785,6 +826,10 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
     params: Parameters<ManagedCodexClient["threadArchive"]>[0]
   ) => {
     this.threadArchiveParams.push(params);
+    if (this.failNextArchiveAsMissingRollout) {
+      this.failNextArchiveAsMissingRollout = false;
+      throw new Error(`no rollout found for thread id ${params.threadId}`);
+    }
     return {};
   };
 

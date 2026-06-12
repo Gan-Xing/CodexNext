@@ -174,9 +174,25 @@ export class SessionManager {
       throw new Error("Missing thread id");
     }
 
-    await this.withTemporaryClient((client) =>
-      client.threadArchive({ threadId: normalizedThreadId })
-    );
+    await this.withTemporaryClient(async (client) => {
+      try {
+        await client.threadArchive({ threadId: normalizedThreadId });
+      } catch (error) {
+        if (!isMissingRolloutThreadError(error)) {
+          throw error;
+        }
+        const response = await client.threadRead({
+          threadId: normalizedThreadId,
+          includeTurns: false
+        });
+        await client.threadResume({
+          threadId: normalizedThreadId,
+          cwd: extractThreadReadCwd(response) ?? process.cwd(),
+          excludeTurns: true
+        });
+        await client.threadArchive({ threadId: normalizedThreadId });
+      }
+    });
 
     const matchingSessions = [...this.sessions.values()].filter(
       (session) => session.threadId === normalizedThreadId
@@ -895,6 +911,13 @@ function extractThreadCwd(response: ThreadResumeResponse): string | undefined {
   return undefined;
 }
 
+function extractThreadReadCwd(response: ThreadReadResponse): string | undefined {
+  if (typeof response.thread?.cwd === "string") {
+    return response.thread.cwd;
+  }
+  return undefined;
+}
+
 async function readThreadTitle(
   client: ManagedCodexClient,
   threadId: string
@@ -913,6 +936,11 @@ async function readThreadTitle(
 function isArchivedThreadError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes(" is archived") || message.includes("codex unarchive");
+}
+
+function isMissingRolloutThreadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("no rollout found for thread id");
 }
 
 function extractTurnId(response: TurnStartResponse): string {

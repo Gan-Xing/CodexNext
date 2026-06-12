@@ -197,6 +197,44 @@ function applyLoadedThreadState(
   }));
 }
 
+function removeArchivedThreadFromWorkspace(
+  workspace: DeviceWorkspace,
+  item: ThreadListItem
+): DeviceWorkspace {
+  const nextSessions = workspace.sessions.filter(
+    (session) => session.threadId !== item.threadId
+  );
+  const nextHistory = workspace.codexHistory.filter((entry) => entry.id !== item.threadId);
+  const nextHistoryPages = { ...workspace.historyPages };
+  const nextOrigins = { ...workspace.sessionHistoryOrigins };
+
+  for (const session of workspace.sessions) {
+    if (session.threadId !== item.threadId) {
+      continue;
+    }
+    delete nextHistoryPages[session.sessionId];
+    delete nextOrigins[session.sessionId];
+  }
+
+  const selectedSessionMatches = workspace.sessions.some(
+    (session) =>
+      session.sessionId === workspace.currentSessionId &&
+      session.threadId === item.threadId
+  );
+
+  return {
+    ...workspace,
+    currentSessionId: selectedSessionMatches ? null : workspace.currentSessionId,
+    selectedHistoryKey:
+      workspace.selectedHistoryKey === item.id ? null : workspace.selectedHistoryKey,
+    sessions: nextSessions,
+    codexHistory: nextHistory,
+    historyPages: nextHistoryPages,
+    sessionHistoryOrigins: nextOrigins,
+    loadedThreadIds: workspace.loadedThreadIds.filter((value) => value !== item.threadId)
+  };
+}
+
 export function useWebConsoleController() {
   const [error, setError] = useState<string | null>(null);
   const [migrationNotice, setMigrationNotice] = useState<string | null>(null);
@@ -926,43 +964,12 @@ export function useWebConsoleController() {
   }
 
   async function archiveThread(item: ThreadListItem) {
+    setError(null);
+    historyPageCacheRef.current.delete(item.id);
+    patchActiveWorkspace((workspace) => removeArchivedThreadFromWorkspace(workspace, item));
+
     try {
       await archiveCodexHistory(connection, { id: item.threadId });
-      historyPageCacheRef.current.delete(item.id);
-      patchActiveWorkspace((workspace) => {
-        const nextSessions = workspace.sessions.filter(
-          (session) => session.threadId !== item.threadId
-        );
-        const nextHistory = workspace.codexHistory.filter((entry) => entry.id !== item.threadId);
-        const nextHistoryPages = { ...workspace.historyPages };
-        const nextOrigins = { ...workspace.sessionHistoryOrigins };
-
-        for (const session of workspace.sessions) {
-          if (session.threadId !== item.threadId) {
-            continue;
-          }
-          delete nextHistoryPages[session.sessionId];
-          delete nextOrigins[session.sessionId];
-        }
-
-        const selectedSessionMatches = workspace.sessions.some(
-          (session) =>
-            session.sessionId === workspace.currentSessionId &&
-            session.threadId === item.threadId
-        );
-
-        return {
-          ...workspace,
-          currentSessionId: selectedSessionMatches ? null : workspace.currentSessionId,
-          selectedHistoryKey:
-            workspace.selectedHistoryKey === item.id ? null : workspace.selectedHistoryKey,
-          sessions: nextSessions,
-          codexHistory: nextHistory,
-          historyPages: nextHistoryPages,
-          sessionHistoryOrigins: nextOrigins,
-          loadedThreadIds: workspace.loadedThreadIds.filter((value) => value !== item.threadId)
-        };
-      });
       const nextThreadPrefs = sanitizeThreadSidebarPrefs({
         pinned: activeThreadPrefs.pinned.filter((value) => value !== item.threadId)
       });
@@ -976,6 +983,16 @@ export function useWebConsoleController() {
         );
       }
     } catch (archiveError) {
+      try {
+        const { historyThreadIds, sessionThreadIds } = await refreshActiveWorkspaceThreads();
+        if (!historyThreadIds.has(item.threadId) && !sessionThreadIds.has(item.threadId)) {
+          setError(null);
+          return;
+        }
+      } catch (refreshError) {
+        setError(formatConsoleError(refreshError));
+        return;
+      }
       setError(formatConsoleError(archiveError));
     }
   }
@@ -1388,6 +1405,65 @@ export function useWebConsoleController() {
     }
 
     openDeviceStream(device.id, deviceConnection, replay.events.at(-1)?.seq ?? 0, status);
+  }
+
+  async function refreshActiveWorkspaceThreads() {
+    const deviceId = selectedDeviceIdRef.current;
+    if (!deviceId) {
+      return {
+        historyThreadIds: new Set<string>(),
+        sessionThreadIds: new Set<string>()
+      };
+    }
+
+    const deviceConnection = deviceWorkspaces[deviceId]?.connection ?? connection;
+    const [loadedSessions, history] = await Promise.all([
+      listSessions(deviceConnection),
+      listCodexHistory(deviceConnection)
+    ]);
+    const historyThreadIds = new Set(history.entries.map((entry) => entry.id));
+    const sessionThreadIds = new Set(
+      loadedSessions.sessions
+        .map((session) => session.threadId)
+        .filter((threadId): threadId is string => Boolean(threadId))
+    );
+
+    patchDeviceWorkspace(deviceId, (workspace) => ({
+      ...workspace,
+      codexHistory: history.entries,
+      currentSessionId: loadedSessions.sessions.some(
+        (session) => session.sessionId === workspace.currentSessionId
+      )
+        ? workspace.currentSessionId
+        : null,
+      selectedHistoryKey:
+        workspace.selectedHistoryKey &&
+        history.entries.some((entry) => codexHistoryKey(entry) === workspace.selectedHistoryKey)
+          ? workspace.selectedHistoryKey
+          : null,
+      sessions: loadedSessions.sessions
+    }));
+
+    void getLoadedCodexThreads(deviceConnection)
+      .then((loadedThreads) => {
+        patchDeviceWorkspace(deviceId, (workspace) =>
+          setLoadedThreadIds(
+            {
+              ...workspace,
+              codexHistory: applyLoadedThreadState(
+                workspace.codexHistory,
+                loadedThreads.threadIds
+              )
+            },
+            loadedThreads.threadIds
+          )
+        );
+      })
+      .catch(() => {
+        // Older app-server builds may not expose thread/loaded/list yet.
+      });
+
+    return { historyThreadIds, sessionThreadIds };
   }
 
   async function connect(
