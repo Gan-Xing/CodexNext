@@ -3,26 +3,20 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatItem, LocalSessionSummary } from "../../lib/types";
 import { buildChatTailSignature } from "../../lib/format/text";
-import type { ResumeState } from "../../features/chat/chat-state";
-import { isHistoryPreviewSessionId } from "../../features/sessions/session-utils";
 import { CommandOutputBlock } from "./CommandOutputBlock";
 import { DiffBlock } from "./DiffBlock";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { PlanBlock } from "./PlanBlock";
 import { SystemStatusRow } from "./SystemStatusRow";
-import { ThinkingRow } from "./ThinkingRow";
-import { resolveThreadEmptyState } from "./chat-canvas-state";
 
 export function ChatCanvas(props: {
   active: boolean;
   canLoadOlderHistory?: boolean;
-  historyLoading?: boolean;
   items: ChatItem[];
   loadingOlderHistory?: boolean;
   onLoadOlderHistory?: () => void;
   pendingApprovals: number;
-  resumeState: ResumeState | null;
   session: LocalSessionSummary;
   onOpenSummary: () => void;
 }) {
@@ -37,14 +31,6 @@ export function ChatCanvas(props: {
 
   const tailSignature = buildChatTailSignature(props.items.at(-1));
   const visibleItems = useMemo(() => props.items, [props.items]);
-  const activeTurnId = props.active ? props.session.activeTurnId ?? null : null;
-  const historyPreview = isHistoryPreviewSessionId(props.session.sessionId);
-  const emptyState = resolveThreadEmptyState({
-    historyLoading: props.historyLoading ?? false,
-    historyPreview,
-    resumeState: props.resumeState
-  });
-  const showThinkingRow = shouldShowThinkingRow(visibleItems, activeTurnId, props.active);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -91,26 +77,13 @@ export function ChatCanvas(props: {
     previousLengthRef.current = visibleItems.length;
   }, [props.session.sessionId, tailSignature, visibleItems.length]);
 
-  const showStatusStrip = Boolean(
-    props.active ||
-      props.resumeState === "resuming" ||
-      props.pendingApprovals > 0
-  );
-
   return (
     <section className="cn-thread-canvas cn-live-thread" ref={viewportRef}>
-      {showStatusStrip ? (
+      {props.pendingApprovals > 0 ? (
         <div className="cn-thread-status-strip">
-          {props.active || props.resumeState === "resuming" ? (
-            <span className="cn-run-status running">
-              {props.resumeState === "resuming" ? "正在恢复" : "正在运行"}
-            </span>
-          ) : null}
-          {props.pendingApprovals > 0 ? (
-            <button className="cn-soft-button danger" type="button" onClick={props.onOpenSummary}>
-              {props.pendingApprovals} 个审批请求
-            </button>
-          ) : null}
+          <button className="cn-soft-button danger" type="button" onClick={props.onOpenSummary}>
+            {props.pendingApprovals} 个审批请求
+          </button>
         </div>
       ) : null}
 
@@ -129,26 +102,15 @@ export function ChatCanvas(props: {
             </div>
           ) : null}
           <div className="cn-message-list">
-            {visibleItems.flatMap((item) => {
-              const rows = [<ChatMessageRow key={item.id} item={item} />];
-              if (item.role === "user" && item.status === "failed") {
-                rows.push(
-                  <ThinkingRow
-                    key={`${item.id}:error`}
-                    tone="error"
-                    text={item.error ?? "发送失败"}
-                  />
-                );
-              }
-              return rows;
-            })}
-            {showThinkingRow ? <ThinkingRow key="thinking" text="正在思考" /> : null}
+            {visibleItems.map((item) => (
+              <ChatMessageRow key={item.id} item={item} />
+            ))}
           </div>
         </>
       ) : (
         <div className="cn-thread-empty">
-          <strong>{emptyState.title}</strong>
-          <span>{emptyState.detail}</span>
+          <strong>继续在这里工作</strong>
+          <span>直接在下方输入即可，不需要先处理这些运行状态提示。</span>
         </div>
       )}
 
@@ -221,40 +183,4 @@ function messageClass(item: ChatItem): string {
     return "user failed";
   }
   return "user";
-}
-
-function shouldShowThinkingRow(
-  items: ChatItem[],
-  activeTurnId: string | null,
-  active: boolean
-): boolean {
-  if (!active) {
-    return false;
-  }
-  const activeItems =
-    activeTurnId == null
-      ? items.slice(-4)
-      : items.filter((item) => item.turnId === activeTurnId);
-
-  if (activeItems.length === 0) {
-    return true;
-  }
-
-  const hasError = activeItems.some(
-    (item) =>
-      item.status === "failed" ||
-      (item.role === "system" && item.meta?.kind === "error")
-  );
-  if (hasError) {
-    return false;
-  }
-
-  return !activeItems.some(
-    (item) =>
-      (item.role === "assistant" ||
-        item.role === "command" ||
-        item.role === "diff" ||
-        item.role === "plan") &&
-      item.text.trim().length > 0
-  );
 }

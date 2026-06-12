@@ -23,12 +23,19 @@ export interface ThreadListItem {
   entry?: LocalCodexHistoryEntry;
   id: string;
   kind: "history" | "session";
+  note?: string;
+  noteTone?: "danger" | "muted";
   pinned: boolean;
   selected: boolean;
   threadId: string;
   timeLabel: string;
   timestamp: number;
   title: string;
+}
+
+export interface ThreadSidebarNotice {
+  text: string;
+  tone: "danger" | "muted";
 }
 
 export interface ProjectThreadGroupData {
@@ -51,7 +58,8 @@ export function groupProjectThreads(
   threadPrefs: ThreadSidebarPrefs,
   projectPrefs: ProjectSidebarPrefs,
   activeSessionId: string | null,
-  selectedHistoryKey: string | null
+  selectedHistoryKey: string | null,
+  noticesByItemId: Record<string, ThreadSidebarNotice> = {}
 ): ProjectThreadGroupData[] {
   const groups = new Map<string, ProjectThreadGroupData>();
   const pinned = new Set(threadPrefs.pinned);
@@ -126,6 +134,12 @@ export function groupProjectThreads(
         ...group.sessions.map((session) => ({
           id: session.sessionId,
           kind: "session" as const,
+          ...(noticesByItemId[session.sessionId]
+            ? {
+                note: noticesByItemId[session.sessionId]!.text,
+                noteTone: noticesByItemId[session.sessionId]!.tone
+              }
+            : {}),
           pinned: pinned.has(threadKeyForSession(session)),
           selected: activeSessionId === session.sessionId,
           threadId: threadKeyForSession(session),
@@ -139,6 +153,12 @@ export function groupProjectThreads(
             entry,
             id: codexHistoryKey(entry),
             kind: "history" as const,
+            ...(noticesByItemId[codexHistoryKey(entry)]
+              ? {
+                  note: noticesByItemId[codexHistoryKey(entry)]!.text,
+                  noteTone: noticesByItemId[codexHistoryKey(entry)]!.tone
+                }
+              : {}),
             pinned: pinned.has(threadKeyForHistory(entry)),
             selected: selectedHistoryKey === codexHistoryKey(entry),
             threadId: threadKeyForHistory(entry),

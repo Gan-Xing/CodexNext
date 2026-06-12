@@ -123,6 +123,7 @@ import {
   type ProjectSidebarPrefs,
   type ProjectThreadGroupData,
   type ThreadListItem,
+  type ThreadSidebarNotice,
   type ThreadSidebarPrefs
 } from "../sessions/session-utils";
 import type { CodexIconName } from "../../components/DesignLab";
@@ -514,6 +515,33 @@ export function useWebConsoleController() {
   );
   const deviceDisplayName =
     deviceName || healthStatus?.device?.defaultName || "CodexNext relay";
+  const threadNoticesByItemId = useMemo<Record<string, ThreadSidebarNotice>>(() => {
+    if (selectedHistoryEntry && currentResumeState === "missing") {
+      return {
+        [codexHistoryKey(selectedHistoryEntry)]: {
+          text: "原项目不存在",
+          tone: "danger"
+        }
+      };
+    }
+    if (selectedHistoryEntry && currentResumeState === "failed") {
+      return {
+        [codexHistoryKey(selectedHistoryEntry)]: {
+          text: "这条记录暂时打不开",
+          tone: "danger"
+        }
+      };
+    }
+    if (currentSession?.status === "failed" || currentSession?.status === "error") {
+      return {
+        [currentSession.sessionId]: {
+          text: "本轮执行失败",
+          tone: "danger"
+        }
+      };
+    }
+    return {};
+  }, [currentResumeState, currentSession, selectedHistoryEntry]);
   const projectGroups = groupProjectThreads(
     sessions,
     codexHistory,
@@ -521,7 +549,8 @@ export function useWebConsoleController() {
     activeThreadPrefs,
     activeProjectPrefs,
     currentSessionId,
-    selectedHistoryKey
+    selectedHistoryKey,
+    threadNoticesByItemId
   );
   const pinnedThreadItems = useMemo(
     () =>
@@ -2298,16 +2327,11 @@ export function useWebConsoleController() {
       setActiveSheet("device");
       return;
     }
-    if (currentResumeState === "resuming") {
-      setError("稍等，正在恢复。");
-      return;
-    }
-    if (currentResumeState === "failed") {
-      setError("这条记录暂时不能继续发送。");
-      return;
-    }
-    if (currentResumeState === "missing") {
-      setError("原项目已不存在，请新建对话。");
+    if (
+      currentResumeState === "resuming" ||
+      currentResumeState === "failed" ||
+      currentResumeState === "missing"
+    ) {
       return;
     }
     if (!currentSession && !cwd.trim()) {

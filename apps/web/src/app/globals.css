@@ -4700,6 +4700,10 @@ summary {
   padding: 0 0.08rem;
 }
 
+.cn-sidebar-status.error {
+  color: #b24848;
+}
+
 .cn-sidebar-status-dot {
   background: rgba(108, 112, 117, 0.44);
   border-radius: 999px;
@@ -4719,6 +4723,10 @@ summary {
 .cn-sidebar-status-dot.syncing {
   animation: cn-sidebar-pulse 1.4s ease-in-out infinite;
   background: #a48a4f;
+}
+
+.cn-sidebar-status-dot.error {
+  background: #c45757;
 }
 
 .cn-project-scroll {
@@ -5030,6 +5038,12 @@ summary {
   width: 100%;
 }
 
+.cn-thread-copy {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
 .cn-pinned-thread-main {
   grid-template-columns: minmax(0, 1fr);
   padding-right: 2.4rem;
@@ -5043,6 +5057,21 @@ summary {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cn-thread-note {
+  color: #8a9096;
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 620;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cn-thread-note.danger {
+  color: #b24848;
 }
 
 .cn-thread-time {

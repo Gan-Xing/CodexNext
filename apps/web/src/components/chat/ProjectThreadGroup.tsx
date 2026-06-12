@@ -37,8 +37,6 @@ function SidebarThreadRow(
     variant?: "default" | "pinned";
   }
 ) {
-  const loading =
-    props.item.kind === "history" && props.historyLoadingKey === props.item.id;
   const pinnedVariant = props.variant === "pinned";
 
   return (
@@ -82,10 +80,23 @@ function SidebarThreadRow(
           selectThread(props.item, props);
         }}
       >
-        <span className="cn-thread-title">{props.item.title}</span>
+        <span className="cn-thread-copy">
+          <span className="cn-thread-title">{props.item.title}</span>
+          {props.item.note ? (
+            <span
+              className={
+                props.item.noteTone === "danger"
+                  ? "cn-thread-note danger"
+                  : "cn-thread-note"
+              }
+            >
+              {props.item.note}
+            </span>
+          ) : null}
+        </span>
         {pinnedVariant ? null : (
           <span className="cn-thread-time">
-            {loading ? "读取中" : props.item.timeLabel}
+            {props.item.timeLabel}
           </span>
         )}
       </button>

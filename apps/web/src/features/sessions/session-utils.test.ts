@@ -96,4 +96,29 @@ describe("session sidebar titles", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]?.items.map((item) => item.id)).toEqual(["session_2"]);
   });
+
+  it("attaches sidebar notices to the matching thread item", () => {
+    const entry = makeHistoryEntry({ id: "thread_notice" });
+    const groups = groupProjectThreads(
+      [],
+      [entry],
+      [],
+      { pinned: [] },
+      { hidden: [], pinned: [], renamed: {} },
+      null,
+      `${entry.id}::${entry.cwd}`,
+      {
+        [`${entry.id}::${entry.cwd}`]: {
+          text: "原项目不存在",
+          tone: "danger"
+        }
+      }
+    );
+
+    expect(groups[0]?.items[0]).toMatchObject({
+      id: `${entry.id}::${entry.cwd}`,
+      note: "原项目不存在",
+      noteTone: "danger"
+    });
+  });
 });

@@ -3,7 +3,6 @@ interface NewSessionCanvasProps {
   cwd: string;
   deviceName: string;
   modelLabel: string;
-  restoringWorkspace: boolean;
   permissionLabel: string;
   pinnedCount: number;
   projectCount: number;
@@ -23,15 +22,11 @@ function shortCwdLabel(cwd: string): string {
 export function NewSessionCanvas(props: NewSessionCanvasProps) {
   const hasCwd = props.cwd.trim().length > 0;
   const projectSummary =
-    props.restoringWorkspace
-      ? "正在恢复最近的项目和会话"
-      : props.projectCount > 0
+    props.projectCount > 0
       ? `已恢复 ${props.projectCount} 个项目 · ${props.threadCount} 条会话`
-      : "连接完成后，这里会恢复你的项目和历史会话";
+      : "连接完成后，会话列表会出现在侧栏";
   const heroTitle = !props.connected
     ? "先连上设备，再开始这一轮工作"
-    : props.restoringWorkspace
-      ? "正在恢复工作区，马上就能继续"
     : hasCwd
       ? `从 ${shortCwdLabel(props.cwd)} 开始下一条指令`
       : "先选一个目录，再让 CodexNext 真正开始工作";
@@ -42,16 +37,12 @@ export function NewSessionCanvas(props: NewSessionCanvasProps) {
         <span className="cn-empty-eyebrow">
           {!props.connected
             ? "等待设备接入"
-            : props.restoringWorkspace
-              ? "正在恢复工作区"
-              : "控制台已接入"}
+            : "控制台已接入"}
         </span>
         <h2>{heroTitle}</h2>
         <p>
           {!props.connected
             ? "先把 relay 设备接入进来，侧栏和工作区才会开始同步。接入成功后，再决定目录、模型和权限。"
-            : props.restoringWorkspace
-              ? "设备已经连上，最近的项目、会话和历史正文正在分阶段恢复。你不需要重新打开设置，恢复完成后会自动回到可继续的状态。"
             : hasCwd
               ? "直接在下方输入就会从当前项目开始。要切换目录、模型或权限模式，再打开设置，不需要先离开这个页面。"
               : "目录决定了新会话会落在哪个项目里。先把目录定下来，下面的输入框才真正有上下文。"}
@@ -74,11 +65,7 @@ export function NewSessionCanvas(props: NewSessionCanvasProps) {
       <div className="cn-empty-grid">
         <div className="cn-flow-card cn-new-session-guide">
           <strong>
-            {props.restoringWorkspace
-              ? "工作区正在恢复"
-              : hasCwd
-                ? "已经准备好开始"
-                : "还差一步设置目录"}
+            {hasCwd ? "已经准备好开始" : "还差一步设置目录"}
           </strong>
           <span>
             {hasCwd

@@ -2,7 +2,7 @@
 
 import { useDeferredValue, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import { codexHistoryKey, sessionTitle } from "../features/sessions/session-utils";
+import { sessionTitle } from "../features/sessions/session-utils";
 import type {
   ProjectThreadGroupData,
   ThreadListItem
@@ -49,6 +49,27 @@ function filterProjectGroups(
       return items.length > 0 ? { ...group, items } : null;
     })
     .filter((group): group is ProjectThreadGroupData => Boolean(group));
+}
+
+function summarizeSidebarIssue(message: string): string {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return "发生错误";
+  }
+  if (trimmed.includes("Failed to fetch") || trimmed.includes("NetworkError")) {
+    return "网络请求失败";
+  }
+  if (
+    trimmed.includes("Missing or invalid user token") ||
+    trimmed.includes("登录会话已过期")
+  ) {
+    return "登录已过期";
+  }
+  if (trimmed.includes("原项目已不存在")) {
+    return "原项目不存在";
+  }
+  const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? trimmed;
+  return firstLine.length > 34 ? `${firstLine.slice(0, 31)}...` : firstLine;
 }
 
 export function WebConsole() {
@@ -168,13 +189,20 @@ export function WebConsole() {
   const totalThreadCount =
     pinnedThreadItems.length +
     projectGroups.reduce((total, group) => total + group.items.length, 0);
-  const sidebarStatusMessage = !connected
-    ? "先连接设备，侧栏才会开始同步"
-    : sidebarSyncing
-      ? "正在恢复最近的项目、会话和历史预览"
+  const sidebarIssueMessage = error
+    ? summarizeSidebarIssue(error)
+    : currentResumeState === "missing"
+      ? "原项目不存在"
+      : currentResumeState === "failed"
+        ? "这条记录暂时打不开"
+        : null;
+  const sidebarStatusMessage = sidebarIssueMessage
+    ? sidebarIssueMessage
+    : !connected
+      ? "先连接设备"
       : totalThreadCount > 0
         ? `已同步 ${projectGroups.length} 个项目 · ${totalThreadCount} 条会话`
-        : "设备已连接，等待第一条会话";
+        : "设备已连接";
   const showSidebarSkeleton =
     connected &&
     sidebarSyncing &&
@@ -184,8 +212,6 @@ export function WebConsole() {
   const sidebarEmptyMessage =
     normalizedSidebarQuery.length > 0
       ? "没有匹配的项目或会话"
-      : sidebarSyncing
-        ? "正在恢复最近项目与会话"
       : connected
         ? "还没有对话"
         : "先连接设备";
@@ -301,10 +327,16 @@ export function WebConsole() {
                 </button>
               ) : null}
             </div>
-            <div className="cn-sidebar-status" role="status" aria-live="polite">
+            <div
+              className={sidebarIssueMessage ? "cn-sidebar-status error" : "cn-sidebar-status"}
+              role="status"
+              aria-live="polite"
+            >
               <span
                 className={
-                  sidebarSyncing
+                  sidebarIssueMessage
+                    ? "cn-sidebar-status-dot error"
+                    : sidebarSyncing
                     ? "cn-sidebar-status-dot syncing"
                     : connected
                       ? "cn-sidebar-status-dot ready"
@@ -436,30 +468,14 @@ export function WebConsole() {
             </div>
           </header>
 
-          {error ? (
-            <div className="cn-live-error">
-              <strong>操作失败</strong>
-              <span>{error}</span>
-            </div>
-          ) : null}
-
           {currentSession ? (
             <ChatCanvas
               active={activeTurn}
               canLoadOlderHistory={canLoadOlderHistory}
-              historyLoading={
-                Boolean(
-                  currentSession &&
-                    selectedHistoryEntry &&
-                    currentSession.sessionId.startsWith("history-preview:") &&
-                    historyLoadingKey === codexHistoryKey(selectedHistoryEntry)
-                )
-              }
               items={visibleChatItems}
               loadingOlderHistory={loadingOlderHistory}
               onLoadOlderHistory={() => void loadOlderHistory()}
               pendingApprovals={pendingApprovals.length}
-              resumeState={currentResumeState}
               session={currentSession}
               onOpenSummary={openSummarySheet}
             />
@@ -472,7 +488,6 @@ export function WebConsole() {
               permissionLabel={selectedPermission.label}
               pinnedCount={pinnedThreadItems.length}
               projectCount={projectGroups.length}
-              restoringWorkspace={sidebarSyncing}
               threadCount={totalThreadCount}
               onOpenSetup={openNewSessionSetup}
             />
