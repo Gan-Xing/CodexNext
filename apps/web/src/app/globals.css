@@ -3452,6 +3452,7 @@ summary {
   .cn-live-console .cn-empty-copy h2 {
     font-size: clamp(1.42rem, 7.6vw, 2rem);
     line-height: 1.08;
+    max-width: 12ch;
     text-wrap: balance;
   }
 
@@ -3459,8 +3460,24 @@ summary {
     display: block;
     font-size: 0.84rem;
     line-height: 1.5;
-    margin-top: 0.48rem;
     max-width: 18rem;
+  }
+
+  .cn-live-console .cn-empty-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cn-live-console .cn-empty-stats {
+    gap: 0.5rem;
+  }
+
+  .cn-live-console .cn-empty-stat {
+    min-width: 5.8rem;
+    padding: 0.68rem 0.74rem;
+  }
+
+  .cn-live-console .cn-new-session-playbook-item {
+    gap: 0.56rem;
   }
 
   .cn-live-console .cn-thread-canvas {
@@ -5144,44 +5161,92 @@ summary {
 .cn-empty-canvas {
   align-items: start;
   display: grid;
-  gap: 0.8rem;
-  padding: 3.2rem 2.1rem 0;
+  gap: 1.2rem;
+  padding: 2.8rem 2.1rem 0;
 }
 
 .cn-empty-copy {
-  max-width: 560px;
+  display: grid;
+  gap: 0.78rem;
+  max-width: 760px;
+}
+
+.cn-empty-eyebrow {
+  color: #677079;
+  font-size: 0.74rem;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .cn-empty-copy h2 {
-  font-size: clamp(1.7rem, 2.35vw, 2.3rem);
-  font-weight: 640;
+  font-size: clamp(1.9rem, 3vw, 2.9rem);
+  font-weight: 650;
   letter-spacing: -0.045em;
-  line-height: 1.08;
+  line-height: 1.02;
   margin: 0;
+  max-width: 16ch;
 }
 
 .cn-empty-copy p {
   color: var(--cn-muted);
-  font-size: 0.92rem;
+  font-size: 0.97rem;
   font-weight: 560;
-  line-height: 1.58;
-  margin: 0.72rem 0 0;
-  max-width: 480px;
+  line-height: 1.7;
+  margin: 0;
+  max-width: 640px;
+}
+
+.cn-empty-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.68rem;
+}
+
+.cn-empty-stat {
+  background: rgba(245, 247, 244, 0.94);
+  border: 1px solid rgba(96, 103, 108, 0.12);
+  border-radius: 16px;
+  display: grid;
+  gap: 0.16rem;
+  min-width: 7.2rem;
+  padding: 0.8rem 0.9rem;
+}
+
+.cn-empty-stat b {
+  color: var(--cn-muted);
+  font-size: 0.72rem;
+  font-weight: 760;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.cn-empty-stat strong {
+  font-size: 1.18rem;
+  font-weight: 680;
+  letter-spacing: -0.03em;
+}
+
+.cn-empty-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: minmax(0, 1.4fr) minmax(17rem, 0.9fr);
+  width: min(100%, 70rem);
 }
 
 .cn-flow-card,
 .cn-no-goal-card {
-  background: var(--cn-soft);
-  border: 1px solid var(--cn-line);
-  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(246, 247, 245, 0.98), rgba(241, 243, 240, 0.94));
+  border: 1px solid rgba(105, 111, 116, 0.12);
+  border-radius: 24px;
   display: grid;
-  gap: 0.5rem;
-  max-width: 520px;
-  padding: 1.15rem 1.25rem;
+  gap: 0.6rem;
+  max-width: none;
+  padding: 1.2rem 1.28rem;
 }
 
 .cn-flow-card strong {
-  font-size: 0.98rem;
+  font-size: 1rem;
 }
 
 .cn-new-session-guide {
@@ -5233,8 +5298,52 @@ summary {
 }
 
 .cn-new-session-guide-actions {
+  align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.6rem;
+}
+
+.cn-new-session-guide-hint {
+  color: var(--cn-muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.cn-new-session-playbook {
+  align-content: start;
+}
+
+.cn-new-session-playbook-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.cn-new-session-playbook-item {
+  align-items: start;
+  display: grid;
+  gap: 0.72rem;
+  grid-template-columns: 1.4rem minmax(0, 1fr);
+}
+
+.cn-new-session-playbook-item b {
+  align-items: center;
+  background: rgba(27, 31, 35, 0.08);
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 760;
+  height: 1.4rem;
+  justify-content: center;
+  width: 1.4rem;
+}
+
+.cn-new-session-playbook-item span {
+  color: var(--cn-ink);
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 0;
 }
 
 .cn-desktop-composer {

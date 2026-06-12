@@ -416,10 +416,17 @@ export function WebConsole() {
             />
           ) : (
             <NewSessionCanvas
+              connected={connected}
               cwd={cwd}
               deviceName={deviceDisplayName}
               modelLabel={selectedModel.label}
               permissionLabel={selectedPermission.label}
+              pinnedCount={pinnedThreadItems.length}
+              projectCount={projectGroups.length}
+              threadCount={
+                pinnedThreadItems.length +
+                projectGroups.reduce((total, group) => total + group.items.length, 0)
+              }
               onOpenSetup={openNewSessionSetup}
             />
           )}
