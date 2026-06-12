@@ -109,7 +109,7 @@ describe("session sidebar titles", () => {
       `${entry.id}::${entry.cwd}`,
       {
         [`${entry.id}::${entry.cwd}`]: {
-          text: "原项目不存在",
+          text: "文件夹不存在：/tmp/codexnext",
           tone: "danger"
         }
       }
@@ -117,8 +117,37 @@ describe("session sidebar titles", () => {
 
     expect(groups[0]?.items[0]).toMatchObject({
       id: `${entry.id}::${entry.cwd}`,
-      note: "原项目不存在",
+      note: "文件夹不存在：/tmp/codexnext",
       noteTone: "danger"
     });
+  });
+
+  it("excludes history entries whose folders no longer exist", () => {
+    const missingEntry = makeHistoryEntry({
+      id: "thread_missing_folder",
+      cwd: "/missing/repo",
+      cwdExists: false
+    });
+    const validEntry = makeHistoryEntry({
+      id: "thread_valid",
+      cwd: "/repo",
+      cwdExists: true
+    });
+
+    const groups = groupProjectThreads(
+      [],
+      [missingEntry, validEntry],
+      [],
+      { pinned: [] },
+      { hidden: [], pinned: [], renamed: {} },
+      null,
+      `${missingEntry.id}::${missingEntry.cwd}`
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.cwd).toBe("/repo");
+    expect(groups[0]?.items.map((item) => item.id)).toEqual([
+      `${validEntry.id}::${validEntry.cwd}`
+    ]);
   });
 });

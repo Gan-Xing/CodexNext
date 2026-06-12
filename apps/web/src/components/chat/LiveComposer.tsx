@@ -37,6 +37,7 @@ export function LiveComposer(props: {
   activeMenu: ComposerMenu | null;
   activeTurn: boolean;
   attachments: AttachmentDraft[];
+  disabledReason?: string | null;
   draft: string;
   fileInputRef: RefObject<HTMLInputElement | null>;
   goalMode: boolean;
@@ -72,10 +73,13 @@ export function LiveComposer(props: {
   const permissionButtonRef = useRef<HTMLButtonElement | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const [menuStyle, setMenuStyle] = useState<CSSProperties>();
+  const composerDisabled = Boolean(props.disabledReason);
   const hasDraft = props.draft.trim().length > 0;
-  const showInterrupt = props.activeTurn && !hasDraft;
+  const showInterrupt = props.activeTurn && !hasDraft && !composerDisabled;
   const showGoalPill = props.goalMode || props.hasGoal;
-  const placeholder = props.goalMode
+  const placeholder = props.disabledReason
+    ? props.disabledReason
+    : props.goalMode
     ? "Codex 应继续朝哪个目标努力？"
     : props.activeTurn
       ? "继续输入..."
@@ -271,17 +275,39 @@ export function LiveComposer(props: {
   return (
     <footer
       ref={footerRef}
-      className={props.activeTurn ? "cn-desktop-composer cn-live-composer steer" : "cn-desktop-composer cn-live-composer"}
+      className={
+        [
+          "cn-desktop-composer cn-live-composer",
+          props.activeTurn ? "steer" : "",
+          composerDisabled ? "disabled" : ""
+        ]
+          .filter(Boolean)
+          .join(" ")
+      }
     >
+      {props.disabledReason ? (
+        <div className="cn-history-locked-composer" role="status">
+          <div>
+            <strong>无法发送消息</strong>
+            <span>{props.disabledReason}</span>
+          </div>
+        </div>
+      ) : null}
       <textarea
         ref={textareaRef}
         aria-label="CodexNext 输入框"
+        disabled={composerDisabled}
         name="composer_message"
         placeholder={placeholder}
         value={props.draft}
         onChange={(event) => props.onDraftChange(event.target.value)}
         onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && hasDraft) {
+          if (
+            !composerDisabled &&
+            (event.metaKey || event.ctrlKey) &&
+            event.key === "Enter" &&
+            hasDraft
+          ) {
             props.onSubmit();
           }
         }}
@@ -306,6 +332,7 @@ export function LiveComposer(props: {
         <input
           ref={props.fileInputRef}
           className="cn-hidden-file"
+          disabled={composerDisabled}
           multiple
           name="composer_attachments"
           type="file"
@@ -316,6 +343,7 @@ export function LiveComposer(props: {
           className="cn-icon-button"
           type="button"
           title="更多操作"
+          disabled={composerDisabled}
           onClick={() => props.onOpenMenu("plus")}
         >
           <CodexIcon name="plus" />
@@ -324,6 +352,7 @@ export function LiveComposer(props: {
           ref={permissionButtonRef}
           className="cn-composer-pill"
           type="button"
+          disabled={composerDisabled}
           onClick={() => props.onOpenMenu("permission")}
         >
           {props.selectedPermission.label}
@@ -348,6 +377,7 @@ export function LiveComposer(props: {
           ref={modelButtonRef}
           className="cn-composer-pill cn-composer-pill-model"
           type="button"
+          disabled={composerDisabled}
           onClick={() => props.onOpenMenu("model")}
         >
           {props.selectedModel.shortLabel} {props.selectedReasoning.label}
@@ -356,9 +386,9 @@ export function LiveComposer(props: {
         <button
           className={showInterrupt ? "cn-send-button interrupt" : "cn-send-button"}
           type="button"
-          disabled={!hasDraft && !showInterrupt}
+          disabled={composerDisabled || (!hasDraft && !showInterrupt)}
           onClick={showInterrupt ? props.onInterrupt : props.onSubmit}
-          title={showInterrupt ? "打断当前运行" : "发送"}
+          title={props.disabledReason ?? (showInterrupt ? "打断当前运行" : "发送")}
         >
           <CodexIcon name={showInterrupt ? "stop" : "arrowUp"} />
         </button>

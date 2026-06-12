@@ -13,6 +13,10 @@ import {
   reasoningOptions,
   useWebConsoleController
 } from "../features/console/use-web-console-controller";
+import {
+  formatMissingHistoryFolderMessage,
+  formatMissingHistoryFolderShortMessage
+} from "../features/console/console-utils";
 import { ChatCanvas } from "./chat/ChatCanvas";
 import { LiveComposer } from "./chat/LiveComposer";
 import { NewSessionCanvas } from "./chat/NewSessionCanvas";
@@ -65,8 +69,12 @@ function summarizeSidebarIssue(message: string): string {
   ) {
     return "登录已过期";
   }
-  if (trimmed.includes("原项目已不存在")) {
-    return "原项目不存在";
+  if (
+    trimmed.includes("这个文件夹不存在") ||
+    trimmed.includes("文件夹不存在") ||
+    trimmed.includes("cwd does not exist:")
+  ) {
+    return "文件夹不存在";
   }
   const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? trimmed;
   return firstLine.length > 34 ? `${firstLine.slice(0, 31)}...` : firstLine;
@@ -192,7 +200,7 @@ export function WebConsole() {
   const sidebarIssueMessage = error
     ? summarizeSidebarIssue(error)
     : currentResumeState === "missing"
-      ? "原项目不存在"
+      ? "文件夹不存在"
       : currentResumeState === "failed"
         ? "这条记录暂时打不开"
         : null;
@@ -221,6 +229,19 @@ export function WebConsole() {
     : currentSession
       ? sessionTitle(currentSession, chatItems, codexHistory)
       : "新会话";
+  const missingHistoryCwd =
+    currentResumeState === "missing"
+      ? selectedHistoryEntry?.cwd ?? currentSession?.cwd ?? cwd
+      : null;
+  const missingHistoryNotice = missingHistoryCwd
+    ? {
+        title: "无法继续这个对话",
+        body: formatMissingHistoryFolderShortMessage(missingHistoryCwd)
+      }
+    : null;
+  const composerDisabledReason = missingHistoryCwd
+    ? formatMissingHistoryFolderMessage(missingHistoryCwd)
+    : null;
 
   return (
     <main className="cn-live-console">
@@ -471,6 +492,7 @@ export function WebConsole() {
           {currentSession ? (
             <ChatCanvas
               active={activeTurn}
+              blockedNotice={missingHistoryNotice}
               canLoadOlderHistory={canLoadOlderHistory}
               items={visibleChatItems}
               loadingOlderHistory={loadingOlderHistory}
@@ -524,6 +546,7 @@ export function WebConsole() {
             onSelectReasoning={setReasoningEffort}
             onSubmit={() => void submitComposer()}
             onTogglePlanMode={handleTogglePlanMode}
+            disabledReason={composerDisabledReason}
           />
         </section>
 

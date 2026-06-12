@@ -64,6 +64,8 @@ import {
   availableRelayPermissionOptions,
   formatConsoleConnectionError,
   formatConsoleError,
+  formatMissingHistoryFolderMessage,
+  formatMissingHistoryFolderShortMessage,
   mergeDevicePresenceResults,
   resolveComposerResumeBlock,
   seedSavedDevicePresence
@@ -103,6 +105,7 @@ import {
 } from "../devices/device-utils";
 import {
   codexHistoryKey,
+  filterRestorableHistoryEntries,
   getProjectSidebarPrefs,
   getThreadSidebarPrefs,
   groupProjectThreads,
@@ -111,6 +114,7 @@ import {
   isHistoryPreviewSessionId,
   isPendingSessionId,
   isPreviewOnlyHistoryEntry,
+  isRestorableHistoryEntry,
   makeHistoryPreviewSession,
   makePendingSession,
   pendingSessionId,
@@ -254,14 +258,44 @@ function restoreWorkspaceFromSidebarSnapshot(
   connection: AgentConnection,
   snapshot: WorkspaceSidebarSnapshot
 ): DeviceWorkspace {
+  const restorableHistory = filterRestorableHistoryEntries(snapshot.codexHistory);
+  const missingHistoryCwds = new Set(
+    snapshot.codexHistory
+      .filter((entry) => !isRestorableHistoryEntry(entry))
+      .map((entry) => entry.cwd)
+  );
+  const snapshotCwd = missingHistoryCwds.has(snapshot.cwd) ? "" : snapshot.cwd;
+  const restorablePreviewSessionIds = new Set(
+    restorableHistory.map(historyPreviewSessionId)
+  );
+  const restorableSessions = snapshot.sessions.filter(
+    (session) =>
+      !missingHistoryCwds.has(session.cwd) &&
+      (!isHistoryPreviewSessionId(session.sessionId) ||
+        restorablePreviewSessionIds.has(session.sessionId))
+  );
   const restoredSessionIds = new Set(
-    snapshot.sessions.map((session) => session.sessionId)
+    restorableSessions.map((session) => session.sessionId)
   );
   const restoredHistoryKeys = new Set(
-    snapshot.codexHistory.map((entry) => codexHistoryKey(entry))
+    restorableHistory.map((entry) => codexHistoryKey(entry))
+  );
+  const restorableThreadIds = new Set([
+    ...restorableHistory.map((entry) => entry.id),
+    ...restorableSessions
+      .filter((session) => !isHistoryPreviewSessionId(session.sessionId))
+      .map((session) => session.threadId)
+  ]);
+  const loadedThreadIds = snapshot.loadedThreadIds.filter((threadId) =>
+    restorableThreadIds.has(threadId)
+  );
+  const sessionHistoryOrigins = Object.fromEntries(
+    Object.entries(snapshot.sessionHistoryOrigins).filter(([sessionId]) =>
+      restoredSessionIds.has(sessionId)
+    )
   );
   const resumeStates = Object.fromEntries(
-    Object.keys(snapshot.sessionHistoryOrigins)
+    Object.keys(sessionHistoryOrigins)
       .filter((sessionId) => restoredSessionIds.has(sessionId))
       .map((sessionId) => [
         sessionId,
@@ -272,30 +306,31 @@ function restoreWorkspaceFromSidebarSnapshot(
   const nextWorkspace = {
     ...createDeviceWorkspace(connection),
     codexHistory: applyLoadedThreadState(
-      snapshot.codexHistory,
-      snapshot.loadedThreadIds
+      restorableHistory,
+      loadedThreadIds
     ),
     currentSessionId:
       snapshot.currentSessionId &&
       restoredSessionIds.has(snapshot.currentSessionId)
         ? snapshot.currentSessionId
         : null,
-    loadedThreadIds: snapshot.loadedThreadIds,
+    loadedThreadIds,
+    missingHistoryCwds: [...missingHistoryCwds],
     resumeStates,
     selectedHistoryKey:
       snapshot.selectedHistoryKey &&
       restoredHistoryKeys.has(snapshot.selectedHistoryKey)
         ? snapshot.selectedHistoryKey
         : null,
-    sessionHistoryOrigins: snapshot.sessionHistoryOrigins,
-    sessions: snapshot.sessions
+    sessionHistoryOrigins,
+    sessions: restorableSessions
   };
 
   return {
     ...nextWorkspace,
     cwd: resolvePreferredWorkspaceCwd({
       ...nextWorkspace,
-      cwd: snapshot.cwd
+      cwd: snapshotCwd
     }),
     resumeStates: Object.fromEntries(
       Object.keys(nextWorkspace.sessionHistoryOrigins)
@@ -329,27 +364,83 @@ function buildWorkspaceSidebarSnapshots(
         if (!workspace) {
           return null;
         }
+        const restorableHistory = filterRestorableHistoryEntries(workspace.codexHistory);
+        const missingHistoryCwds = new Set([
+          ...workspace.missingHistoryCwds,
+          ...workspace.codexHistory
+            .filter((entry) => !isRestorableHistoryEntry(entry))
+            .map((entry) => entry.cwd)
+        ]);
+        const cwd = missingHistoryCwds.has(workspace.cwd) ? "" : workspace.cwd;
+        const restorablePreviewSessionIds = new Set(
+          restorableHistory.map(historyPreviewSessionId)
+        );
+        const restorableSessions = workspace.sessions.filter(
+          (session) =>
+            !missingHistoryCwds.has(session.cwd) &&
+            (!isHistoryPreviewSessionId(session.sessionId) ||
+              restorablePreviewSessionIds.has(session.sessionId))
+        );
+        const restorableHistoryKeys = new Set(
+          restorableHistory.map((entry) => codexHistoryKey(entry))
+        );
+        const restorableSessionIds = new Set(
+          restorableSessions.map((session) => session.sessionId)
+        );
+        const currentSessionId =
+          workspace.currentSessionId && restorableSessionIds.has(workspace.currentSessionId)
+            ? workspace.currentSessionId
+            : null;
+        const selectedHistoryKey =
+          workspace.selectedHistoryKey &&
+          restorableHistoryKeys.has(workspace.selectedHistoryKey)
+            ? workspace.selectedHistoryKey
+            : null;
+        const sessionHistoryOrigins = Object.fromEntries(
+          Object.entries(workspace.sessionHistoryOrigins).filter(([sessionId]) =>
+            restorableSessionIds.has(sessionId)
+          )
+        );
+        const restorableThreadIds = new Set([
+          ...restorableHistory.map((entry) => entry.id),
+          ...restorableSessions
+            .filter((session) => !isHistoryPreviewSessionId(session.sessionId))
+            .map((session) => session.threadId)
+        ]);
+        const loadedThreadIds = workspace.loadedThreadIds.filter((threadId) =>
+          restorableThreadIds.has(threadId)
+        );
+        const snapshotWorkspace = {
+          ...workspace,
+          codexHistory: restorableHistory,
+          currentSessionId,
+          cwd,
+          loadedThreadIds,
+          selectedHistoryKey,
+          sessionHistoryOrigins,
+          sessions: restorableSessions
+        };
         const hasSidebarState =
-          workspace.sessions.length > 0 ||
-          workspace.codexHistory.length > 0 ||
-          workspace.loadedThreadIds.length > 0 ||
-          workspace.currentSessionId !== null ||
-          workspace.selectedHistoryKey !== null ||
-          Object.keys(workspace.sessionHistoryOrigins).length > 0 ||
-          workspace.cwd.trim().length > 0;
+          restorableSessions.length > 0 ||
+          restorableHistory.length > 0 ||
+          loadedThreadIds.length > 0 ||
+          currentSessionId !== null ||
+          selectedHistoryKey !== null ||
+          Object.keys(sessionHistoryOrigins).length > 0 ||
+          resolvePreferredWorkspaceCwd(snapshotWorkspace).trim().length > 0;
         if (!hasSidebarState) {
           return null;
         }
         return [
           device.id,
           {
-            codexHistory: workspace.codexHistory,
-            currentSessionId: workspace.currentSessionId,
-            cwd: resolvePreferredWorkspaceCwd(workspace),
-            loadedThreadIds: workspace.loadedThreadIds,
-            selectedHistoryKey: workspace.selectedHistoryKey,
-            sessionHistoryOrigins: workspace.sessionHistoryOrigins,
-            sessions: workspace.sessions
+            codexHistory: restorableHistory,
+            currentSessionId,
+            cwd: resolvePreferredWorkspaceCwd(snapshotWorkspace),
+            loadedThreadIds,
+            selectedHistoryKey,
+            sessionHistoryOrigins,
+            sessions: restorableSessions
           }
         ] as const;
       })
@@ -520,7 +611,7 @@ export function useWebConsoleController() {
     if (selectedHistoryEntry && currentResumeState === "missing") {
       return {
         [codexHistoryKey(selectedHistoryEntry)]: {
-          text: "原项目不存在",
+          text: formatMissingHistoryFolderShortMessage(selectedHistoryEntry.cwd),
           tone: "danger"
         }
       };
@@ -637,6 +728,17 @@ export function useWebConsoleController() {
       }
       const historyThreadId = workspace.sessionHistoryOrigins[sessionId];
       if (!historyThreadId) {
+        return;
+      }
+      if (workspace.missingHistoryCwds.includes(session.cwd)) {
+        patchDeviceWorkspace(deviceId, (currentWorkspace) => {
+          const nextOrigins = { ...currentWorkspace.sessionHistoryOrigins };
+          delete nextOrigins[sessionId];
+          return {
+            ...currentWorkspace,
+            sessionHistoryOrigins: nextOrigins
+          };
+        });
         return;
       }
       const alreadyHydrated = workspace.chatItems.some(
@@ -1991,6 +2093,10 @@ export function useWebConsoleController() {
     if (!deviceId) {
       return;
     }
+    if (!isRestorableHistoryEntry(entry)) {
+      setError(formatMissingHistoryFolderMessage(entry.cwd));
+      return;
+    }
     const key = codexHistoryKey(entry);
     const previewSession = makeHistoryPreviewSession(entry);
     const workspace = deviceWorkspaces[deviceId];
@@ -2141,7 +2247,7 @@ export function useWebConsoleController() {
           [previewSession.sessionId]: "missing"
         }
       }));
-      throw new Error("原项目已不存在。");
+      throw new Error(formatMissingHistoryFolderMessage(entry.cwd));
     }
 
     patchActiveWorkspace((workspace) => ({
@@ -2239,7 +2345,7 @@ export function useWebConsoleController() {
           [previewSession.sessionId]: "missing"
         }
       }));
-      throw new Error("原项目已不存在。");
+      throw new Error(formatMissingHistoryFolderMessage(entry.cwd));
     }
 
     patchActiveWorkspace((workspace) => ({
@@ -2328,7 +2434,10 @@ export function useWebConsoleController() {
       setActiveSheet("device");
       return;
     }
-    const resumeBlockMessage = resolveComposerResumeBlock(currentResumeState);
+    const resumeBlockMessage = resolveComposerResumeBlock(
+      currentResumeState,
+      selectedHistoryEntry?.cwd ?? currentSession?.cwd ?? cwd
+    );
     if (resumeBlockMessage) {
       setError(resumeBlockMessage);
       return;

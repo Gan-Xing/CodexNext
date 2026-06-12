@@ -12,6 +12,10 @@ import { SystemStatusRow } from "./SystemStatusRow";
 
 export function ChatCanvas(props: {
   active: boolean;
+  blockedNotice?: {
+    body: string;
+    title: string;
+  } | null;
   canLoadOlderHistory?: boolean;
   items: ChatItem[];
   loadingOlderHistory?: boolean;
@@ -87,6 +91,13 @@ export function ChatCanvas(props: {
         </div>
       ) : null}
 
+      {props.blockedNotice ? (
+        <div className="cn-thread-blocked-notice" role="status">
+          <strong>{props.blockedNotice.title}</strong>
+          <span>{props.blockedNotice.body}</span>
+        </div>
+      ) : null}
+
       {props.items.length > 0 ? (
         <>
           {props.canLoadOlderHistory || props.loadingOlderHistory ? (
@@ -107,7 +118,7 @@ export function ChatCanvas(props: {
             ))}
           </div>
         </>
-      ) : (
+      ) : props.blockedNotice ? null : (
         <div className="cn-thread-empty">
           <strong>继续在这里工作</strong>
           <span>直接在下方输入即可，不需要先处理这些运行状态提示。</span>

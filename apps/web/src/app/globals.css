@@ -2319,6 +2319,31 @@ summary {
   margin-bottom: 0.25rem;
 }
 
+.cn-thread-blocked-notice {
+  background: #fff5f1;
+  border: 1px solid rgba(184, 78, 48, 0.24);
+  border-radius: 20px;
+  color: #7a2b24;
+  display: grid;
+  gap: 0.35rem;
+  max-width: 46rem;
+  padding: 1rem 1.05rem;
+}
+
+.cn-thread-blocked-notice strong {
+  color: #612017;
+  font-size: 1rem;
+  font-weight: 720;
+}
+
+.cn-thread-blocked-notice span {
+  color: #8b3b2f;
+  font-size: 0.9rem;
+  font-weight: 620;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .cn-run-status {
   background: var(--cn-soft-2);
   border-radius: 999px;
@@ -5480,6 +5505,11 @@ summary {
   background: #f8f8f6;
 }
 
+.cn-desktop-composer.disabled {
+  background: #fff7f4;
+  border-color: rgba(184, 78, 48, 0.24);
+}
+
 .cn-history-locked-composer {
   align-items: center;
   display: flex;
@@ -5519,6 +5549,11 @@ summary {
 
 .cn-desktop-composer textarea::placeholder {
   color: var(--cn-faint);
+}
+
+.cn-desktop-composer textarea:disabled {
+  color: var(--cn-muted);
+  cursor: not-allowed;
 }
 
 .cn-desktop-composer textarea:focus {

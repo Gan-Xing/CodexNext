@@ -5,6 +5,7 @@ import type {
 import type { DeviceWorkspace } from "../chat/chat-state";
 import {
   codexHistoryKey,
+  filterRestorableHistoryEntries,
   historyPreviewSessionId,
   isHistoryPreviewSessionId,
   makeHistoryPreviewSession
@@ -20,27 +21,36 @@ export function mergeSelectedHistoryPreviewSession(
   historyEntries: LocalCodexHistoryEntry[],
   workspace: Pick<DeviceWorkspace, "currentSessionId" | "selectedHistoryKey" | "sessions">
 ): LocalSessionSummary[] {
+  const restorableHistoryEntries = filterRestorableHistoryEntries(historyEntries);
+  const restorablePreviewSessionIds = new Set(
+    restorableHistoryEntries.map(historyPreviewSessionId)
+  );
+  const baseSessions = sessions.filter(
+    (session) =>
+      !isHistoryPreviewSessionId(session.sessionId) ||
+      restorablePreviewSessionIds.has(session.sessionId)
+  );
   const previewSessionId = workspace.currentSessionId;
   if (
     !previewSessionId ||
     !isHistoryPreviewSessionId(previewSessionId) ||
     !workspace.selectedHistoryKey
   ) {
-    return sessions;
+    return baseSessions;
   }
   const entry =
-    historyEntries.find(
+    restorableHistoryEntries.find(
       (historyEntry) => codexHistoryKey(historyEntry) === workspace.selectedHistoryKey
     ) ?? null;
   if (!entry) {
-    return sessions;
+    return baseSessions;
   }
   const previewSession =
     workspace.sessions.find((session) => session.sessionId === previewSessionId) ??
     makeHistoryPreviewSession(entry);
   return [
     previewSession,
-    ...sessions.filter((session) => session.sessionId !== previewSession.sessionId)
+    ...baseSessions.filter((session) => session.sessionId !== previewSession.sessionId)
   ];
 }
 
@@ -49,14 +59,18 @@ export function mergeLiveSessionsIntoWorkspace(
   sessions: LocalSessionSummary[],
   savedSelection: SavedSessionSelection | null
 ): DeviceWorkspace {
+  const missingHistoryCwdSet = new Set(workspace.missingHistoryCwds);
+  const restorableSessions = sessions.filter(
+    (session) => !missingHistoryCwdSet.has(session.cwd)
+  );
   const nextSessions = mergeSelectedHistoryPreviewSession(
-    sessions,
+    restorableSessions,
     workspace.codexHistory,
     workspace
   );
   const nextSessionIds = new Set(nextSessions.map((session) => session.sessionId));
   const latestSession =
-    [...sessions].sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+    [...restorableSessions].sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
   const restoredSessionId =
     savedSelection?.currentSessionId &&
     nextSessionIds.has(savedSelection.currentSessionId)
@@ -71,9 +85,9 @@ export function mergeLiveSessionsIntoWorkspace(
     ...workspace,
     currentSessionId: nextCurrentSessionId,
     selectedHistoryKey:
-      nextCurrentSessionId && !isHistoryPreviewSessionId(nextCurrentSessionId)
-        ? null
-        : workspace.selectedHistoryKey,
+      nextCurrentSessionId && isHistoryPreviewSessionId(nextCurrentSessionId)
+        ? workspace.selectedHistoryKey
+        : null,
     sessions: nextSessions
   };
 
@@ -88,15 +102,31 @@ export function mergeLiveHistoryIntoWorkspace(
   historyEntries: LocalCodexHistoryEntry[],
   savedSelection: SavedSessionSelection | null
 ): DeviceWorkspace {
+  const missingHistoryCwds = [
+    ...new Set(
+      historyEntries
+        .filter((entry) => entry.cwdExists === false)
+        .map((entry) => entry.cwd)
+    )
+  ];
+  const missingHistoryCwdSet = new Set(missingHistoryCwds);
+  const restorableHistoryEntries = filterRestorableHistoryEntries(historyEntries);
+  const restorableSessions = workspace.sessions.filter(
+    (session) => !missingHistoryCwdSet.has(session.cwd)
+  );
   const currentRealSessionSelected =
     Boolean(workspace.currentSessionId) &&
-    !isHistoryPreviewSessionId(workspace.currentSessionId ?? "");
+    !isHistoryPreviewSessionId(workspace.currentSessionId ?? "") &&
+    restorableSessions.some((session) => session.sessionId === workspace.currentSessionId);
   const currentSelectedHistoryEntry = currentRealSessionSelected
     ? null
-    : findHistoryEntryByKey(historyEntries, workspace.selectedHistoryKey);
+    : findHistoryEntryByKey(restorableHistoryEntries, workspace.selectedHistoryKey);
   const restoredSelectedHistoryEntry = currentRealSessionSelected
     ? null
-    : findHistoryEntryByKey(historyEntries, savedSelection?.selectedHistoryKey ?? null);
+    : findHistoryEntryByKey(
+        restorableHistoryEntries,
+        savedSelection?.selectedHistoryKey ?? null
+      );
   const nextSelectedHistoryEntry =
     currentSelectedHistoryEntry ?? restoredSelectedHistoryEntry;
   const nextSelectedHistoryKey = nextSelectedHistoryEntry
@@ -109,17 +139,23 @@ export function mergeLiveHistoryIntoWorkspace(
       : null;
   const nextWorkspace = {
     ...workspace,
-    codexHistory: historyEntries,
+    codexHistory: restorableHistoryEntries,
     currentSessionId: nextCurrentSessionId,
-    selectedHistoryKey: nextSelectedHistoryKey
+    missingHistoryCwds,
+    sessionHistoryOrigins: filterSessionHistoryOrigins(
+      workspace.sessionHistoryOrigins,
+      restorableSessions
+    ),
+    selectedHistoryKey: nextSelectedHistoryKey,
+    sessions: restorableSessions
   };
 
   return {
     ...nextWorkspace,
     cwd: resolvePreferredWorkspaceCwd(nextWorkspace),
     sessions: mergeSelectedHistoryPreviewSession(
-      nextWorkspace.sessions,
-      historyEntries,
+      restorableSessions,
+      restorableHistoryEntries,
       nextWorkspace
     )
   };
@@ -137,9 +173,13 @@ export function resolveHistoryPreviewEntryToHydrate(
     return null;
   }
 
+  const restorableHistoryEntries = filterRestorableHistoryEntries(historyEntries);
   return (
-    findHistoryEntryByKey(historyEntries, workspace.selectedHistoryKey) ??
-    findHistoryEntryByKey(historyEntries, savedSelection?.selectedHistoryKey ?? null) ??
+    findHistoryEntryByKey(restorableHistoryEntries, workspace.selectedHistoryKey) ??
+    findHistoryEntryByKey(
+      restorableHistoryEntries,
+      savedSelection?.selectedHistoryKey ?? null
+    ) ??
     null
   );
 }
@@ -198,4 +238,14 @@ function findHistoryEntryByKey(
     return null;
   }
   return entries.find((entry) => codexHistoryKey(entry) === key) ?? null;
+}
+
+function filterSessionHistoryOrigins(
+  origins: Record<string, string>,
+  sessions: LocalSessionSummary[]
+): Record<string, string> {
+  const sessionIds = new Set(sessions.map((session) => session.sessionId));
+  return Object.fromEntries(
+    Object.entries(origins).filter(([sessionId]) => sessionIds.has(sessionId))
+  );
 }

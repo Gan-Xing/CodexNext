@@ -82,6 +82,27 @@ describe("console hydration helpers", () => {
     expect(result.selectedHistoryKey).toBeNull();
   });
 
+  it("does not re-add live sessions from folders known to be missing", () => {
+    const workspace = {
+      ...createDeviceWorkspace(connection()),
+      missingHistoryCwds: ["/missing/repo"]
+    };
+
+    const result = mergeLiveSessionsIntoWorkspace(
+      workspace,
+      [
+        liveSession({ sessionId: "session_missing", cwd: "/missing/repo" }),
+        liveSession()
+      ],
+      null
+    );
+
+    expect(result.sessions.map((session) => session.sessionId)).toEqual([
+      "session_live"
+    ]);
+    expect(result.currentSessionId).toBe("session_live");
+  });
+
   it("only schedules a history preview hydration when the active selection is preview-like", () => {
     const entry = historyEntry();
 
@@ -114,7 +135,7 @@ describe("console hydration helpers", () => {
     ).toEqual(entry);
   });
 
-  it("keeps the last good cwd when a restored history preview points at a missing project", () => {
+  it("drops a restored history preview when its folder no longer exists", () => {
     const missingEntry = historyEntry({
       cwd: "/missing/repo",
       cwdExists: false
@@ -137,6 +158,48 @@ describe("console hydration helpers", () => {
     );
 
     expect(result.cwd).toBe("/repo");
+    expect(result.codexHistory).toEqual([]);
+    expect(result.currentSessionId).toBeNull();
+    expect(result.selectedHistoryKey).toBeNull();
+    expect(result.sessions.map((session) => session.sessionId)).toEqual([
+      "session_live"
+    ]);
+  });
+
+  it("drops live sessions and history origins for folders reported as missing", () => {
+    const missingEntry = historyEntry({
+      cwd: "/missing/repo",
+      cwdExists: false
+    });
+    const missingSession = liveSession({
+      sessionId: "session_missing",
+      threadId: missingEntry.id,
+      cwd: "/missing/repo"
+    });
+    const workspace = {
+      ...createDeviceWorkspace(connection()),
+      currentSessionId: missingSession.sessionId,
+      sessions: [missingSession, liveSession()],
+      sessionHistoryOrigins: {
+        [missingSession.sessionId]: missingEntry.id,
+        session_live: "thread_live"
+      }
+    };
+
+    const result = mergeLiveHistoryIntoWorkspace(
+      workspace,
+      [missingEntry],
+      null
+    );
+
+    expect(result.missingHistoryCwds).toEqual(["/missing/repo"]);
+    expect(result.sessions.map((session) => session.sessionId)).toEqual([
+      "session_live"
+    ]);
+    expect(result.sessionHistoryOrigins).toEqual({
+      session_live: "thread_live"
+    });
+    expect(result.currentSessionId).toBeNull();
   });
 
   it("skips a missing history cwd when choosing the workspace directory hint", () => {
@@ -155,6 +218,27 @@ describe("console hydration helpers", () => {
         sessions: [liveSession()]
       })
     ).toBe("/repo");
+  });
+
+  it("does not schedule hydration for a missing history folder", () => {
+    const missingEntry = historyEntry({
+      cwd: "/missing/repo",
+      cwdExists: false
+    });
+
+    expect(
+      resolveHistoryPreviewEntryToHydrate(
+        {
+          currentSessionId: null,
+          selectedHistoryKey: codexHistoryKey(missingEntry)
+        },
+        [missingEntry],
+        {
+          currentSessionId: null,
+          selectedHistoryKey: codexHistoryKey(missingEntry)
+        }
+      )
+    ).toBeNull();
   });
 });
 
@@ -190,7 +274,7 @@ function historyEntryBase() {
   };
 }
 
-function liveSession(): LocalSessionSummary {
+function liveSession(overrides: Partial<LocalSessionSummary> = {}): LocalSessionSummary {
   return {
     sessionId: "session_live",
     threadId: "thread_live",
@@ -205,6 +289,7 @@ function liveSession(): LocalSessionSummary {
     sandbox: "workspace-write",
     goal: null,
     createdAt: 10,
-    updatedAt: 20
+    updatedAt: 20,
+    ...overrides
   };
 }

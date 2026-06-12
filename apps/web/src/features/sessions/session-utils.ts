@@ -101,6 +101,9 @@ export function groupProjectThreads(
 
   const seen = new Set<string>();
   for (const entry of entries) {
+    if (!isRestorableHistoryEntry(entry)) {
+      continue;
+    }
     const uniqueKey = codexHistoryKey(entry);
     if (
       seen.has(uniqueKey) ||
@@ -212,6 +215,16 @@ export function codexHistoryKey(entry: LocalCodexHistoryEntry): string {
 
 export function isPreviewOnlyHistoryEntry(entry: LocalCodexHistoryEntry): boolean {
   return entry.cwdExists === false;
+}
+
+export function isRestorableHistoryEntry(entry: LocalCodexHistoryEntry): boolean {
+  return entry.cwdExists !== false;
+}
+
+export function filterRestorableHistoryEntries(
+  entries: LocalCodexHistoryEntry[]
+): LocalCodexHistoryEntry[] {
+  return entries.filter(isRestorableHistoryEntry);
 }
 
 export function historyPreviewSessionId(entry: LocalCodexHistoryEntry): string {

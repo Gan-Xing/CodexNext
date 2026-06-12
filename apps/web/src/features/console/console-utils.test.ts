@@ -3,6 +3,8 @@ import {
   availableRelayPermissionOptions,
   classifyRelaySessionError,
   coerceRelayPermissionMode,
+  formatMissingHistoryFolderMessage,
+  formatMissingHistoryFolderShortMessage,
   formatConsoleConnectionError,
   formatConsoleError,
   formatRelaySessionError,
@@ -90,6 +92,9 @@ describe("relay session error classification", () => {
     expect(formatConsoleError(new Error("socket hang up"))).toBe(
       "socket hang up"
     );
+    expect(formatConsoleError(new Error("cwd does not exist: /missing/repo"))).toBe(
+      "无法继续这个对话，因为这个文件夹不存在：/missing/repo"
+    );
   });
 
   it("formats controller connection errors with relay expiry override", () => {
@@ -109,14 +114,23 @@ describe("relay session error classification", () => {
 });
 
 describe("composer resume guards", () => {
-  it("only blocks composer sends for missing history projects", () => {
-    expect(resolveComposerResumeBlock("missing")).toBe(
-      "原项目已不存在，无法继续这条历史。"
+  it("only blocks composer sends for missing history folders", () => {
+    expect(resolveComposerResumeBlock("missing", "/missing/repo")).toBe(
+      "无法继续这个对话，因为这个文件夹不存在：/missing/repo"
     );
     expect(resolveComposerResumeBlock("failed")).toBeNull();
     expect(resolveComposerResumeBlock("resuming")).toBeNull();
     expect(resolveComposerResumeBlock("history")).toBeNull();
     expect(resolveComposerResumeBlock(null)).toBeNull();
+  });
+
+  it("formats missing history folder messages without internal project jargon", () => {
+    expect(formatMissingHistoryFolderMessage("/missing/repo")).toBe(
+      "无法继续这个对话，因为这个文件夹不存在：/missing/repo"
+    );
+    expect(formatMissingHistoryFolderShortMessage("/missing/repo")).toBe(
+      "文件夹不存在：/missing/repo"
+    );
   });
 });
 

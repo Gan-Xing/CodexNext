@@ -57,7 +57,17 @@ export function formatRelaySessionError(error: unknown): string | null {
 }
 
 export function formatConsoleError(error: unknown): string {
-  return formatRelaySessionError(error) ?? formatError(error);
+  const relayError = formatRelaySessionError(error);
+  if (relayError) {
+    return relayError;
+  }
+
+  const message = formatError(error);
+  const missingCwd = readMissingCwdFromMessage(message);
+  if (missingCwd !== null) {
+    return formatMissingHistoryFolderMessage(missingCwd);
+  }
+  return message;
 }
 
 export function formatConsoleConnectionError(
@@ -68,12 +78,35 @@ export function formatConsoleConnectionError(
 }
 
 export function resolveComposerResumeBlock(
-  resumeState: ResumeState | null
+  resumeState: ResumeState | null,
+  cwd?: string | null
 ): string | null {
   if (resumeState === "missing") {
-    return "原项目已不存在，无法继续这条历史。";
+    return formatMissingHistoryFolderMessage(cwd);
   }
   return null;
+}
+
+export function formatMissingHistoryFolderMessage(cwd?: string | null): string {
+  const normalizedCwd = cwd?.trim();
+  return normalizedCwd
+    ? `无法继续这个对话，因为这个文件夹不存在：${normalizedCwd}`
+    : "无法继续这个对话，因为原来的文件夹不存在。";
+}
+
+export function formatMissingHistoryFolderShortMessage(cwd?: string | null): string {
+  const normalizedCwd = cwd?.trim();
+  return normalizedCwd ? `文件夹不存在：${normalizedCwd}` : "文件夹不存在";
+}
+
+function readMissingCwdFromMessage(message: string): string | null {
+  const marker = "cwd does not exist:";
+  const markerIndex = message.indexOf(marker);
+  if (markerIndex === -1) {
+    return null;
+  }
+  const cwd = message.slice(markerIndex + marker.length).split(/\r?\n/)[0]?.trim();
+  return cwd || null;
 }
 
 export interface PresenceRefreshResult {

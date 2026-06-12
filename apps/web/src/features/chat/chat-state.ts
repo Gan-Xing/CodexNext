@@ -39,6 +39,7 @@ export interface DeviceWorkspace {
   historyLoadingKey: string | null;
   historyPages: Record<string, SessionHistoryPageState>;
   loadedThreadIds: string[];
+  missingHistoryCwds: string[];
   pendingApprovals: PendingApprovalView[];
   resumeStates: Record<string, ResumeState>;
   selectedHistoryKey: string | null;
@@ -72,6 +73,7 @@ export function createDeviceWorkspace(connection: AgentConnection): DeviceWorksp
     historyLoadingKey: null,
     historyPages: {},
     loadedThreadIds: [],
+    missingHistoryCwds: [],
     pendingApprovals: [],
     resumeStates: {},
     selectedHistoryKey: null,
