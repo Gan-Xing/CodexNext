@@ -310,6 +310,19 @@ async function listCodexHistoryTurns(
       : 40;
   const sortDirection = params.sortDirection === "asc" ? "asc" : "desc";
   const itemsView = params.itemsView === "full" ? "full" : "summary";
+
+  // Initial history open does not need a paged turns lookup. `thread/read`
+  // already returns the full thread faster than `thread/read + thread/turns/list`.
+  if (!(typeof params.cursor === "string" && params.cursor.trim())) {
+    const detail = await readCodexHistoryDetailById(params.id, sessionManager);
+    return {
+      entry: detail.entry,
+      messages: detail.messages,
+      nextCursor: null,
+      backwardsCursor: null
+    };
+  }
+
   const entry = await readCodexHistoryEntryById(params.id, sessionManager);
   const turnsPage = await sessionManager.listThreadTurns({
     threadId: params.id,

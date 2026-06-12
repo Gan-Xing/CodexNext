@@ -614,6 +614,7 @@ describe("local HTTP server guards", () => {
         ]
       }
     };
+    let clientFactoryCalls = 0;
     fake.threadTurnsListResponse = {
       data: [
         {
@@ -644,7 +645,10 @@ describe("local HTTP server guards", () => {
       token: "secret",
       approvalTimeoutMs: 1_000,
       codexBin: "codex",
-      clientFactory: () => fake
+      clientFactory: () => {
+        clientFactoryCalls += 1;
+        return fake;
+      }
     });
     const address = await listen(handle, "127.0.0.1", 0);
     const base = `http://${address.address}:${address.port}`;
@@ -678,18 +682,38 @@ describe("local HTTP server guards", () => {
         nextCursor: string | null;
       };
       expect(turns.status).toBe(200);
-      expect(fake.threadTurnsListParams[0]).toEqual({
+      expect(fake.threadReadParams[1]).toEqual({
         threadId: "thread_1",
-        cursor: null,
-        limit: 20,
-        sortDirection: "desc",
-        itemsView: "summary"
+        includeTurns: true
       });
+      expect(fake.threadTurnsListParams).toHaveLength(0);
       expect(turnsBody.messages).toMatchObject([
         { role: "user", text: "继续这个项目" },
         { role: "assistant", text: "我会先查看文件结构。" }
       ]);
-      expect(turnsBody.nextCursor).toBe("cursor_older");
+      expect(turnsBody.nextCursor).toBeNull();
+
+      const pagedTurns = await fetch(
+        `${base}/api/codex-history/turns?token=secret&id=thread_1&cursor=older&limit=20&sortDirection=desc&itemsView=summary`
+      );
+      const pagedTurnsBody = await pagedTurns.json() as {
+        messages: Array<{ role: string; text: string }>;
+        nextCursor: string | null;
+      };
+      expect(pagedTurns.status).toBe(200);
+      expect(fake.threadTurnsListParams[0]).toEqual({
+        threadId: "thread_1",
+        cursor: "older",
+        limit: 20,
+        sortDirection: "desc",
+        itemsView: "summary"
+      });
+      expect(pagedTurnsBody.messages).toMatchObject([
+        { role: "user", text: "继续这个项目" },
+        { role: "assistant", text: "我会先查看文件结构。" }
+      ]);
+      expect(pagedTurnsBody.nextCursor).toBe("cursor_older");
+      expect(clientFactoryCalls).toBe(1);
 
       const response = await fetch(`${base}/api/codex-history/resume?token=secret`, {
         method: "POST",

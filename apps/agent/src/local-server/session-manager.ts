@@ -119,6 +119,8 @@ type ResumeSessionInput = Omit<LocalResumeSessionInput, "id" | "cwd"> & {
 export class SessionManager {
   private readonly sessions = new Map<string, LocalSession>();
   private readonly clientFactory: CodexClientFactory;
+  private metadataClientPromise: Promise<ManagedCodexClient> | null = null;
+  private metadataClientQueue: Promise<void> = Promise.resolve();
 
   public constructor(private readonly options: SessionManagerOptions) {
     this.clientFactory =
@@ -629,6 +631,7 @@ export class SessionManager {
 
   public async closeAll(): Promise<void> {
     await Promise.all([...this.sessions.values()].map((session) => this.closeSession(session)));
+    await this.closeMetadataClient();
   }
 
   private requireSession(sessionId: string): LocalSession {
@@ -642,18 +645,52 @@ export class SessionManager {
   private async withTemporaryClient<T>(
     operation: (client: ManagedCodexClient) => Promise<T>
   ): Promise<T> {
-    const client = this.clientFactory({
-      cwd: os.homedir(),
-      codexBin: this.options.codexBin,
-      reasoningEffort: null,
-      onApprovalRequest: async () => ({ decision: "decline" })
-    });
+    const run = async () => {
+      const client = await this.getMetadataClient();
+      return operation(client);
+    };
+    const result = this.metadataClientQueue.then(run, run);
+    this.metadataClientQueue = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  private async getMetadataClient(): Promise<ManagedCodexClient> {
+    if (!this.metadataClientPromise) {
+      const client = this.clientFactory({
+        cwd: os.homedir(),
+        codexBin: this.options.codexBin,
+        reasoningEffort: null,
+        onApprovalRequest: async () => ({ decision: "decline" })
+      });
+      this.metadataClientPromise = (async () => {
+        try {
+          await client.initialize();
+          await client.initialized();
+          return client;
+        } catch (error) {
+          this.metadataClientPromise = null;
+          await client.close().catch(() => undefined);
+          throw error;
+        }
+      })();
+    }
+    return this.metadataClientPromise;
+  }
+
+  private async closeMetadataClient(): Promise<void> {
+    const metadataClientPromise = this.metadataClientPromise;
+    this.metadataClientPromise = null;
+    if (!metadataClientPromise) {
+      return;
+    }
     try {
-      await client.initialize();
-      await client.initialized();
-      return await operation(client);
-    } finally {
+      const client = await metadataClientPromise;
       await client.close();
+    } catch {
+      // Ignore teardown failures while shutting down the shared metadata client.
     }
   }
 
