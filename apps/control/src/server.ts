@@ -55,6 +55,7 @@ import {
   resolvePairingStatus,
   type PairingRequestRecord
 } from "./pairing.js";
+import { devTrace } from "./dev-trace.js";
 
 export { classifyRelayRpcError } from "./relay-rpc.js";
 
@@ -306,6 +307,10 @@ export function createControlServer(
     );
     const lastSeqByDevice = auth?.lastSeqByDevice ?? {};
     const replayBatch: DeviceEventPayload[] = [];
+    devTrace("user.socket.connected", {
+      socketId: socket.id,
+      requestedDevices: Object.keys(lastSeqByDevice).length
+    });
     for (const device of sortedDevices(devices)) {
       socket.emit("device:upsert", device.info);
       const after = Number.isFinite(lastSeqByDevice[device.info.deviceId] ?? NaN)
@@ -319,6 +324,11 @@ export function createControlServer(
       }
     }
     if (replayBatch.length > 0) {
+      devTrace("user.socket.replay", {
+        socketId: socket.id,
+        count: replayBatch.length,
+        devices: [...new Set(replayBatch.map((item) => item.deviceId))].sort()
+      });
       socket.emit("device:replay", replayBatch);
     }
   });
@@ -400,6 +410,12 @@ export function createControlServer(
             arch: payload.arch
           }
         });
+        devTrace("machine.hello", {
+          deviceId,
+          socketId: socket.id,
+          agentRunId: payload.agentRunId,
+          codexVersion: payload.codexVersion ?? null
+        });
         broadcastUpsert(userNamespace, next.info);
         ack({
           ok: true,
@@ -452,6 +468,12 @@ export function createControlServer(
         event: payload.event
       });
       if (appendResult.duplicate) {
+        devTrace("machine.event.duplicate", {
+          deviceId: payload.deviceId,
+          agentRunId: payload.agentRunId,
+          sourceSeq: payload.event.seq,
+          type: payload.event.type
+        });
         audit.write({
           action: "device.event.duplicate",
           at: Date.now(),
@@ -476,6 +498,16 @@ export function createControlServer(
         deviceId: payload.deviceId,
         event: appendResult.event
       } satisfies DeviceEventPayload);
+      devTrace("machine.event.forwarded", {
+        deviceId: payload.deviceId,
+        agentRunId: payload.agentRunId,
+        seq: appendResult.event.seq,
+        sourceSeq: payload.event.seq,
+        type: appendResult.event.type,
+        sessionId: appendResult.event.sessionId,
+        threadId: appendResult.event.threadId,
+        turnId: appendResult.event.turnId
+      });
     });
 
     socket.on("disconnect", () => {
@@ -500,6 +532,10 @@ export function createControlServer(
         at: device.info.lastSeenAt,
         deviceId: registeredDeviceId,
         outcome: "success"
+      });
+      devTrace("machine.disconnected", {
+        deviceId: registeredDeviceId,
+        socketId: socket.id
       });
       if (wasOnline) {
         userNamespace.emit("device:offline", {

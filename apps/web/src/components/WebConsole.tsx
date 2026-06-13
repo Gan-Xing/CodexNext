@@ -142,6 +142,7 @@ export function WebConsole() {
     openDeviceSheet,
     openSummarySheet,
     openNewSessionSetup,
+    startNewSessionDraft,
     pendingApprovals,
     permissionMode,
     planModeEnabled,
@@ -300,9 +301,9 @@ export function WebConsole() {
     startProjectSession(projectCwd);
   }
 
-  function handleOpenNewSessionSetup() {
+  function handleStartNewSessionDraft() {
     showMobileChat();
-    openNewSessionSetup();
+    startNewSessionDraft();
   }
 
   function openMobileSearch() {
@@ -351,7 +352,7 @@ export function WebConsole() {
           <button
             className="cn-rail-button"
             type="button"
-            onClick={handleOpenNewSessionSetup}
+            onClick={handleStartNewSessionDraft}
             aria-label="新建对话"
           >
             <CodexIcon name="compose" />
@@ -406,7 +407,7 @@ export function WebConsole() {
             <button
               className="cn-mobile-directory-action cn-rail-button"
               type="button"
-              onClick={handleOpenNewSessionSetup}
+              onClick={handleStartNewSessionDraft}
               aria-label="新建对话"
               title="新建对话"
             >

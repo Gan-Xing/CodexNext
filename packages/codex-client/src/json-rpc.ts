@@ -12,6 +12,7 @@ import {
   JsonRpcTimeoutError,
   JsonRpcTransportClosedError
 } from "./errors.js";
+import { devTrace, durationMs, errorSummary, payloadSummary } from "./dev-trace.js";
 
 export interface JsonRpcTransport {
   send(message: JsonRpcOutboundMessage): void | Promise<void>;
@@ -33,6 +34,7 @@ export type NotificationListener = (
 interface PendingRequest {
   id: RequestId;
   method: string;
+  startedAt: number;
   timer: NodeJS.Timeout;
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
@@ -60,10 +62,17 @@ export class JsonRpcClient extends EventEmitter {
       void this.handleIncomingMessage(message);
     });
     this.transport.on("error", (error) => {
+      devTrace("json-rpc.transport_error", {
+        pending: this.pending.size,
+        ...errorSummary(error)
+      });
       this.rejectAll(new JsonRpcTransportClosedError(error.message));
       this.emit("error", error);
     });
     this.transport.on("close", () => {
+      devTrace("json-rpc.transport_close", {
+        pending: this.pending.size
+      });
       this.closed = true;
       this.rejectAll(new JsonRpcTransportClosedError());
       this.emit("close");
@@ -84,16 +93,30 @@ export class JsonRpcClient extends EventEmitter {
     const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
     const message: JsonRpcRequest =
       params === undefined ? { id, method } : { id, method, params };
+    const startedAt = Date.now();
+    devTrace("json-rpc.request", {
+      id,
+      method,
+      timeoutMs,
+      ...payloadSummary(params)
+    });
 
     const promise = new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        devTrace("json-rpc.timeout", {
+          id,
+          method,
+          timeoutMs,
+          durationMs: durationMs(startedAt)
+        });
         reject(new JsonRpcTimeoutError({ id, method, timeoutMs }));
       }, timeoutMs);
 
       this.pending.set(id, {
         id,
         method,
+        startedAt,
         timer,
         resolve: (result) => resolve(result as T),
         reject
@@ -107,6 +130,12 @@ export class JsonRpcClient extends EventEmitter {
       }
       clearTimeout(pending.timer);
       this.pending.delete(id);
+      devTrace("json-rpc.send_error", {
+        id,
+        method,
+        durationMs: durationMs(startedAt),
+        ...errorSummary(error)
+      });
       pending.reject(toError(error));
     });
 
@@ -120,6 +149,10 @@ export class JsonRpcClient extends EventEmitter {
 
     const message =
       params === undefined ? { method } : { method, params };
+    devTrace("json-rpc.notify", {
+      method,
+      ...payloadSummary(params)
+    });
     return Promise.resolve(this.transport.send(message));
   }
 
@@ -200,6 +233,10 @@ export class JsonRpcClient extends EventEmitter {
         Object.prototype.hasOwnProperty.call(message, "params")
           ? { method, params: message.params }
           : { method };
+      devTrace("json-rpc.notification", {
+        method,
+        ...payloadSummary(notification.params)
+      });
       this.emit("notification", notification);
       this.emit(`notification:${method}`, notification);
       return;
@@ -232,6 +269,13 @@ export class JsonRpcClient extends EventEmitter {
         typeof message.error.message === "string"
           ? message.error.message
           : "JSON-RPC error response";
+      devTrace("json-rpc.response_error", {
+        id,
+        method: pending.method,
+        durationMs: durationMs(pending.startedAt),
+        code,
+        errorMessageLength: errorMessage.length
+      });
       pending.reject(
         new JsonRpcResponseError({
           id,
@@ -244,10 +288,22 @@ export class JsonRpcClient extends EventEmitter {
       return;
     }
 
+    devTrace("json-rpc.response", {
+      id,
+      method: pending.method,
+      durationMs: durationMs(pending.startedAt),
+      ...payloadSummary(message.result)
+    });
     pending.resolve(message.result);
   }
 
   private async handleServerRequest(request: JsonRpcRequest): Promise<void> {
+    const startedAt = Date.now();
+    devTrace("json-rpc.server_request", {
+      id: request.id,
+      method: request.method,
+      ...payloadSummary(request.params)
+    });
     const handler =
       this.requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
 
@@ -268,7 +324,18 @@ export class JsonRpcClient extends EventEmitter {
           result: result === undefined ? null : result
         })
       );
+      devTrace("json-rpc.server_response", {
+        id: request.id,
+        method: request.method,
+        durationMs: durationMs(startedAt)
+      });
     } catch (error) {
+      devTrace("json-rpc.server_response_error", {
+        id: request.id,
+        method: request.method,
+        durationMs: durationMs(startedAt),
+        ...errorSummary(error)
+      });
       await this.sendServerRequestError(
         request.id,
         -32_000,
@@ -305,4 +372,3 @@ function toError(error: unknown): Error {
   }
   return new Error(String(error));
 }
-

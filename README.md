@@ -22,6 +22,59 @@ CodexNext is a relay-first control plane for Codex app-server. Users sign in to 
 - `codexnext pair`
 - `codexnext connect`
 
+## Conversation State Guardrails
+
+These rules protect the chat path. Do not weaken them when adding features or
+optimizing UI:
+
+- The chat canvas reads from the normalized conversation store as the only live
+  source of truth. Derived history, sidebar rows, or legacy `chatItems` mirrors
+  may reconcile into that store, but must not replace live/pending/streaming
+  state wholesale.
+- Conversation identity is canonicalized by `conversationKey = threadId ??
+  sessionId ?? pendingClientId`. RPC acknowledgements may remap aliases from an
+  optimistic key to a real session/thread key, but the UI must not fork a second
+  independent conversation.
+- Sending a message must write a client message id, optimistic user message,
+  and thinking placeholder immediately. The outbox state machine is
+  `pending -> sent -> streaming -> complete/failed`; an RPC ack only means the
+  backend accepted the turn, not that streaming is complete.
+- Socket replay/live events may append or reconcile entities by sequence,
+  message id, turn id, and client message id. They must not silently switch the
+  user's selected conversation, reorder the active thread, or overwrite a live
+  pending turn.
+- History hydration is per-turn reconciliation. It may confirm completed turns
+  and fill gaps, but it must preserve current live, pending, and streaming
+  items unless the matching client message id, turn id, or message id proves
+  replacement is correct.
+- Development tracing must cover submit intent, queued state, RPC start, ack,
+  socket receive, reducer apply, stream seen, selected conversation render, and
+  reconciliation or failure. Render traces must stay summarized; never log the
+  full visible message list on every render.
+
+## Conversation Performance Guardrails
+
+Cold conversation switching is a product-critical path. The target behavior is
+that clicking a conversation commits selection immediately and never waits for
+network history loading before showing the thread surface.
+
+- Selection should commit in under 50 ms. Do not block the click path on
+  `getCodexHistoryTurns`, `listSessions`, event replay, or history hydration.
+- Show the best local state first: in-memory conversation, persisted
+  conversation cache, or a lightweight thread skeleton using sidebar title and
+  preview metadata. Avoid empty waits for unopened conversations.
+- Persist a bounded recent message cache per conversation, separate from the
+  outbox. The outbox is for unsent/in-flight recovery; it is not enough for fast
+  cold thread switching.
+- Revalidate stale conversations in the background and merge by message id,
+  turn id, and client message id. Users should not experience "loading the whole
+  history" as the primary interaction.
+- Prefetch visible sidebar threads, pinned threads, and recent threads during
+  idle time with a small concurrency budget.
+- Large histories must use virtualized rendering or an equivalent windowing
+  strategy. Do not render hundreds of Markdown/code-highlighted messages in one
+  synchronous pass.
+
 ## Not Included
 
 - React Native

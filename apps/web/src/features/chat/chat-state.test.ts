@@ -7,7 +7,8 @@ import {
   ingestEventsIntoWorkspace,
   markOptimisticMessageFailed,
   mergeLocalEvents,
-  reassignSessionChatItems
+  reassignSessionChatItems,
+  selectConversationChatItems
 } from "./chat-state";
 
 function makeWorkspace() {
@@ -26,6 +27,7 @@ function makeEvent(input: Partial<LocalEvent> & Pick<LocalEvent, "seq" | "type">
     ts: input.ts ?? input.seq,
     type: input.type,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.threadId ? { threadId: input.threadId } : {}),
     ...(input.turnId ? { turnId: input.turnId } : {}),
     ...(input.payload !== undefined ? { payload: input.payload } : {})
   };
@@ -45,18 +47,29 @@ describe("chat state", () => {
     expect(merged[1]?.id).toBe("replacement");
   });
 
-  it("adds optimistic user messages immediately", () => {
+  it("adds optimistic user messages and thinking feedback immediately", () => {
     const workspace = addOptimisticUserMessage(makeWorkspace(), {
       sessionId: "session_1",
       clientMessageId: "msg_1",
       text: "hello"
     });
 
+    expect(workspace.chatItems).toHaveLength(2);
     expect(workspace.chatItems[0]).toMatchObject({
       role: "user",
-      status: "sending",
+      status: "pending",
       clientMessageId: "msg_1",
       text: "hello"
+    });
+    expect(workspace.chatItems[1]).toMatchObject({
+      role: "system",
+      sessionId: "session_1",
+      status: "streaming",
+      text: "正在思考",
+      meta: {
+        clientMessageId: "msg_1",
+        kind: "thinking"
+      }
     });
   });
 
@@ -84,12 +97,22 @@ describe("chat state", () => {
       { selectSessions: true }
     );
 
-    expect(next.chatItems).toHaveLength(1);
+    expect(next.chatItems).toHaveLength(2);
     expect(next.chatItems[0]).toMatchObject({
       id: "event_1",
       sessionId: "session_1",
       turnId: "turn_1",
       status: "sent"
+    });
+    expect(next.chatItems[1]).toMatchObject({
+      role: "system",
+      sessionId: "session_1",
+      turnId: "turn_1",
+      text: "正在思考",
+      meta: {
+        clientMessageId: "msg_1",
+        kind: "thinking"
+      }
     });
   });
 
@@ -144,6 +167,74 @@ describe("chat state", () => {
     });
   });
 
+  it("does not switch the selected session from replay or live events", () => {
+    const workspace = {
+      ...makeWorkspace(),
+      currentSessionId: "session_selected",
+      selectedHistoryKey: null
+    };
+
+    const next = ingestEventsIntoWorkspace(
+      workspace,
+      [
+        makeEvent({
+          seq: 1,
+          type: "session.updated",
+          sessionId: "session_other",
+          payload: {
+            sessionId: "session_other",
+            threadId: "thread_other",
+            status: "running",
+            cwd: "/tmp/other",
+            permissionMode: "request-approval",
+            approvalPolicy: "on-request",
+            approvalsReviewer: "user",
+            sandbox: "workspace-write",
+            createdAt: 1,
+            updatedAt: 2
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    expect(next.currentSessionId).toBe("session_selected");
+    expect(next.selectedHistoryKey).toBeNull();
+  });
+
+  it("remaps optimistic conversation aliases after ack", () => {
+    const workspace = addOptimisticUserMessage(makeWorkspace(), {
+      sessionId: "pending-session:msg_1",
+      clientMessageId: "msg_1",
+      text: "hello"
+    });
+
+    const next = ingestEventsIntoWorkspace(
+      workspace,
+      [
+        makeEvent({
+          seq: 1,
+          type: "chat.user",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            text: "hello",
+            clientMessageId: "msg_1"
+          }
+        })
+      ],
+      { selectSessions: false }
+    );
+
+    expect(selectConversationChatItems(next, { threadId: "thread_1" })).toHaveLength(2);
+    expect(selectConversationChatItems(next, { sessionId: "session_1" })[0]).toMatchObject({
+      clientMessageId: "msg_1",
+      status: "sent",
+      turnId: "turn_1"
+    });
+  });
+
   it("marks failed optimistic messages", () => {
     const workspace = addOptimisticUserMessage(makeWorkspace(), {
       sessionId: "session_1",
@@ -155,6 +246,15 @@ describe("chat state", () => {
     expect(next.chatItems[0]).toMatchObject({
       status: "failed",
       error: "boom"
+    });
+    expect(next.chatItems[1]).toMatchObject({
+      role: "system",
+      status: "failed",
+      text: "boom",
+      meta: {
+        clientMessageId: "msg_1",
+        kind: "error"
+      }
     });
   });
 
@@ -198,7 +298,8 @@ describe("chat state", () => {
     expect(resumed.chatItems.map((item) => item.text)).toEqual([
       "你好",
       "你好！有什么我可以帮你的。",
-      "测试一下功能"
+      "测试一下功能",
+      "正在思考"
     ]);
   });
 
@@ -314,6 +415,30 @@ describe("chat state", () => {
       status: "streaming",
       text: "hello"
     });
+  });
+
+  it("replaces thinking feedback with the first assistant delta", () => {
+    const workspace = ingestEventsIntoWorkspace(
+      addOptimisticUserMessage(makeWorkspace(), {
+        sessionId: "session_1",
+        turnId: "turn_1",
+        clientMessageId: "msg_1",
+        text: "hello"
+      }),
+      [
+        makeEvent({
+          seq: 1,
+          type: "chat.assistant.delta",
+          sessionId: "session_1",
+          turnId: "turn_1",
+          payload: { text: "hi" }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    expect(workspace.chatItems.map((item) => item.text)).toEqual(["hello", "hi"]);
+    expect(workspace.chatItems.some((item) => item.meta?.kind === "thinking")).toBe(false);
   });
 
   it("does not duplicate assistant text when a delta event replays", () => {

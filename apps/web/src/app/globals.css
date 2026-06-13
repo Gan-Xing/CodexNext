@@ -2309,6 +2309,9 @@ summary {
 }
 
 .cn-live-empty {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding-top: 6rem;
 }
 
@@ -3683,8 +3686,9 @@ summary {
   }
 
   .cn-live-console .cn-message-copy-button {
-    right: -1.55rem;
-    top: calc(100% - 1.42rem);
+    bottom: -0.42rem;
+    right: -0.42rem;
+    top: auto;
   }
 
   .cn-live-console .cn-message.assistant,
@@ -5363,7 +5367,7 @@ summary {
 
 .cn-main {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
   overflow: hidden;
   position: relative;
@@ -5408,6 +5412,14 @@ summary {
   display: grid;
   gap: 1.2rem;
   padding: 2.8rem 2.1rem 0;
+}
+
+.cn-empty-canvas.cn-live-empty {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 1.4rem;
+  scroll-padding-bottom: 1.4rem;
 }
 
 .cn-empty-copy {
@@ -6845,6 +6857,7 @@ summary {
   background: var(--cn-soft);
   border-radius: 18px;
   padding: 0.8rem 1rem;
+  position: relative;
   width: 100%;
 }
 
@@ -6861,11 +6874,14 @@ summary {
   display: inline-flex;
   height: 22px;
   justify-content: center;
+  min-height: 22px;
+  min-width: 22px;
   opacity: 0.08;
   padding: 0;
   position: absolute;
-  right: -1.85rem;
-  top: calc(100% - 1.5rem);
+  bottom: -0.42rem;
+  right: -0.42rem;
+  top: auto;
   transform: translateY(2px);
   transition:
     opacity 140ms ease,
@@ -7742,6 +7758,48 @@ summary {
     padding: 0.68rem 1rem 1.25rem;
   }
 
+  .cn-empty-canvas.cn-live-empty {
+    gap: 0.72rem;
+    padding: 2.5rem 1.6rem 1.2rem;
+  }
+
+  .cn-empty-copy h2 {
+    font-size: clamp(2.2rem, 4vw, 3.2rem);
+    line-height: 1.02;
+    max-width: 17ch;
+  }
+
+  .cn-empty-copy p {
+    max-width: 42rem;
+  }
+
+  .cn-empty-grid {
+    gap: 0.72rem;
+  }
+
+  .cn-flow-card,
+  .cn-no-goal-card {
+    border-radius: 22px;
+    padding: 0.92rem 1rem;
+  }
+
+  .cn-new-session-guide {
+    gap: 0.52rem;
+  }
+
+  .cn-new-session-guide-pill {
+    min-width: min(100%, 9.7rem);
+    padding: 0.48rem 0.62rem;
+  }
+
+  .cn-new-session-playbook-list {
+    gap: 0.42rem;
+  }
+
+  .cn-new-session-playbook-item span {
+    line-height: 1.38;
+  }
+
   .cn-desktop-composer {
     border-radius: 20px;
     gap: 0.38rem;
@@ -7816,12 +7874,13 @@ summary {
 
   .cn-live-console .cn-message-copy-button {
     opacity: 0.54;
-    right: 0.12rem;
-    top: calc(100% + 0.08rem);
+    bottom: -0.42rem;
+    right: -0.42rem;
+    top: auto;
   }
 
   .cn-live-console .cn-message-user-shell {
-    padding-bottom: 1.35rem;
+    padding-bottom: 0.42rem;
   }
 
   .cn-live-console .cn-live-composer {
@@ -8104,6 +8163,94 @@ summary {
   .cn-live-console .cn-main-header {
     min-height: 52px;
     padding: max(0.46rem, env(safe-area-inset-top)) 0.72rem 0.46rem;
+  }
+
+  .cn-live-console .cn-live-empty {
+    align-content: start;
+    gap: 0.62rem;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0.72rem 0.78rem calc(7.4rem + env(safe-area-inset-bottom));
+    scroll-padding-bottom: calc(7.4rem + env(safe-area-inset-bottom));
+  }
+
+  .cn-live-console .cn-empty-copy,
+  .cn-live-console .cn-new-session-playbook {
+    display: none;
+  }
+
+  .cn-live-console .cn-empty-grid {
+    display: block;
+    width: 100%;
+  }
+
+  .cn-live-console .cn-new-session-guide {
+    border-radius: 22px;
+    gap: 0.58rem;
+    padding: 0.92rem;
+  }
+
+  .cn-live-console .cn-new-session-guide > strong {
+    font-size: 1rem;
+    line-height: 1.2;
+  }
+
+  .cn-live-console .cn-new-session-guide > span {
+    display: -webkit-box;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .cn-live-console .cn-new-session-guide-meta {
+    display: grid;
+    gap: 0.46rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cn-live-console .cn-new-session-guide-pill {
+    border-radius: 14px;
+    min-width: 0;
+    padding: 0.5rem 0.58rem;
+  }
+
+  .cn-live-console .cn-new-session-guide-pill b {
+    font-size: 0.62rem;
+    letter-spacing: 0.04em;
+  }
+
+  .cn-live-console .cn-new-session-guide-pill span {
+    font-size: 0.8rem;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cn-live-console .cn-new-session-guide-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 0.58rem;
+  }
+
+  .cn-live-console .cn-new-session-guide-actions .cn-primary-button {
+    flex: 0 0 auto;
+    font-size: 0.82rem;
+    min-height: 34px;
+    padding: 0.44rem 0.72rem;
+  }
+
+  .cn-live-console .cn-new-session-guide-hint {
+    flex: 1 1 auto;
+    font-size: 0.72rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .cn-live-console .cn-thread-canvas {

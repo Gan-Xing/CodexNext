@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import type { LocalEvent, LocalEventType } from "@codexnext/protocol";
+import { devTrace } from "../dev-trace.js";
 
 export interface EventStoreOptions {
   limit?: number | undefined;
@@ -42,6 +43,14 @@ export class EventStore extends EventEmitter {
       this.events = this.events.slice(this.events.length - this.limit);
     }
 
+    devTrace("event-store.append", {
+      seq: event.seq,
+      type: event.type,
+      sessionId: event.sessionId,
+      threadId: event.threadId,
+      turnId: event.turnId,
+      hasPayload: input.payload !== undefined
+    });
     this.emit("event", event);
     return event;
   }

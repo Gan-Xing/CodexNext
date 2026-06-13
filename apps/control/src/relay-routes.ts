@@ -39,6 +39,7 @@ import {
   validateRelayRpcResult,
   type RelayRpcResultSchema
 } from "./relay-rpc.js";
+import { devTrace, durationMs, errorSummary, payloadSummary } from "./dev-trace.js";
 
 export interface RelayRouteDependencies {
   allowRelayFullAccess: boolean;
@@ -284,6 +285,11 @@ export function registerRelayRoutes(input: RelayRouteDependencies): void {
         input.recentHistoryCacheTtlMs
       );
       if (cached) {
+        devTrace("relay.rpc.cache_hit", {
+          deviceId,
+          method: RelayMethodValue.CodexHistoryTurns,
+          ...payloadSummary(params)
+        });
         input.audit.write({
           action: "relay.rpc.cache_hit",
           at: Date.now(),
@@ -450,6 +456,11 @@ async function handleRpcRequest(
     return { error: "Missing or invalid user token" };
   }
   if (!input.allowRelayFullAccess && requestsRelayFullAccess(input.method, input.params)) {
+    devTrace("relay.rpc.denied", {
+      method: input.method,
+      reason: "relay_full_access_disabled",
+      ...payloadSummary(input.params)
+    });
     input.audit.write({
       action: "relay.rpc",
       at: Date.now(),
@@ -499,9 +510,19 @@ async function invokeMachineRpc(
 ): Promise<unknown> {
   const device = devices.get(deviceId);
   if (!device) {
+    devTrace("relay.rpc.error", {
+      deviceId,
+      method,
+      reason: "device_not_found"
+    });
     throw new Error(`Device not found: ${deviceId}`);
   }
   if (!device.socket || !device.info.online) {
+    devTrace("relay.rpc.error", {
+      deviceId,
+      method,
+      reason: "device_offline"
+    });
     throw new Error(`Device offline: ${deviceId}`);
   }
 
@@ -511,26 +532,57 @@ async function invokeMachineRpc(
     ...(params !== undefined ? { params } : {}),
     deadlineMs: timeoutMs
   };
+  const startedAt = Date.now();
+  devTrace("relay.rpc.request", {
+    requestId: request.requestId,
+    deviceId,
+    method,
+    deadlineMs: timeoutMs,
+    ...payloadSummary(params)
+  });
 
-  const response = await new Promise<RelayRpcResponse>((resolve, reject) => {
-    device.socket
-      ?.timeout(timeoutMs)
-      .emit("rpc:request", request, (error: Error | null, payload: RelayRpcResponse) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve(payload);
-      });
-  }).catch((error: unknown) => {
+  let response: RelayRpcResponse;
+  try {
+    response = await new Promise<RelayRpcResponse>((resolve, reject) => {
+      device.socket
+        ?.timeout(timeoutMs)
+        .emit("rpc:request", request, (error: Error | null, payload: RelayRpcResponse) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve(payload);
+        });
+    });
+  } catch (error) {
+    devTrace("relay.rpc.error", {
+      requestId: request.requestId,
+      deviceId,
+      method,
+      durationMs: durationMs(startedAt),
+      ...errorSummary(error)
+    });
     throw new Error(
       `relay rpc timeout: ${error instanceof Error ? error.message : String(error)}`
     );
-  });
+  }
 
   if (!response.ok) {
+    devTrace("relay.rpc.response_error", {
+      requestId: request.requestId,
+      deviceId,
+      method,
+      durationMs: durationMs(startedAt),
+      errorMessageLength: response.error.message.length
+    });
     throw new Error(response.error.message);
   }
+  devTrace("relay.rpc.response", {
+    requestId: request.requestId,
+    deviceId,
+    method,
+    durationMs: durationMs(startedAt)
+  });
   return response.result;
 }
 
@@ -571,6 +623,13 @@ function replyWithRpcError(
   error: unknown
 ) {
   const classification = classifyRelayRpcError(error);
+  devTrace("relay.rpc.reply_error", {
+    deviceId,
+    method,
+    statusCode: classification.statusCode,
+    reason: classification.reason,
+    ...errorSummary(error)
+  });
   audit.write({
     action: "relay.rpc",
     at: Date.now(),

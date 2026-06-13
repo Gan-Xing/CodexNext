@@ -9,6 +9,7 @@ import {
   isRecord
 } from "@codexnext/protocol";
 import type { EventStore } from "./event-store.js";
+import { devTrace, durationMs, payloadSummary } from "../dev-trace.js";
 
 export interface PendingApproval {
   approvalId: string;
@@ -44,6 +45,14 @@ export class ApprovalBridge {
     const approvalId = randomUUID();
     const now = Date.now();
     const ids = extractThreadAndTurn(input.params);
+    devTrace("approval.requested", {
+      approvalId,
+      sessionId: input.sessionId,
+      method: input.method,
+      timeoutMs: this.options.timeoutMs,
+      ...ids,
+      ...payloadSummary(input.params)
+    });
 
     return new Promise<ApprovalResponse>((resolve) => {
       const pending: InternalPendingApproval = {
@@ -57,6 +66,13 @@ export class ApprovalBridge {
         expiresAt: now + this.options.timeoutMs,
         resolve,
         timer: setTimeout(() => {
+          devTrace("approval.timeout", {
+            approvalId,
+            sessionId: input.sessionId,
+            method: input.method,
+            durationMs: durationMs(now),
+            ...ids
+          });
           this.resolveDecision(approvalId, "decline", "timeout");
         }, this.options.timeoutMs)
       };
@@ -91,6 +107,16 @@ export class ApprovalBridge {
 
     const response = mapDecision(pending.method, decision);
     pending.resolve(response);
+    devTrace("approval.resolved", {
+      approvalId,
+      sessionId: pending.sessionId,
+      threadId: pending.threadId,
+      turnId: pending.turnId,
+      method: pending.method,
+      decision,
+      reason,
+      durationMs: durationMs(pending.createdAt)
+    });
     this.options.eventStore.append({
       type: LocalEventType.ApprovalResolved,
       sessionId: pending.sessionId,
@@ -158,4 +184,3 @@ function extractThreadAndTurn(params: unknown): {
     ...(turnId ? { turnId } : {})
   };
 }
-

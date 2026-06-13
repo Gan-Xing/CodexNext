@@ -53,6 +53,12 @@ import {
   parseRelayDevicesResponse,
   parseSidebarPrefsResponse
 } from "@codexnext/relay-client";
+import {
+  summarizeRequestBody,
+  traceDurationMs,
+  webDevTrace,
+  webErrorSummary
+} from "./dev-trace";
 
 export type { AgentConnection };
 
@@ -70,22 +76,55 @@ async function agentFetchJson(
   init: RequestInit = {}
 ): Promise<unknown> {
   const url = resolveAgentUrl(connection, path);
+  const startedAt = Date.now();
+  const method = init.method ?? "GET";
+  const requestTrace = {
+    method,
+    path,
+    urlPath: url.pathname,
+    deviceId: connection.deviceId,
+    ...summarizeRequestBody(init.body)
+  };
 
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...buildRelayAuthorizationHeaders(connection.sessionToken),
-      ...(init.headers ?? {})
-    }
-  });
+  webDevTrace("agent.fetch.start", requestTrace);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...buildRelayAuthorizationHeaders(connection.sessionToken),
+        ...(init.headers ?? {})
+      }
+    });
+  } catch (error) {
+    webDevTrace("agent.fetch.error", {
+      ...requestTrace,
+      durationMs: traceDurationMs(startedAt),
+      ...webErrorSummary(error)
+    });
+    throw error;
+  }
 
   if (!response.ok) {
     const text = await response.text();
+    webDevTrace("agent.fetch.error", {
+      ...requestTrace,
+      status: response.status,
+      durationMs: traceDurationMs(startedAt),
+      errorMessageLength: text.length
+    });
     throw new Error(text || `${response.status} ${response.statusText}`);
   }
 
-  return response.json();
+  const payload = await response.json();
+  webDevTrace("agent.fetch.end", {
+    ...requestTrace,
+    status: response.status,
+    durationMs: traceDurationMs(startedAt)
+  });
+  return payload;
 }
 
 export async function listRelayDevices(

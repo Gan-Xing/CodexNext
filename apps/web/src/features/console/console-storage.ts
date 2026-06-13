@@ -9,6 +9,7 @@ import type {
   LocalCodexHistoryEntry,
   LocalSessionSummary
 } from "../../lib/types";
+import type { OutboxEntry, OutboxStatus } from "../chat/chat-state";
 import {
   projectSidebarPrefsStorageKey,
   sanitizeProjectSidebarPrefs,
@@ -21,6 +22,7 @@ import {
 export const sessionSelectionStorageKey = "codexnext.sessionSelection.v1";
 export const workspaceSidebarSnapshotStorageKey =
   "codexnext.workspaceSidebarSnapshots.v1";
+export const conversationOutboxStorageKey = "codexnext.conversationOutbox.v1";
 
 export interface SessionSelectionState {
   currentSessionId: string | null;
@@ -43,6 +45,7 @@ export const consoleLocalStorageKeys = [
   projectSidebarPrefsStorageKey,
   sessionSelectionStorageKey,
   workspaceSidebarSnapshotStorageKey,
+  conversationOutboxStorageKey,
   sidebarWidthStorageKey,
   relayOnlyMigrationNoticeStorageKey
 ] as const;
@@ -245,6 +248,52 @@ export function writeWorkspaceSidebarSnapshotsStorage(
   return safeSnapshots;
 }
 
+export function readConversationOutboxStorage(): Record<string, OutboxEntry[]> {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const raw = window.localStorage.getItem(conversationOutboxStorageKey);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(([deviceId, entries]) => isSafePreferenceString(deviceId) && Array.isArray(entries))
+        .map(([deviceId, entries]) => [
+          deviceId,
+          (entries as unknown[])
+            .map(sanitizeOutboxEntryForStorage)
+            .filter((entry): entry is OutboxEntry => Boolean(entry))
+            .slice(-50)
+        ])
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function writeConversationOutboxStorage(
+  storage: Storage,
+  entriesByDeviceId: Record<string, OutboxEntry[]>
+): Record<string, OutboxEntry[]> {
+  const safeEntries = Object.fromEntries(
+    Object.entries(entriesByDeviceId)
+      .filter(([deviceId]) => isSafePreferenceString(deviceId))
+      .map(([deviceId, entries]) => [
+        deviceId,
+        entries
+          .map(sanitizeOutboxEntryForStorage)
+          .filter((entry): entry is OutboxEntry => Boolean(entry))
+          .slice(-50)
+      ])
+  );
+  // Outbox text is user-authored message content required to restore pending UI after reload.
+  storage.setItem(conversationOutboxStorageKey, JSON.stringify(safeEntries));
+  return safeEntries;
+}
+
 export function writeConsoleStorageItem(
   storage: Storage,
   key: string,
@@ -392,6 +441,43 @@ function sanitizeWorkspaceSidebarSnapshot(
     sessionHistoryOrigins,
     sessions
   };
+}
+
+function sanitizeOutboxEntryForStorage(value: unknown): OutboxEntry | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const clientMessageId = safeSnapshotText(value.clientMessageId);
+  const conversationKey = safeSnapshotText(value.conversationKey);
+  const text = typeof value.text === "string" ? value.text.slice(0, 24_000) : null;
+  const status = isOutboxStatus(value.status) ? value.status : null;
+  if (!clientMessageId || !conversationKey || text === null || !status) {
+    return null;
+  }
+  const createdAt = finiteTimestamp(value.createdAt) ?? Date.now();
+  const updatedAt = finiteTimestamp(value.updatedAt) ?? createdAt;
+  return {
+    clientMessageId,
+    conversationKey,
+    createdAt,
+    ...(typeof value.error === "string" ? { error: value.error.slice(0, 2_000) } : {}),
+    ...(safeSnapshotText(value.sessionId) ? { sessionId: safeSnapshotText(value.sessionId)! } : {}),
+    status,
+    text,
+    ...(safeSnapshotText(value.threadId) ? { threadId: safeSnapshotText(value.threadId)! } : {}),
+    ...(safeSnapshotText(value.turnId) ? { turnId: safeSnapshotText(value.turnId)! } : {}),
+    updatedAt
+  };
+}
+
+function isOutboxStatus(value: unknown): value is OutboxStatus {
+  return (
+    value === "pending" ||
+    value === "sent" ||
+    value === "streaming" ||
+    value === "complete" ||
+    value === "failed"
+  );
 }
 
 function sanitizeSessionSummaryForStorage(

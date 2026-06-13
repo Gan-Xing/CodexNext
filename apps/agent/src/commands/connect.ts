@@ -21,6 +21,7 @@ import {
   type LocalAgentRuntime
 } from "../local-server/local-agent.js";
 import { readOrCreateDeviceIdentity } from "../relay/device-identity.js";
+import { devTrace, durationMs, errorSummary, payloadSummary } from "../dev-trace.js";
 
 export interface ConnectOptions {
   relay: string;
@@ -168,8 +169,26 @@ export async function startConnectAgent(
 
   runtime.eventStore.on("event", (event) => {
     if (!socket.connected) {
+      devTrace("relay.event.drop_disconnected", {
+        deviceId: identity.deviceId,
+        agentRunId,
+        seq: event.seq,
+        type: event.type,
+        sessionId: event.sessionId,
+        threadId: event.threadId,
+        turnId: event.turnId
+      });
       return;
     }
+    devTrace("relay.event.emit", {
+      deviceId: identity.deviceId,
+      agentRunId,
+      seq: event.seq,
+      type: event.type,
+      sessionId: event.sessionId,
+      threadId: event.threadId,
+      turnId: event.turnId
+    });
     socket.emit("machine:event", {
       deviceId: identity.deviceId,
       agentRunId,
@@ -179,6 +198,11 @@ export async function startConnectAgent(
 
   socket.on("connect", async () => {
     updateAuth();
+    devTrace("relay.socket.connected", {
+      relayUrl,
+      deviceId: identity.deviceId,
+      agentRunId
+    });
     const hello: MachineHelloPayload = {
       deviceId: identity.deviceId,
       deviceName: identity.deviceName,
@@ -201,6 +225,12 @@ export async function startConnectAgent(
       if (!ack || ack.ok !== true) {
         throw new Error(ack?.error ?? "machine hello rejected");
       }
+      devTrace("relay.hello.ack", {
+        relayUrl,
+        deviceId: identity.deviceId,
+        agentRunId,
+        heartbeatIntervalMs: ack.heartbeatIntervalMs
+      });
       heartbeatIntervalMs = ack.heartbeatIntervalMs;
       startHeartbeat();
       if (!announcedReady) {
@@ -211,6 +241,12 @@ export async function startConnectAgent(
         printLineFn("Press Ctrl+C to stop the relay agent.");
       }
     } catch (error) {
+      devTrace("relay.hello.error", {
+        relayUrl,
+        deviceId: identity.deviceId,
+        agentRunId,
+        ...errorSummary(error)
+      });
       printLineFn(`relay handshake failed: ${formatError(error)}`);
       socket.disconnect();
       await sleepFn(1_000);
@@ -220,11 +256,22 @@ export async function startConnectAgent(
   });
 
   socket.on("disconnect", () => {
+    devTrace("relay.socket.disconnected", {
+      relayUrl,
+      deviceId: identity.deviceId,
+      agentRunId
+    });
     stopHeartbeat();
   });
 
   socket.io.on("reconnect_attempt", updateAuth);
   socket.on("connect_error", (error: Error) => {
+    devTrace("relay.socket.connect_error", {
+      relayUrl,
+      deviceId: identity.deviceId,
+      agentRunId,
+      ...errorSummary(error)
+    });
     printLineFn(`relay connect error: ${formatError(error)}`);
   });
 
@@ -237,10 +284,28 @@ export async function startConnectAgent(
       if (typeof ack !== "function") {
         return;
       }
+      const rpcStartedAt = Date.now();
+      devTrace("relay.rpc.received", {
+        requestId: request.requestId,
+        method: request.method,
+        deadlineMs: request.deadlineMs,
+        ...payloadSummary(request.params)
+      });
       try {
         const result = await runtime.invoke(request.method, request.params);
+        devTrace("relay.rpc.ack_success", {
+          requestId: request.requestId,
+          method: request.method,
+          durationMs: durationMs(rpcStartedAt)
+        });
         ack({ ok: true, result });
       } catch (error) {
+        devTrace("relay.rpc.ack_error", {
+          requestId: request.requestId,
+          method: request.method,
+          durationMs: durationMs(rpcStartedAt),
+          ...errorSummary(error)
+        });
         ack({
           ok: false,
           error: {

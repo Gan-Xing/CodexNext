@@ -27,6 +27,11 @@ import { openManagedEventStream, type ManagedEventStream } from "../../lib/event
 import { formatError } from "../../lib/format/text";
 import { createClientId } from "../../lib/random-id";
 import {
+  traceDurationMs,
+  webDevTrace,
+  webErrorSummary
+} from "../../lib/dev-trace";
+import {
   requestRelaySession,
   resolveDefaultRelayUrl
 } from "../../lib/relay";
@@ -51,11 +56,15 @@ import {
   prependSessionHistoryMessages,
   reassignSessionChatItems,
   rememberSessionHistoryOrigin,
+  restoreOutboxEntries,
   resolveStateUpdater,
+  selectConversationChatItems,
+  selectConversationRenderSnapshot,
   setLoadedThreadIds,
   setSessionHistoryPageState,
   type AttachmentDraft,
   type DeviceWorkspace,
+  type OutboxEntry,
   type ResumeState,
   upsertSessionInWorkspace
 } from "../chat/chat-state";
@@ -72,8 +81,10 @@ import {
 } from "./console-utils";
 import {
   hasRelayOnlyMigrationNoticeSeen,
+  readConversationOutboxStorage,
   readSessionSelectionStorage,
   readWorkspaceSidebarSnapshotsStorage,
+  writeConversationOutboxStorage,
   writeSessionSelectionStorage,
   writeProjectSidebarPrefsStorage,
   writeRelayOnlyMigrationNoticeSeen,
@@ -217,6 +228,18 @@ interface MessageReconciliationRequest {
   messageText: string;
   sessionId: string;
   startedAt: number;
+  submitTraceId?: string | undefined;
+  turnId?: string | undefined;
+}
+
+interface SubmitTraceContext {
+  clientMessageId: string;
+  deviceId: string | null;
+  kind: "goal" | "message";
+  sessionId: string;
+  startedAt: number;
+  submitTraceId: string;
+  textLength: number;
   turnId?: string | undefined;
 }
 
@@ -506,6 +529,8 @@ export function useWebConsoleController() {
   const queuedEventsRef = useRef(new Map<string, LocalEvent[]>());
   const queuedSelectRef = useRef(new Map<string, boolean>());
   const messageReconcileTimersRef = useRef(new Map<string, number>());
+  const submitTraceByClientMessageRef = useRef(new Map<string, SubmitTraceContext>());
+  const submitTraceByTurnRef = useRef(new Map<string, SubmitTraceContext>());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const historyPageCacheRef = useRef(
     new Map<string, { fetchedAt: number; page: LocalCodexHistoryPageResponse }>()
@@ -520,6 +545,8 @@ export function useWebConsoleController() {
   const latestProjectSidebarPrefsRef = useRef(projectSidebarPrefs);
   const latestDeviceWorkspacesRef = useRef(deviceWorkspaces);
   const latestWorkspaceSidebarSnapshotRef = useRef("");
+  const latestConversationOutboxSnapshotRef = useRef("");
+  const selectedConversationRenderTraceRef = useRef("");
 
   const activeWorkspace = selectedDeviceId ? deviceWorkspaces[selectedDeviceId] ?? null : null;
   const selectedSavedDevice =
@@ -560,9 +587,20 @@ export function useWebConsoleController() {
   const currentSession = currentSessionId
     ? sessions.find((session) => session.sessionId === currentSessionId) ?? null
     : null;
-  const visibleChatItems = currentSession
-    ? chatItems.filter((item) => item.sessionId === currentSession.sessionId)
-    : [];
+  const selectedConversationInput = currentSession
+    ? {
+        sessionId: currentSession.sessionId,
+        ...(currentSession.threadId ? { threadId: currentSession.threadId } : {})
+      }
+    : null;
+  const visibleChatItems = selectConversationChatItems(
+    activeWorkspace,
+    selectedConversationInput
+  );
+  const selectedConversationRenderSnapshot = selectConversationRenderSnapshot(
+    activeWorkspace,
+    selectedConversationInput
+  );
   const currentHistoryPageState = currentSession
     ? historyPages[currentSession.sessionId] ?? null
     : null;
@@ -716,6 +754,107 @@ export function useWebConsoleController() {
     [patchDeviceWorkspace]
   );
 
+  function rememberSubmitTrace(context: SubmitTraceContext) {
+    submitTraceByClientMessageRef.current.set(context.clientMessageId, context);
+    if (context.turnId) {
+      submitTraceByTurnRef.current.set(context.turnId, context);
+    }
+  }
+
+  function updateSubmitTrace(
+    clientMessageId: string,
+    updates: Partial<Pick<SubmitTraceContext, "deviceId" | "sessionId" | "turnId">>
+  ) {
+    const current = submitTraceByClientMessageRef.current.get(clientMessageId);
+    if (!current) {
+      return null;
+    }
+    const next = { ...current, ...updates };
+    submitTraceByClientMessageRef.current.set(clientMessageId, next);
+    if (next.turnId) {
+      submitTraceByTurnRef.current.set(next.turnId, next);
+    }
+    return next;
+  }
+
+  function forgetSubmitTrace(clientMessageId: string) {
+    const current = submitTraceByClientMessageRef.current.get(clientMessageId);
+    submitTraceByClientMessageRef.current.delete(clientMessageId);
+    if (current?.turnId) {
+      submitTraceByTurnRef.current.delete(current.turnId);
+    }
+  }
+
+  function traceSubmitStep(
+    event: string,
+    context: SubmitTraceContext,
+    fields: Record<string, unknown> = {}
+  ) {
+    webDevTrace(event, {
+      submitTraceId: context.submitTraceId,
+      clientMessageId: context.clientMessageId,
+      deviceId: context.deviceId,
+      kind: context.kind,
+      sessionId: context.sessionId,
+      turnId: context.turnId,
+      textLength: context.textLength,
+      ageMs: Date.now() - context.startedAt,
+      ...fields
+    });
+  }
+
+  function traceSubmitFailed(
+    context: SubmitTraceContext,
+    fields: Record<string, unknown> = {}
+  ) {
+    traceSubmitStep("console.submit.failed", context, fields);
+    forgetSubmitTrace(context.clientMessageId);
+  }
+
+  function traceSubmitReconciled(
+    context: SubmitTraceContext,
+    fields: Record<string, unknown> = {}
+  ) {
+    traceSubmitStep("console.submit.reconciled", context, fields);
+    forgetSubmitTrace(context.clientMessageId);
+  }
+
+  function traceSubmitStreamEvents(deviceId: string, events: LocalEvent[]) {
+    for (const event of events) {
+      const eventClientMessageId = readEventClientMessageId(event);
+      const context =
+        (eventClientMessageId
+          ? submitTraceByClientMessageRef.current.get(eventClientMessageId)
+          : null) ??
+        (event.turnId ? submitTraceByTurnRef.current.get(event.turnId) : null);
+      if (!context) {
+        continue;
+      }
+      const nextContext = updateSubmitTrace(context.clientMessageId, {
+        deviceId,
+        ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+        ...(event.turnId ? { turnId: event.turnId } : {})
+      }) ?? context;
+      traceSubmitStep("console.submit.stream_seen", nextContext, {
+        eventId: event.id,
+        eventType: event.type,
+        eventSeq: event.seq,
+        eventClientMessageId,
+        eventSessionId: event.sessionId,
+        eventThreadId: event.threadId,
+        eventTurnId: event.turnId
+      });
+      if (event.type === "agent.error" || event.type === "codex.error") {
+        traceSubmitFailed(nextContext, {
+          source: "stream_error",
+          eventId: event.id,
+          eventSeq: event.seq,
+          eventType: event.type
+        });
+      }
+    }
+  }
+
   const beginDeviceHydration = useCallback((deviceId: string) => {
     const nextVersion = (deviceHydrationVersionsRef.current.get(deviceId) ?? 0) + 1;
     deviceHydrationVersionsRef.current.set(deviceId, nextVersion);
@@ -839,12 +978,55 @@ export function useWebConsoleController() {
   }, [currentSessionId, ensureSessionHistoryHydrated, sessionHistoryOrigins]);
 
   useEffect(() => {
+    const signature = JSON.stringify({
+      deviceId: selectedDeviceId,
+      selectedHistoryKey,
+      sessionId: currentSession?.sessionId ?? null,
+      key: selectedConversationRenderSnapshot.key,
+      latestSeq: selectedConversationRenderSnapshot.latestSeq,
+      messageCount: selectedConversationRenderSnapshot.messageCount,
+      statusSignature: selectedConversationRenderSnapshot.statusSignature
+    });
+    if (signature === selectedConversationRenderTraceRef.current) {
+      return;
+    }
+    selectedConversationRenderTraceRef.current = signature;
+    webDevTrace("console.render.selected_conversation", {
+      deviceId: selectedDeviceId,
+      selectedHistoryKey,
+      sessionId: currentSession?.sessionId ?? null,
+      threadId: currentSession?.threadId ?? null,
+      conversationKey: selectedConversationRenderSnapshot.key,
+      latestSeq: selectedConversationRenderSnapshot.latestSeq,
+      messageCount: selectedConversationRenderSnapshot.messageCount,
+      itemStatuses: visibleChatItems.map((item) => ({
+        id: item.id,
+        role: item.role,
+        status: item.status ?? null,
+        turnId: item.turnId ?? null,
+        clientMessageId: item.clientMessageId ?? null
+      }))
+    });
+  }, [
+    currentSession?.sessionId,
+    currentSession?.threadId,
+    selectedConversationRenderSnapshot.key,
+    selectedConversationRenderSnapshot.latestSeq,
+    selectedConversationRenderSnapshot.messageCount,
+    selectedConversationRenderSnapshot.statusSignature,
+    selectedDeviceId,
+    selectedHistoryKey,
+    visibleChatItems
+  ]);
+
+  useEffect(() => {
     const { devices: storedDevices, droppedLegacyDirectDevices } = readSavedDevicesState();
     const storedSidebarWidth = readSidebarWidth(clampSidebarWidth);
     const storedThreadPrefs = readThreadSidebarPrefs();
     const storedProjectPrefs = readProjectSidebarPrefs();
     const storedSessionSelections = readSessionSelectionStorage();
     const storedWorkspaceSnapshots = readWorkspaceSidebarSnapshotsStorage();
+    const storedConversationOutbox = readConversationOutboxStorage();
     const params = new URLSearchParams(window.location.search);
     const queryDeviceId = params.get("deviceId");
 
@@ -854,20 +1036,22 @@ export function useWebConsoleController() {
         storedDevices
           .map((device) => {
             const snapshot = storedWorkspaceSnapshots[device.id];
-            if (!snapshot) {
+            const outboxEntries = storedConversationOutbox[device.id] ?? [];
+            if (!snapshot && outboxEntries.length === 0) {
               return null;
             }
+            const deviceConnection: AgentConnection = {
+              mode: "relay",
+              relayUrl: device.relayUrl,
+              sessionToken: "",
+              deviceId: device.deviceId
+            };
+            const restored = snapshot
+              ? restoreWorkspaceFromSidebarSnapshot(deviceConnection, snapshot)
+              : createDeviceWorkspace(deviceConnection);
             return [
               device.id,
-              restoreWorkspaceFromSidebarSnapshot(
-                {
-                  mode: "relay",
-                  relayUrl: device.relayUrl,
-                  sessionToken: "",
-                  deviceId: device.deviceId
-                },
-                snapshot
-              )
+              restoreOutboxEntries(restored, outboxEntries)
             ] as const;
           })
           .filter((entry): entry is readonly [string, DeviceWorkspace] => Boolean(entry))
@@ -880,6 +1064,7 @@ export function useWebConsoleController() {
     setProjectSidebarPrefs(storedProjectPrefs);
     setSessionSelections(storedSessionSelections);
     latestWorkspaceSidebarSnapshotRef.current = JSON.stringify(storedWorkspaceSnapshots);
+    latestConversationOutboxSnapshotRef.current = JSON.stringify(storedConversationOutbox);
     setLocalStorageReady(true);
 
     if (droppedLegacyDirectDevices > 0) {
@@ -937,6 +1122,42 @@ export function useWebConsoleController() {
       writeWorkspaceSidebarSnapshotsStorage(window.localStorage, snapshots);
     } catch {
       // Ignore local snapshot persistence failures; live data remains authoritative.
+    }
+  }, [deviceWorkspaces, localStorageReady, savedDevices]);
+
+  useEffect(() => {
+    if (!localStorageReady) {
+      return;
+    }
+    const now = Date.now();
+    const outboxByDeviceId = Object.fromEntries(
+      savedDevices
+        .map((device) => {
+          const workspace = deviceWorkspaces[device.id];
+          if (!workspace) {
+            return null;
+          }
+          const entries = Object.values(workspace.outbox)
+            .filter(
+              (entry) =>
+                entry.status !== "complete" &&
+                (entry.status !== "failed" || now - entry.updatedAt < 60 * 60_000)
+            )
+            .sort((left, right) => left.createdAt - right.createdAt)
+            .slice(-50);
+          return entries.length > 0 ? ([device.id, entries] as const) : null;
+        })
+        .filter((entry): entry is readonly [string, OutboxEntry[]] => Boolean(entry))
+    );
+    const serialized = JSON.stringify(outboxByDeviceId);
+    if (serialized === latestConversationOutboxSnapshotRef.current) {
+      return;
+    }
+    latestConversationOutboxSnapshotRef.current = serialized;
+    try {
+      writeConversationOutboxStorage(window.localStorage, outboxByDeviceId);
+    } catch {
+      // Outbox persistence is a recovery layer; live state remains in memory.
     }
   }, [deviceWorkspaces, localStorageReady, savedDevices]);
 
@@ -1640,6 +1861,17 @@ export function useWebConsoleController() {
     incoming: LocalEvent[],
     options: { selectSessions: boolean }
   ) {
+    traceSubmitStreamEvents(deviceId, incoming);
+    webDevTrace("console.events.enqueue", {
+      deviceId,
+      incomingCount: incoming.length,
+      selectSessions: options.selectSessions,
+      eventTypes: summarizeLocalEventTypes(incoming),
+      seqSummary: summarizeLocalEventSeqs(incoming),
+      sessionIds: summarizeLocalEventField(incoming, "sessionId"),
+      threadIds: summarizeLocalEventField(incoming, "threadId"),
+      turnIds: summarizeLocalEventField(incoming, "turnId")
+    });
     const queued = queuedEventsRef.current.get(deviceId) ?? [];
     queuedEventsRef.current.set(deviceId, [...queued, ...incoming]);
     queuedSelectRef.current.set(
@@ -1647,6 +1879,10 @@ export function useWebConsoleController() {
       Boolean(queuedSelectRef.current.get(deviceId)) || options.selectSessions
     );
     if (eventFrameRefs.current.has(deviceId)) {
+      webDevTrace("console.events.coalesced", {
+        deviceId,
+        queuedCount: queued.length + incoming.length
+      });
       return;
     }
     const frame = requestAnimationFrame(() => {
@@ -1655,9 +1891,36 @@ export function useWebConsoleController() {
       const selectSessions = queuedSelectRef.current.get(deviceId) ?? true;
       queuedEventsRef.current.delete(deviceId);
       queuedSelectRef.current.delete(deviceId);
-      patchDeviceWorkspace(deviceId, (workspace) =>
-        ingestEventsIntoWorkspace(workspace, queuedEvents, { selectSessions })
-      );
+      webDevTrace("console.events.flush.begin", {
+        deviceId,
+        count: queuedEvents.length,
+        selectSessions,
+        eventTypes: summarizeLocalEventTypes(queuedEvents),
+        seqSummary: summarizeLocalEventSeqs(queuedEvents)
+      });
+      patchDeviceWorkspace(deviceId, (workspace) => {
+        const before = summarizeReducerWorkspaceState(workspace);
+        const next = ingestEventsIntoWorkspace(workspace, queuedEvents, { selectSessions });
+        const after = summarizeReducerWorkspaceState(next);
+        webDevTrace("console.reducer.apply", {
+          deviceId,
+          selectSessions,
+          count: queuedEvents.length,
+          eventTypes: summarizeLocalEventTypes(queuedEvents),
+          seqSummary: summarizeLocalEventSeqs(queuedEvents),
+          before,
+          after,
+          selectionChanged:
+            before.currentSessionId !== after.currentSessionId ||
+            before.selectedHistoryKey !== after.selectedHistoryKey
+        });
+        return next;
+      });
+      webDevTrace("console.events.flush.end", {
+        deviceId,
+        count: queuedEvents.length,
+        selectedDeviceId: selectedDeviceIdRef.current
+      });
       if (selectedDeviceIdRef.current === deviceId) {
         const errorEvent = queuedEvents.find(
           (item) => item.type === "agent.error" || item.type === "codex.error"
@@ -1675,6 +1938,7 @@ export function useWebConsoleController() {
   }
 
   function closeDeviceStream(deviceId: string) {
+    webDevTrace("console.stream.close", { deviceId });
     streamRefs.current.get(deviceId)?.close();
     streamRefs.current.delete(deviceId);
     pendingDeviceStreamIds.current.delete(deviceId);
@@ -1686,13 +1950,41 @@ export function useWebConsoleController() {
     after: number,
     status: LocalHealthResponse | null
   ) {
+    webDevTrace("console.stream.open.begin", {
+      deviceId,
+      after,
+      relayUrl: deviceConnection.relayUrl,
+      connectionDeviceId: deviceConnection.deviceId,
+      hasHealth: Boolean(status)
+    });
     closeDeviceStream(deviceId);
     const stream = openManagedEventStream({
       connection: deviceConnection,
       after,
-      onReplay: (events) => enqueueDeviceEvents(deviceId, events, { selectSessions: true }),
-      onEvent: (event) => enqueueDeviceEvents(deviceId, [event], { selectSessions: true }),
+      onReplay: (events) => {
+        webDevTrace("console.stream.replay.received", {
+          deviceId,
+          count: events.length,
+          eventTypes: summarizeLocalEventTypes(events)
+        });
+        enqueueDeviceEvents(deviceId, events, { selectSessions: false });
+      },
+      onEvent: (event) => {
+        webDevTrace("console.stream.event.received", {
+          deviceId,
+          seq: event.seq,
+          type: event.type,
+          sessionId: event.sessionId,
+          threadId: event.threadId,
+          turnId: event.turnId
+        });
+        enqueueDeviceEvents(deviceId, [event], { selectSessions: false });
+      },
       onStatus: (nextStatus) => {
+        webDevTrace("console.stream.status", {
+          deviceId,
+          status: nextStatus
+        });
         patchDeviceWorkspace(deviceId, (workspace) => ({
           ...workspace,
           streamStatus: nextStatus
@@ -1709,12 +2001,17 @@ export function useWebConsoleController() {
         }
       },
       onError: (streamError) => {
+        webDevTrace("console.stream.error", {
+          deviceId,
+          ...webErrorSummary(streamError)
+        });
         if (selectedDeviceIdRef.current === deviceId) {
           setError(formatConsoleError(streamError));
         }
       }
     });
     streamRefs.current.set(deviceId, stream);
+    webDevTrace("console.stream.open.end", { deviceId });
   }
 
   async function hydrateConnectedDevice(
@@ -1760,9 +2057,27 @@ export function useWebConsoleController() {
         return replay;
       }
       startTransition(() => {
-        patchDeviceWorkspace(device.id, (workspace) =>
-          ingestEventsIntoWorkspace(workspace, replay.events, { selectSessions: false })
-        );
+        patchDeviceWorkspace(device.id, (workspace) => {
+          const before = summarizeReducerWorkspaceState(workspace);
+          const next = ingestEventsIntoWorkspace(workspace, replay.events, {
+            selectSessions: false
+          });
+          const after = summarizeReducerWorkspaceState(next);
+          webDevTrace("console.reducer.apply", {
+            deviceId: device.id,
+            source: "initial_replay",
+            selectSessions: false,
+            count: replay.events.length,
+            eventTypes: summarizeLocalEventTypes(replay.events),
+            seqSummary: summarizeLocalEventSeqs(replay.events),
+            before,
+            after,
+            selectionChanged:
+              before.currentSessionId !== after.currentSessionId ||
+              before.selectedHistoryKey !== after.selectedHistoryKey
+          });
+          return next;
+        });
       });
       openDeviceStream(device.id, deviceConnection, replay.events.at(-1)?.seq ?? 0, status);
       return replay;
@@ -2270,6 +2585,13 @@ export function useWebConsoleController() {
     const key = messageReconciliationKey(request);
     const timer = messageReconcileTimersRef.current.get(key);
     if (timer !== undefined) {
+      webDevTrace("console.reconcile.timer.clear", {
+        key,
+        deviceId: request.deviceId,
+        sessionId: request.sessionId,
+        clientMessageId: request.clientMessageId,
+        submitTraceId: "submitTraceId" in request ? request.submitTraceId : undefined
+      });
       window.clearTimeout(timer);
       messageReconcileTimersRef.current.delete(key);
     }
@@ -2283,6 +2605,15 @@ export function useWebConsoleController() {
       attempt: 0,
       startedAt: Date.now()
     };
+    webDevTrace("console.reconcile.schedule", {
+      deviceId: request.deviceId,
+      sessionId: request.sessionId,
+      turnId: request.turnId,
+      clientMessageId: request.clientMessageId,
+      submitTraceId: request.submitTraceId,
+      messageLength: request.messageText.length,
+      delayMs: MESSAGE_RECONCILE_INITIAL_DELAY_MS
+    });
     scheduleMessageReconciliationAttempt(request, MESSAGE_RECONCILE_INITIAL_DELAY_MS);
   }
 
@@ -2292,6 +2623,16 @@ export function useWebConsoleController() {
   ) {
     clearMessageReconciliation(request);
     const key = messageReconciliationKey(request);
+    webDevTrace("console.reconcile.timer.set", {
+      key,
+      deviceId: request.deviceId,
+      sessionId: request.sessionId,
+      turnId: request.turnId,
+      clientMessageId: request.clientMessageId,
+      submitTraceId: request.submitTraceId,
+      attempt: request.attempt,
+      delayMs
+    });
     const timer = window.setTimeout(() => {
       messageReconcileTimersRef.current.delete(key);
       void reconcileSentMessage(request);
@@ -2300,15 +2641,66 @@ export function useWebConsoleController() {
   }
 
   async function reconcileSentMessage(request: MessageReconciliationRequest) {
+    const startedAt = Date.now();
+    webDevTrace("console.reconcile.attempt.begin", {
+      deviceId: request.deviceId,
+      sessionId: request.sessionId,
+      turnId: request.turnId,
+      clientMessageId: request.clientMessageId,
+      submitTraceId: request.submitTraceId,
+      attempt: request.attempt,
+      ageMs: Date.now() - request.startedAt
+    });
     const workspace = latestDeviceWorkspacesRef.current[request.deviceId];
     if (!workspace || !isSameAgentConnection(workspace.connection, request.connection)) {
+      webDevTrace("console.reconcile.attempt.skip", {
+        deviceId: request.deviceId,
+        sessionId: request.sessionId,
+        clientMessageId: request.clientMessageId,
+        submitTraceId: request.submitTraceId,
+        reason: !workspace ? "missing_workspace" : "connection_changed"
+      });
       return;
     }
     if (hasLiveCompletionEvidence(workspace, request)) {
+      webDevTrace("console.reconcile.live_evidence", {
+        deviceId: request.deviceId,
+        sessionId: request.sessionId,
+        turnId: request.turnId,
+        clientMessageId: request.clientMessageId,
+        submitTraceId: request.submitTraceId,
+        attempt: request.attempt,
+        durationMs: traceDurationMs(startedAt)
+      });
+      const context = submitTraceByClientMessageRef.current.get(request.clientMessageId);
+      if (context) {
+        traceSubmitReconciled(context, {
+          source: "live_completion",
+          attempt: request.attempt,
+          durationMs: traceDurationMs(startedAt)
+        });
+      }
       clearMessageReconciliation(request);
       return;
     }
     if (request.attempt >= MESSAGE_RECONCILE_MAX_ATTEMPTS) {
+      webDevTrace("console.reconcile.max_attempts", {
+        deviceId: request.deviceId,
+        sessionId: request.sessionId,
+        turnId: request.turnId,
+        clientMessageId: request.clientMessageId,
+        submitTraceId: request.submitTraceId,
+        attempt: request.attempt,
+        ageMs: Date.now() - request.startedAt
+      });
+      const context = submitTraceByClientMessageRef.current.get(request.clientMessageId);
+      if (context) {
+        traceSubmitFailed(context, {
+          source: "reconcile_max_attempts",
+          attempt: request.attempt,
+          ageMs: Date.now() - request.startedAt
+        });
+      }
       patchDeviceWorkspace(request.deviceId, (currentWorkspace) =>
         markOptimisticMessageFailed(
           currentWorkspace,
@@ -2330,6 +2722,15 @@ export function useWebConsoleController() {
       const targetSession =
         loadedSessions.sessions.find((session) => session.sessionId === request.sessionId) ??
         null;
+      webDevTrace("console.reconcile.sessions.loaded", {
+        deviceId: request.deviceId,
+        sessionId: request.sessionId,
+        clientMessageId: request.clientMessageId,
+        submitTraceId: request.submitTraceId,
+        attempt: request.attempt,
+        count: loadedSessions.sessions.length,
+        targetFound: Boolean(targetSession)
+      });
 
       patchDeviceWorkspace(request.deviceId, (currentWorkspace) =>
         mergeLiveSessionsIntoWorkspace(
@@ -2340,6 +2741,14 @@ export function useWebConsoleController() {
       );
 
       if (!targetSession) {
+        webDevTrace("console.reconcile.target_missing", {
+          deviceId: request.deviceId,
+          sessionId: request.sessionId,
+          clientMessageId: request.clientMessageId,
+          submitTraceId: request.submitTraceId,
+          attempt: request.attempt,
+          delayMs: MESSAGE_RECONCILE_INTERVAL_MS
+        });
         scheduleMessageReconciliationAttempt(
           {
             ...request,
@@ -2363,6 +2772,18 @@ export function useWebConsoleController() {
           request,
           session: targetSession
         });
+        webDevTrace("console.reconcile.history.decision", {
+          deviceId: request.deviceId,
+          sessionId: request.sessionId,
+          threadId: targetSession.threadId,
+          turnId: request.turnId,
+          clientMessageId: request.clientMessageId,
+          submitTraceId: request.submitTraceId,
+          attempt: request.attempt,
+          messageCount: page.messages.length,
+          shouldApplyHistory: historyDecision.shouldApplyHistory,
+          shouldStopReconciliation: historyDecision.shouldStopReconciliation
+        });
         shouldStopReconciliation = historyDecision.shouldStopReconciliation;
         historyPageCacheRef.current.set(pageKey, {
           fetchedAt: Date.now(),
@@ -2383,6 +2804,7 @@ export function useWebConsoleController() {
             targetSession.currentTurnId ?? targetSession.activeTurnId ?? request.turnId;
           return markOptimisticMessageSent(next, request.clientMessageId, {
             sessionId: targetSession.sessionId,
+            ...(targetSession.threadId ? { threadId: targetSession.threadId } : {}),
             ...(turnId ? { turnId } : {})
           });
         });
@@ -2395,6 +2817,7 @@ export function useWebConsoleController() {
             request.clientMessageId,
             {
               sessionId: targetSession.sessionId,
+              ...(targetSession.threadId ? { threadId: targetSession.threadId } : {}),
               ...(turnId ? { turnId } : {})
             }
           );
@@ -2403,9 +2826,36 @@ export function useWebConsoleController() {
       }
 
       if (shouldStopReconciliation) {
+        webDevTrace("console.reconcile.stop", {
+          deviceId: request.deviceId,
+          sessionId: request.sessionId,
+          turnId: request.turnId,
+          clientMessageId: request.clientMessageId,
+          submitTraceId: request.submitTraceId,
+          attempt: request.attempt,
+          durationMs: traceDurationMs(startedAt)
+        });
+        const context = submitTraceByClientMessageRef.current.get(request.clientMessageId);
+        if (context) {
+          traceSubmitReconciled(context, {
+            source: "history_or_terminal_session",
+            attempt: request.attempt,
+            durationMs: traceDurationMs(startedAt)
+          });
+        }
         clearMessageReconciliation(request);
         return;
       }
+      webDevTrace("console.reconcile.reschedule", {
+        deviceId: request.deviceId,
+        sessionId: request.sessionId,
+        turnId: request.turnId,
+        clientMessageId: request.clientMessageId,
+        submitTraceId: request.submitTraceId,
+        attempt: request.attempt + 1,
+        durationMs: traceDurationMs(startedAt),
+        delayMs: MESSAGE_RECONCILE_INTERVAL_MS
+      });
       scheduleMessageReconciliationAttempt(
         {
           ...request,
@@ -2413,7 +2863,17 @@ export function useWebConsoleController() {
         },
         MESSAGE_RECONCILE_INTERVAL_MS
       );
-    } catch {
+    } catch (error) {
+      webDevTrace("console.reconcile.error", {
+        deviceId: request.deviceId,
+        sessionId: request.sessionId,
+        turnId: request.turnId,
+        clientMessageId: request.clientMessageId,
+        submitTraceId: request.submitTraceId,
+        attempt: request.attempt,
+        durationMs: traceDurationMs(startedAt),
+        ...webErrorSummary(error)
+      });
       scheduleMessageReconciliationAttempt(
         {
           ...request,
@@ -2450,6 +2910,14 @@ export function useWebConsoleController() {
     }));
 
     try {
+      const submitContext = submitTraceByClientMessageRef.current.get(clientMessageId);
+      if (submitContext) {
+        traceSubmitStep("console.submit.rpc_start", submitContext, {
+          operation: "resume_history",
+          historyId: entry.id,
+          previewSessionId: previewSession.sessionId
+        });
+      }
       const result = await resumeCodexHistory(connection, {
         id: entry.id,
         cwd: entry.cwd,
@@ -2457,6 +2925,18 @@ export function useWebConsoleController() {
         permissionMode,
         reasoningEffort
       });
+      const resumedContext =
+        updateSubmitTrace(clientMessageId, {
+          sessionId: result.session.sessionId,
+          turnId: result.session.currentTurnId ?? result.session.activeTurnId
+        }) ?? submitContext;
+      if (resumedContext) {
+        traceSubmitStep("console.submit.ack", resumedContext, {
+          operation: "resume_history",
+          sessionId: result.session.sessionId,
+          threadId: result.session.threadId
+        });
+      }
       historyPageCacheRef.current.set(codexHistoryKey(result.history.entry), {
         fetchedAt: Date.now(),
         page: result.history
@@ -2494,27 +2974,64 @@ export function useWebConsoleController() {
         };
       });
 
+      const sendContext = submitTraceByClientMessageRef.current.get(clientMessageId);
+      if (sendContext) {
+        traceSubmitStep("console.submit.rpc_start", sendContext, {
+          operation: "send_after_resume",
+          sessionId: result.session.sessionId,
+          threadId: result.session.threadId
+        });
+      }
       const sent = await sendSessionMessage(connection, result.session.sessionId, {
         text: message,
         clientMessageId
       });
+      const sentContext =
+        updateSubmitTrace(clientMessageId, {
+          sessionId: result.session.sessionId,
+          turnId: sent.turnId
+        }) ?? sendContext;
+      if (sentContext) {
+        traceSubmitStep("console.submit.ack", sentContext, {
+          operation: "send_after_resume",
+          sessionId: result.session.sessionId,
+          turnId: sent.turnId,
+          mode: sent.mode
+        });
+      }
       patchActiveWorkspace((workspace) =>
         markOptimisticMessageSent(workspace, clientMessageId, {
           sessionId: result.session.sessionId,
+          ...(result.session.threadId ? { threadId: result.session.threadId } : {}),
           turnId: sent.turnId
         })
       );
-      if (selectedDeviceIdRef.current) {
+      const selectedDeviceId = selectedDeviceIdRef.current;
+      if (selectedDeviceId) {
         scheduleMessageReconciliation({
           clientMessageId,
           connection,
-          deviceId: selectedDeviceIdRef.current,
+          deviceId: selectedDeviceId,
           messageText: message,
           sessionId: result.session.sessionId,
+          submitTraceId: submitTraceByClientMessageRef.current.get(clientMessageId)?.submitTraceId,
           turnId: sent.turnId
+        });
+      } else if (sentContext) {
+        traceSubmitFailed(sentContext, {
+          source: "missing_selected_device_for_reconcile",
+          messageDelivery: "ack_success",
+          operation: "send_after_resume"
         });
       }
     } catch (err) {
+      const submitContext = submitTraceByClientMessageRef.current.get(clientMessageId);
+      if (submitContext) {
+        traceSubmitFailed(submitContext, {
+          source: "resume_history_message",
+          ...webErrorSummary(err)
+        });
+      }
       patchActiveWorkspace((workspace) =>
         markOptimisticMessageFailed(
           {
@@ -2558,6 +3075,16 @@ export function useWebConsoleController() {
     }));
 
     try {
+      const submitContext = clientMessageId
+        ? submitTraceByClientMessageRef.current.get(clientMessageId)
+        : null;
+      if (submitContext) {
+        traceSubmitStep("console.submit.rpc_start", submitContext, {
+          operation: "resume_history",
+          historyId: entry.id,
+          previewSessionId: previewSession.sessionId
+        });
+      }
       const result = await resumeCodexHistory(connection, {
         id: entry.id,
         cwd: entry.cwd,
@@ -2565,6 +3092,19 @@ export function useWebConsoleController() {
         permissionMode,
         reasoningEffort
       });
+      const resumedContext = clientMessageId
+        ? updateSubmitTrace(clientMessageId, {
+            sessionId: result.session.sessionId,
+            turnId: result.session.currentTurnId ?? result.session.activeTurnId
+          }) ?? submitContext
+        : submitContext;
+      if (resumedContext) {
+        traceSubmitStep("console.submit.ack", resumedContext, {
+          operation: "resume_history",
+          sessionId: result.session.sessionId,
+          threadId: result.session.threadId
+        });
+      }
       historyPageCacheRef.current.set(codexHistoryKey(result.history.entry), {
         fetchedAt: Date.now(),
         page: result.history
@@ -2602,19 +3142,46 @@ export function useWebConsoleController() {
         };
       });
 
+      if (resumedContext) {
+        traceSubmitStep("console.submit.rpc_start", resumedContext, {
+          operation: "set_goal_after_resume",
+          sessionId: result.session.sessionId
+        });
+      }
       await setGoalForSession(result.session.sessionId, {
         objective,
         status: "active",
         tokenBudget: result.session.goal?.tokenBudget ?? null
       });
+      if (resumedContext) {
+        traceSubmitStep("console.submit.ack", resumedContext, {
+          operation: "set_goal_after_resume",
+          sessionId: result.session.sessionId
+        });
+        traceSubmitReconciled(resumedContext, {
+          source: "goal_ack",
+          operation: "set_goal_after_resume",
+          sessionId: result.session.sessionId
+        });
+      }
       if (clientMessageId) {
         patchActiveWorkspace((workspace) =>
           markOptimisticMessageSent(workspace, clientMessageId, {
-            sessionId: result.session.sessionId
+            sessionId: result.session.sessionId,
+            ...(result.session.threadId ? { threadId: result.session.threadId } : {})
           })
         );
       }
     } catch (err) {
+      const submitContext = clientMessageId
+        ? submitTraceByClientMessageRef.current.get(clientMessageId)
+        : null;
+      if (submitContext) {
+        traceSubmitFailed(submitContext, {
+          source: "resume_history_goal",
+          ...webErrorSummary(err)
+        });
+      }
       patchActiveWorkspace((workspace) => ({
         ...workspace,
         resumeStates: {
@@ -2627,11 +3194,44 @@ export function useWebConsoleController() {
   }
 
   async function submitComposer() {
+    const submitStartedAt = Date.now();
+    const submitTraceId = createClientId("submit");
     const text = draft.trim();
+    const submitIntentFields = {
+      submitTraceId,
+      draftLength: draft.length,
+      textLength: text.length,
+      connected,
+      hasCurrentSession: Boolean(currentSession),
+      currentSessionId: currentSession?.sessionId,
+      currentThreadId: currentSession?.threadId,
+      goalComposerMode,
+      attachmentCount: attachments.length
+    };
+    webDevTrace("console.submit.intent", submitIntentFields);
+    webDevTrace("console.submit.begin", submitIntentFields);
     if (!text) {
+      webDevTrace("console.submit.failed", {
+        submitTraceId,
+        reason: "empty_text",
+        durationMs: traceDurationMs(submitStartedAt)
+      });
+      webDevTrace("console.submit.skip", {
+        reason: "empty_text",
+        durationMs: traceDurationMs(submitStartedAt)
+      });
       return;
     }
     if (!connected) {
+      webDevTrace("console.submit.failed", {
+        submitTraceId,
+        reason: "not_connected",
+        durationMs: traceDurationMs(submitStartedAt)
+      });
+      webDevTrace("console.submit.skip", {
+        reason: "not_connected",
+        durationMs: traceDurationMs(submitStartedAt)
+      });
       setActiveSheet("device");
       return;
     }
@@ -2640,10 +3240,30 @@ export function useWebConsoleController() {
       selectedHistoryEntry?.cwd ?? currentSession?.cwd ?? cwd
     );
     if (resumeBlockMessage) {
+      webDevTrace("console.submit.failed", {
+        submitTraceId,
+        reason: "resume_blocked",
+        messageLength: resumeBlockMessage.length,
+        durationMs: traceDurationMs(submitStartedAt)
+      });
+      webDevTrace("console.submit.skip", {
+        reason: "resume_blocked",
+        messageLength: resumeBlockMessage.length,
+        durationMs: traceDurationMs(submitStartedAt)
+      });
       setError(resumeBlockMessage);
       return;
     }
     if (!currentSession && !cwd.trim()) {
+      webDevTrace("console.submit.failed", {
+        submitTraceId,
+        reason: "missing_cwd",
+        durationMs: traceDurationMs(submitStartedAt)
+      });
+      webDevTrace("console.submit.skip", {
+        reason: "missing_cwd",
+        durationMs: traceDurationMs(submitStartedAt)
+      });
       setActiveSheet("session");
       await loadDirectories(undefined);
       return;
@@ -2652,6 +3272,23 @@ export function useWebConsoleController() {
     if (goalComposerMode) {
       const clientMessageId = createClientId("goal");
       const targetSessionId = currentSession?.sessionId ?? pendingSessionId(clientMessageId);
+      const submitContext: SubmitTraceContext = {
+        clientMessageId,
+        deviceId: selectedDeviceIdRef.current,
+        kind: "goal",
+        sessionId: targetSessionId,
+        startedAt: submitStartedAt,
+        submitTraceId,
+        textLength: text.length
+      };
+      rememberSubmitTrace(submitContext);
+      webDevTrace("console.submit.goal.begin", {
+        submitTraceId,
+        clientMessageId,
+        targetSessionId,
+        hasCurrentSession: Boolean(currentSession),
+        textLength: text.length
+      });
 
       patchActiveWorkspace((workspace) =>
         addOptimisticUserMessage(workspace, {
@@ -2660,6 +3297,10 @@ export function useWebConsoleController() {
           text
         })
       );
+      traceSubmitStep("console.submit.queued", submitContext, {
+        targetSessionId,
+        hasCurrentSession: Boolean(currentSession)
+      });
       setDraft("");
       setAttachments([]);
       setActiveMenu(null);
@@ -2675,8 +3316,19 @@ export function useWebConsoleController() {
               ) ??
               null;
             if (!historyEntry) {
+              webDevTrace("console.submit.goal.error", {
+                submitTraceId,
+                clientMessageId,
+                reason: "missing_history_entry"
+              });
               throw new Error("这条记录暂时不可用，请刷新后重试。");
             }
+            webDevTrace("console.submit.goal.resume_history", {
+              submitTraceId,
+              clientMessageId,
+              previewSessionId: currentSession.sessionId,
+              historyId: historyEntry.id
+            });
             await resumeHistorySessionForGoal(
               historyEntry,
               currentSession,
@@ -2684,18 +3336,46 @@ export function useWebConsoleController() {
               clientMessageId
             );
           } else {
+            webDevTrace("console.submit.goal.set_existing", {
+              submitTraceId,
+              clientMessageId,
+              sessionId: currentSession.sessionId
+            });
+            traceSubmitStep("console.submit.rpc_start", submitContext, {
+              operation: "set_goal",
+              sessionId: currentSession.sessionId
+            });
             await setGoalForSession(currentSession.sessionId, {
               objective: text,
               status: "active",
               tokenBudget: currentSession.goal?.tokenBudget ?? null
             });
+            const sentContext =
+              updateSubmitTrace(clientMessageId, {
+                sessionId: currentSession.sessionId
+              }) ?? submitContext;
+            traceSubmitStep("console.submit.ack", sentContext, {
+              operation: "set_goal",
+              sessionId: currentSession.sessionId
+            });
+            traceSubmitReconciled(sentContext, {
+              source: "goal_ack",
+              operation: "set_goal",
+              sessionId: currentSession.sessionId
+            });
             patchActiveWorkspace((workspace) =>
               markOptimisticMessageSent(workspace, clientMessageId, {
-                sessionId: currentSession.sessionId
+                sessionId: currentSession.sessionId,
+                ...(currentSession.threadId ? { threadId: currentSession.threadId } : {})
               })
             );
           }
           setGoalComposerMode(false);
+          webDevTrace("console.submit.goal.end", {
+            submitTraceId,
+            clientMessageId,
+            durationMs: traceDurationMs(submitStartedAt)
+          });
           return;
         }
 
@@ -2718,6 +3398,19 @@ export function useWebConsoleController() {
           )
         );
 
+        webDevTrace("console.submit.goal.create_session", {
+          submitTraceId,
+          clientMessageId,
+          pendingSessionId: pendingSession.sessionId,
+          cwd: cwd.trim(),
+          model,
+          permissionMode,
+          reasoningEffort
+        });
+        traceSubmitStep("console.submit.rpc_start", submitContext, {
+          operation: "create_session_with_goal",
+          pendingSessionId: pendingSession.sessionId
+        });
         const result = await createSession(connection, {
           cwd: cwd.trim(),
           model,
@@ -2727,6 +3420,16 @@ export function useWebConsoleController() {
           initialGoal: text,
           initialMessage: null
         });
+        const sentContext =
+          updateSubmitTrace(clientMessageId, {
+            sessionId: result.session.sessionId,
+            turnId: result.session.currentTurnId ?? result.session.activeTurnId
+          }) ?? submitContext;
+        traceSubmitStep("console.submit.ack", sentContext, {
+          operation: "create_session_with_goal",
+          sessionId: result.session.sessionId,
+          threadId: result.session.threadId
+        });
 
         patchActiveWorkspace((workspace) => {
           let next = reassignSessionChatItems(
@@ -2735,7 +3438,8 @@ export function useWebConsoleController() {
             result.session.sessionId
           );
           next = markOptimisticMessageSent(next, clientMessageId, {
-            sessionId: result.session.sessionId
+            sessionId: result.session.sessionId,
+            ...(result.session.threadId ? { threadId: result.session.threadId } : {})
           });
           next = upsertSessionInWorkspace(next, result.session);
           return {
@@ -2752,8 +3456,31 @@ export function useWebConsoleController() {
         });
         setGoalComposerMode(false);
         setActiveSheet(null);
+        traceSubmitReconciled(sentContext, {
+          source: "goal_ack",
+          operation: "create_session_with_goal",
+          sessionId: result.session.sessionId,
+          threadId: result.session.threadId
+        });
+        webDevTrace("console.submit.goal.end", {
+          submitTraceId,
+          clientMessageId,
+          sessionId: result.session.sessionId,
+          threadId: result.session.threadId,
+          durationMs: traceDurationMs(submitStartedAt)
+        });
         return;
       } catch (err) {
+        webDevTrace("console.submit.goal.error", {
+          submitTraceId,
+          clientMessageId,
+          durationMs: traceDurationMs(submitStartedAt),
+          ...webErrorSummary(err)
+        });
+        traceSubmitFailed(submitContext, {
+          durationMs: traceDurationMs(submitStartedAt),
+          ...webErrorSummary(err)
+        });
         patchActiveWorkspace((workspace) =>
           markOptimisticMessageFailed(workspace, clientMessageId, formatError(err))
         );
@@ -2766,6 +3493,26 @@ export function useWebConsoleController() {
     const clientMessageId = createClientId("message");
     const targetSessionId = currentSession?.sessionId ?? pendingSessionId(clientMessageId);
     const optimisticTurnId = currentSession?.activeTurnId ?? undefined;
+    const submitContext: SubmitTraceContext = {
+      clientMessageId,
+      deviceId: selectedDeviceIdRef.current,
+      kind: "message",
+      sessionId: targetSessionId,
+      startedAt: submitStartedAt,
+      submitTraceId,
+      textLength: message.length,
+      ...(optimisticTurnId ? { turnId: optimisticTurnId } : {})
+    };
+    rememberSubmitTrace(submitContext);
+    webDevTrace("console.submit.message.begin", {
+      submitTraceId,
+      clientMessageId,
+      targetSessionId,
+      optimisticTurnId,
+      messageLength: message.length,
+      attachmentCount: attachments.length,
+      hasCurrentSession: Boolean(currentSession)
+    });
 
     patchActiveWorkspace((workspace) =>
       addOptimisticUserMessage(workspace, {
@@ -2775,6 +3522,11 @@ export function useWebConsoleController() {
         text: message
       })
     );
+    traceSubmitStep("console.submit.queued", submitContext, {
+      targetSessionId,
+      optimisticTurnId,
+      hasCurrentSession: Boolean(currentSession)
+    });
     setDraft("");
     setAttachments([]);
     setError(null);
@@ -2789,31 +3541,89 @@ export function useWebConsoleController() {
             ) ??
             null;
           if (!historyEntry) {
+            webDevTrace("console.submit.message.error", {
+              submitTraceId,
+              clientMessageId,
+              reason: "missing_history_entry"
+            });
             throw new Error("这条记录暂时不可用，请刷新后重试。");
           }
+          webDevTrace("console.submit.message.resume_history", {
+            submitTraceId,
+            clientMessageId,
+            previewSessionId: currentSession.sessionId,
+            historyId: historyEntry.id
+          });
           await resumeHistorySessionForMessage(historyEntry, currentSession, message, clientMessageId);
+          webDevTrace("console.submit.message.end", {
+            submitTraceId,
+            clientMessageId,
+            mode: "resume_history",
+            durationMs: traceDurationMs(submitStartedAt)
+          });
           return;
         }
+        webDevTrace("console.submit.message.send_existing", {
+          submitTraceId,
+          clientMessageId,
+          sessionId: currentSession.sessionId,
+          threadId: currentSession.threadId,
+          activeTurnId: currentSession.activeTurnId
+        });
+        traceSubmitStep("console.submit.rpc_start", submitContext, {
+          operation: "send_existing",
+          sessionId: currentSession.sessionId,
+          threadId: currentSession.threadId,
+          activeTurnId: currentSession.activeTurnId
+        });
         const result = await sendSessionMessage(connection, currentSession.sessionId, {
           text: message,
           clientMessageId
         });
+        const sentContext =
+          updateSubmitTrace(clientMessageId, {
+            sessionId: currentSession.sessionId,
+            turnId: result.turnId
+          }) ?? submitContext;
+        traceSubmitStep("console.submit.ack", sentContext, {
+          operation: "send_existing",
+          sessionId: currentSession.sessionId,
+          turnId: result.turnId,
+          mode: result.mode
+        });
         patchActiveWorkspace((workspace) =>
           markOptimisticMessageSent(workspace, clientMessageId, {
             sessionId: currentSession.sessionId,
+            ...(currentSession.threadId ? { threadId: currentSession.threadId } : {}),
             turnId: result.turnId
           })
         );
-        if (selectedDeviceIdRef.current) {
+        const selectedDeviceId = selectedDeviceIdRef.current;
+        if (selectedDeviceId) {
           scheduleMessageReconciliation({
             clientMessageId,
             connection,
-            deviceId: selectedDeviceIdRef.current,
+            deviceId: selectedDeviceId,
             messageText: message,
             sessionId: currentSession.sessionId,
+            submitTraceId,
             turnId: result.turnId
           });
+        } else {
+          traceSubmitFailed(sentContext, {
+            source: "missing_selected_device_for_reconcile",
+            messageDelivery: "ack_success",
+            operation: "send_existing"
+          });
         }
+        webDevTrace("console.submit.message.end", {
+          submitTraceId,
+          clientMessageId,
+          sessionId: currentSession.sessionId,
+          turnId: result.turnId,
+          mode: result.mode,
+          durationMs: traceDurationMs(submitStartedAt)
+        });
         return;
       }
 
@@ -2836,6 +3646,20 @@ export function useWebConsoleController() {
         )
       );
 
+      webDevTrace("console.submit.message.create_session", {
+        submitTraceId,
+        clientMessageId,
+        pendingSessionId: pendingSession.sessionId,
+        cwd: cwd.trim(),
+        model,
+        permissionMode,
+        reasoningEffort,
+        initialGoalLength: initialGoal.trim().length
+      });
+      traceSubmitStep("console.submit.rpc_start", submitContext, {
+        operation: "create_session_with_message",
+        pendingSessionId: pendingSession.sessionId
+      });
       const result = await createSession(connection, {
         cwd: cwd.trim(),
         model,
@@ -2846,10 +3670,27 @@ export function useWebConsoleController() {
         initialMessage: message,
         clientMessageId
       });
+      const sentContext =
+        updateSubmitTrace(clientMessageId, {
+          sessionId: result.session.sessionId,
+          turnId: result.session.currentTurnId ?? result.session.activeTurnId
+        }) ?? submitContext;
+      traceSubmitStep("console.submit.ack", sentContext, {
+        operation: "create_session_with_message",
+        sessionId: result.session.sessionId,
+        threadId: result.session.threadId,
+        turnId: result.session.currentTurnId ?? result.session.activeTurnId
+      });
 
       patchActiveWorkspace((workspace) => {
         let next = reassignSessionChatItems(workspace, pendingSession.sessionId, result.session.sessionId);
-        next = markOptimisticMessageSent(next, clientMessageId, { sessionId: result.session.sessionId });
+        next = markOptimisticMessageSent(next, clientMessageId, {
+          sessionId: result.session.sessionId,
+          ...(result.session.threadId ? { threadId: result.session.threadId } : {}),
+          ...(result.session.currentTurnId ?? result.session.activeTurnId
+            ? { turnId: result.session.currentTurnId ?? result.session.activeTurnId }
+            : {})
+        });
         next = upsertSessionInWorkspace(next, result.session);
         return {
           ...next,
@@ -2862,18 +3703,44 @@ export function useWebConsoleController() {
           )
         };
       });
-      if (selectedDeviceIdRef.current) {
+      const selectedDeviceId = selectedDeviceIdRef.current;
+      if (selectedDeviceId) {
         scheduleMessageReconciliation({
           clientMessageId,
           connection,
-          deviceId: selectedDeviceIdRef.current,
+          deviceId: selectedDeviceId,
           messageText: message,
           sessionId: result.session.sessionId,
+          submitTraceId,
           turnId: result.session.currentTurnId ?? result.session.activeTurnId
+        });
+      } else {
+        traceSubmitFailed(sentContext, {
+          source: "missing_selected_device_for_reconcile",
+          messageDelivery: "ack_success",
+          operation: "create_session_with_message"
         });
       }
       setActiveSheet(null);
+      webDevTrace("console.submit.message.end", {
+        submitTraceId,
+        clientMessageId,
+        sessionId: result.session.sessionId,
+        threadId: result.session.threadId,
+        mode: "create_session",
+        durationMs: traceDurationMs(submitStartedAt)
+      });
     } catch (err) {
+      webDevTrace("console.submit.message.error", {
+        submitTraceId,
+        clientMessageId,
+        durationMs: traceDurationMs(submitStartedAt),
+        ...webErrorSummary(err)
+      });
+      traceSubmitFailed(submitContext, {
+        durationMs: traceDurationMs(submitStartedAt),
+        ...webErrorSummary(err)
+      });
       patchActiveWorkspace((workspace) =>
         markOptimisticMessageFailed(workspace, clientMessageId, formatError(err))
       );
@@ -3070,7 +3937,7 @@ export function useWebConsoleController() {
     setActiveSheet("goal");
   }
 
-  function openNewSessionSetup() {
+  function startNewSessionDraft() {
     patchActiveWorkspace((workspace) => ({
       ...workspace,
       currentSessionId: null,
@@ -3078,7 +3945,14 @@ export function useWebConsoleController() {
       sessions: workspace.sessions.filter((session) => !isHistoryPreviewSessionId(session.sessionId))
     }));
     setDraft("");
+    setAttachments([]);
+    setActiveSheet(null);
+    setActiveMenu(null);
     revealMainOnMobile();
+  }
+
+  function openNewSessionSetup() {
+    startNewSessionDraft();
     setActiveSheet("session");
     void loadDirectories(undefined);
   }
@@ -3277,6 +4151,7 @@ export function useWebConsoleController() {
     openSummarySheet,
     openGoalSheet,
     openNewSessionSetup,
+    startNewSessionDraft,
     pendingApprovals,
     permissionMode,
     permissionOptions: availablePermissionOptions,
@@ -3377,10 +4252,74 @@ function hasLiveCompletionEvidence(
   );
 }
 
+function summarizeReducerWorkspaceState(workspace: DeviceWorkspace): Record<string, unknown> {
+  return {
+    currentSessionId: workspace.currentSessionId,
+    selectedHistoryKey: workspace.selectedHistoryKey,
+    chatItemCount: workspace.chatItems.length,
+    conversationCount: Object.keys(workspace.conversations).length,
+    latestSeq: workspace.events.at(-1)?.seq ?? null,
+    outbox: summarizeOutboxStatuses(workspace.outbox)
+  };
+}
+
+function summarizeOutboxStatuses(outbox: Record<string, OutboxEntry>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const entry of Object.values(outbox)) {
+    counts[entry.status] = (counts[entry.status] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function summarizeLocalEventTypes(events: LocalEvent[]): string[] {
+  return [...new Set(events.map((event) => event.type))].sort();
+}
+
+function summarizeLocalEventSeqs(events: LocalEvent[]): {
+  count: number;
+  first: number | null;
+  last: number | null;
+  values?: number[];
+  sample?: number[];
+} {
+  const seqs = events.map((event) => event.seq);
+  if (seqs.length <= 20) {
+    return {
+      count: seqs.length,
+      first: seqs[0] ?? null,
+      last: seqs.at(-1) ?? null,
+      values: seqs
+    };
+  }
+  return {
+    count: seqs.length,
+    first: seqs[0] ?? null,
+    last: seqs.at(-1) ?? null,
+    sample: [...seqs.slice(0, 10), ...seqs.slice(-10)]
+  };
+}
+
+function summarizeLocalEventField(
+  events: LocalEvent[],
+  field: "sessionId" | "threadId" | "turnId"
+): string[] {
+  return [
+    ...new Set(
+      events
+        .map((event) => event[field])
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+    )
+  ].sort();
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readString(record: Record<string, unknown>, key: string): string | null {
   return typeof record[key] === "string" ? record[key] : null;
+}
+
+function readEventClientMessageId(event: LocalEvent): string | null {
+  return isRecord(event.payload) ? readString(event.payload, "clientMessageId") : null;
 }

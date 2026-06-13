@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { JsonRpcOutboundMessage } from "@codexnext/protocol";
+import { devTrace, errorSummary, payloadSummary } from "./dev-trace.js";
 
 export interface StdioCodexTransportOptions {
   command?: string;
@@ -35,6 +36,12 @@ export class StdioCodexTransport extends EventEmitter {
       env: this.options.env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"]
     });
+    devTrace("stdio.spawn", {
+      binary: command,
+      args,
+      cwd: this.options.cwd,
+      pid: this.child.pid
+    });
 
     this.lines = createInterface({ input: this.child.stdout });
 
@@ -43,8 +50,14 @@ export class StdioCodexTransport extends EventEmitter {
         return;
       }
       try {
-        this.emit("message", JSON.parse(line));
+        const message = JSON.parse(line) as unknown;
+        devTrace("stdio.message", payloadSummary(message));
+        this.emit("message", message);
       } catch (error) {
+        devTrace("stdio.parse_error", {
+          lineLength: line.length,
+          ...errorSummary(error)
+        });
         this.emit(
           "error",
           new Error(`Failed to parse app-server JSON line: ${line}`, {
@@ -55,18 +68,29 @@ export class StdioCodexTransport extends EventEmitter {
     });
 
     this.child.stderr.on("data", (chunk: Buffer) => {
+      devTrace("stdio.stderr", {
+        bytes: chunk.byteLength
+      });
       if (this.options.stderr === "emit") {
         this.emit("stderr", chunk.toString("utf8"));
       }
     });
 
     this.child.on("error", (error) => {
+      devTrace("stdio.error", {
+        ...errorSummary(error)
+      });
       this.emit("error", error);
     });
 
     this.child.on("exit", (code, signal) => {
       this.closed = true;
       this.lines?.close();
+      devTrace("stdio.exit", {
+        pid: this.child?.pid,
+        code,
+        signal
+      });
       this.emit("close", { code, signal });
     });
   }
@@ -75,6 +99,7 @@ export class StdioCodexTransport extends EventEmitter {
     if (!this.child || !this.child.stdin.writable) {
       throw new Error("codex app-server stdin is not writable");
     }
+    devTrace("stdio.send", payloadSummary(message));
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
@@ -126,4 +151,3 @@ export class StdioCodexTransport extends EventEmitter {
     });
   }
 }
-

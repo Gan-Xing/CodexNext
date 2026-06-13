@@ -13,6 +13,7 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith("/api/auth/login") ||
     pathname.startsWith("/api/auth/logout") ||
     pathname.startsWith("/api/auth/status") ||
+    isDevTracePath(pathname) ||
     pathname.startsWith("/api/relay/session") ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico"
@@ -28,6 +29,10 @@ export async function proxy(request: NextRequest) {
   const loginUrl = new URL("/login", request.url);
   loginUrl.searchParams.set("next", `${pathname}${search}`);
   return NextResponse.redirect(loginUrl);
+}
+
+function isDevTracePath(pathname: string): boolean {
+  return process.env.NODE_ENV !== "production" && pathname.startsWith("/api/dev/trace");
 }
 
 export const config = {

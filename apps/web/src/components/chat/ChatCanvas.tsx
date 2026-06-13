@@ -9,6 +9,7 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { PlanBlock } from "./PlanBlock";
 import { SystemStatusRow } from "./SystemStatusRow";
+import { ThinkingRow } from "./ThinkingRow";
 
 export function ChatCanvas(props: {
   active: boolean;
@@ -153,14 +154,20 @@ export function ChatCanvas(props: {
 const ChatMessageRow = memo(function ChatMessageRow(props: {
   item: ChatItem;
 }) {
+  const feedback = optimisticFeedback(props.item);
+  if (feedback) {
+    return <ThinkingRow text={feedback.text} tone={feedback.tone} />;
+  }
   return (
     <article className={`cn-message ${messageClass(props.item)}`}>
       {props.item.role === "user" ? (
         <div className="cn-message-user-shell">
           <div className="cn-message-user-bubble">
             <MarkdownMessage text={props.item.text} />
+            {props.item.status !== "sending" && props.item.status !== "pending" ? (
+              <MessageCopyButton value={props.item.text} />
+            ) : null}
           </div>
-          {props.item.status !== "sending" ? <MessageCopyButton value={props.item.text} /> : null}
         </div>
       ) : props.item.role === "assistant" ? (
         <MarkdownMessage text={props.item.text} />
@@ -176,6 +183,28 @@ const ChatMessageRow = memo(function ChatMessageRow(props: {
     </article>
   );
 });
+
+function optimisticFeedback(item: ChatItem): {
+  text: string;
+  tone: "thinking" | "error";
+} | null {
+  if (item.role !== "system") {
+    return null;
+  }
+  if (item.meta?.kind === "thinking") {
+    return {
+      text: item.text,
+      tone: "thinking"
+    };
+  }
+  if (item.meta?.kind === "error") {
+    return {
+      text: item.text,
+      tone: "error"
+    };
+  }
+  return null;
+}
 
 function messageClass(item: ChatItem): string {
   if (item.role === "assistant") {

@@ -7,6 +7,7 @@ import {
   nextSeqAfterEvents
 } from "@codexnext/relay-client";
 import type { AgentConnection, DeviceEventPayload, LocalEvent } from "./types";
+import { webDevTrace, webErrorSummary } from "./dev-trace";
 
 export interface ManagedEventStream {
   close(): void;
@@ -29,6 +30,11 @@ export function openManagedEventStream(input: {
 }): ManagedEventStream {
   let closed = false;
   let lastSeq = input.after;
+  webDevTrace("event-stream.open", {
+    deviceId: input.connection.deviceId,
+    relayUrl: input.connection.relayUrl,
+    after: input.after
+  });
 
   const socket: Socket = io(`${input.connection.relayUrl}${RelayNamespace.User}`, {
     path: RelaySocketPath,
@@ -51,11 +57,19 @@ export function openManagedEventStream(input: {
     if (closed) {
       return;
     }
+    webDevTrace("event-stream.connected", {
+      deviceId: input.connection.deviceId,
+      lastSeq
+    });
     input.onStatus("connected");
   });
 
   socket.on("disconnect", () => {
     if (!closed) {
+      webDevTrace("event-stream.disconnected", {
+        deviceId: input.connection.deviceId,
+        lastSeq
+      });
       input.onStatus("reconnecting");
     }
   });
@@ -65,6 +79,11 @@ export function openManagedEventStream(input: {
     if (closed) {
       return;
     }
+    webDevTrace("event-stream.connect_error", {
+      deviceId: input.connection.deviceId,
+      lastSeq,
+      ...webErrorSummary(error)
+    });
     input.onStatus("error");
     input.onError(error);
   });
@@ -78,6 +97,12 @@ export function openManagedEventStream(input: {
       return;
     }
     lastSeq = nextSeqAfterEvents(lastSeq, events);
+    webDevTrace("event-stream.replay", {
+      deviceId: input.connection.deviceId,
+      count: events.length,
+      lastSeq,
+      eventTypes: summarizeEventTypes(events)
+    });
     input.onReplay(events);
   });
 
@@ -90,6 +115,15 @@ export function openManagedEventStream(input: {
       return;
     }
     lastSeq = nextSeqAfterEvents(lastSeq, [event]);
+    webDevTrace("event-stream.event", {
+      deviceId: input.connection.deviceId,
+      seq: event.seq,
+      type: event.type,
+      sessionId: event.sessionId,
+      threadId: event.threadId,
+      turnId: event.turnId,
+      lastSeq
+    });
     input.onEvent(event);
   });
 
@@ -100,7 +134,15 @@ export function openManagedEventStream(input: {
     close() {
       closed = true;
       socket.close();
+      webDevTrace("event-stream.closed", {
+        deviceId: input.connection.deviceId,
+        lastSeq
+      });
       input.onStatus("closed");
     }
   };
+}
+
+function summarizeEventTypes(events: LocalEvent[]): string[] {
+  return [...new Set(events.map((event) => event.type))].sort();
 }

@@ -90,6 +90,7 @@ export type ChatItemRole =
   | "plan";
 
 export type ChatItemStatus =
+  | "pending"
   | "sending"
   | "sent"
   | "failed"

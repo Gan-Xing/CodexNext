@@ -37,6 +37,7 @@ import {
   SessionManager,
   type CodexClientFactory
 } from "./session-manager.js";
+import { devTrace, durationMs, errorSummary, payloadSummary } from "../dev-trace.js";
 
 export interface LocalAgentRuntimeOptions {
   host: string;
@@ -97,86 +98,114 @@ export function createLocalAgentRuntime(
     },
     directories: (requestedPath?: string) => listDirectories(requestedPath),
     health: async () => health(options),
-    invoke: async (method, params) => {
-      switch (method) {
-        case RelayMethodValue.AgentHealth:
-          return health(options);
-        case RelayMethodValue.SessionsList:
-          return { sessions: sessionManager.summaries() };
-        case RelayMethodValue.SessionsCreate: {
-          const body = LocalStartSessionSchema.parse(params ?? {});
-          const session = await sessionManager.startSession(body);
-          return { session };
+    invoke: async (method, params) =>
+      traceRuntimeInvoke(method, params, async () => {
+        switch (method) {
+          case RelayMethodValue.AgentHealth:
+            return health(options);
+          case RelayMethodValue.SessionsList:
+            return { sessions: sessionManager.summaries() };
+          case RelayMethodValue.SessionsCreate: {
+            const body = LocalStartSessionSchema.parse(params ?? {});
+            const session = await sessionManager.startSession(body);
+            return { session };
+          }
+          case RelayMethodValue.SessionsMessage: {
+            const payload = parseSessionScopedParams(params);
+            const body = LocalSendMessageSchema.parse(payload.body);
+            return sessionManager.sendMessage(payload.sessionId, body);
+          }
+          case RelayMethodValue.SessionsGoalGet: {
+            const payload = parseSessionScopedParams(params);
+            return sessionManager.getGoal(payload.sessionId);
+          }
+          case RelayMethodValue.SessionsGoalSet: {
+            const payload = parseSessionScopedParams(params);
+            const body = LocalSetGoalSchema.parse(payload.body);
+            return sessionManager.setGoal(payload.sessionId, body);
+          }
+          case RelayMethodValue.SessionsGoalClear: {
+            const payload = parseSessionScopedParams(params);
+            return sessionManager.clearGoal(payload.sessionId);
+          }
+          case RelayMethodValue.TurnInterrupt: {
+            const payload = parseTurnScopedParams(params);
+            return sessionManager.interruptTurn(payload.sessionId, payload.turnId);
+          }
+          case RelayMethodValue.ApprovalDecision: {
+            const payload = parseApprovalScopedParams(params);
+            const body = LocalApprovalDecisionSchema.parse(payload.body ?? {});
+            return approvalBridge.resolveDecision(payload.approvalId, body.decision);
+          }
+          case RelayMethodValue.DirectoriesList:
+            return listDirectories(readOptionalPath(params));
+          case RelayMethodValue.CodexHistoryList:
+            return listCodexHistory(params, sessionManager, historyStore);
+          case RelayMethodValue.CodexHistoryLoaded:
+            return listLoadedCodexHistoryThreads(sessionManager);
+          case RelayMethodValue.CodexHistoryDetail:
+            return readCodexHistoryDetail(params, sessionManager, historyStore);
+          case RelayMethodValue.CodexHistoryTurns:
+            return listCodexHistoryTurns(params, sessionManager, historyStore);
+          case RelayMethodValue.CodexHistoryArchive:
+            return archiveCodexHistoryThread(params, sessionManager);
+          case RelayMethodValue.CodexHistoryResume: {
+            const body = LocalResumeSessionSchema.parse(params ?? {});
+            const historyEntry = await readCodexHistoryEntryById(
+              body.id,
+              sessionManager,
+              historyStore
+            );
+            const resumed = await sessionManager.resumeSessionWithInitialTurns({
+              ...body,
+              threadId: historyEntry.id,
+              cwd: body.cwd ?? historyEntry.cwd,
+              title: body.title ?? historyEntry.title
+            });
+            const history = historyPageFromTurns({
+              entry: historyEntry,
+              turnsPage: resumed.initialTurnsPage
+            });
+            return {
+              session: resumed.session,
+              history
+            } satisfies LocalResumeSessionResponse;
+          }
+          default:
+            throw new Error(`Unsupported relay method: ${String(method)}`);
         }
-        case RelayMethodValue.SessionsMessage: {
-          const payload = parseSessionScopedParams(params);
-          const body = LocalSendMessageSchema.parse(payload.body);
-          return sessionManager.sendMessage(payload.sessionId, body);
-        }
-        case RelayMethodValue.SessionsGoalGet: {
-          const payload = parseSessionScopedParams(params);
-          return sessionManager.getGoal(payload.sessionId);
-        }
-        case RelayMethodValue.SessionsGoalSet: {
-          const payload = parseSessionScopedParams(params);
-          const body = LocalSetGoalSchema.parse(payload.body);
-          return sessionManager.setGoal(payload.sessionId, body);
-        }
-        case RelayMethodValue.SessionsGoalClear: {
-          const payload = parseSessionScopedParams(params);
-          return sessionManager.clearGoal(payload.sessionId);
-        }
-        case RelayMethodValue.TurnInterrupt: {
-          const payload = parseTurnScopedParams(params);
-          return sessionManager.interruptTurn(payload.sessionId, payload.turnId);
-        }
-        case RelayMethodValue.ApprovalDecision: {
-          const payload = parseApprovalScopedParams(params);
-          const body = LocalApprovalDecisionSchema.parse(payload.body ?? {});
-          return approvalBridge.resolveDecision(payload.approvalId, body.decision);
-        }
-        case RelayMethodValue.DirectoriesList:
-          return listDirectories(readOptionalPath(params));
-        case RelayMethodValue.CodexHistoryList:
-          return listCodexHistory(params, sessionManager, historyStore);
-        case RelayMethodValue.CodexHistoryLoaded:
-          return listLoadedCodexHistoryThreads(sessionManager);
-        case RelayMethodValue.CodexHistoryDetail:
-          return readCodexHistoryDetail(params, sessionManager, historyStore);
-        case RelayMethodValue.CodexHistoryTurns:
-          return listCodexHistoryTurns(params, sessionManager, historyStore);
-        case RelayMethodValue.CodexHistoryArchive:
-          return archiveCodexHistoryThread(params, sessionManager);
-        case RelayMethodValue.CodexHistoryResume: {
-          const body = LocalResumeSessionSchema.parse(params ?? {});
-          const historyEntry = await readCodexHistoryEntryById(
-            body.id,
-            sessionManager,
-            historyStore
-          );
-          const resumed = await sessionManager.resumeSessionWithInitialTurns({
-            ...body,
-            threadId: historyEntry.id,
-            cwd: body.cwd ?? historyEntry.cwd,
-            title: body.title ?? historyEntry.title
-          });
-          const history = historyPageFromTurns({
-            entry: historyEntry,
-            turnsPage: resumed.initialTurnsPage
-          });
-          return {
-            session: resumed.session,
-            history
-          } satisfies LocalResumeSessionResponse;
-        }
-        default:
-          throw new Error(`Unsupported relay method: ${String(method)}`);
-      }
-    },
+      }),
     replayEvents: (after = 0) => ({
       events: eventStore.after(Number.isFinite(after) ? after : 0)
     })
   };
+}
+
+async function traceRuntimeInvoke<T>(
+  method: RelayMethod,
+  params: unknown,
+  operation: () => Promise<T>
+): Promise<T> {
+  const startedAt = Date.now();
+  devTrace("runtime.invoke.start", {
+    method,
+    ...payloadSummary(params)
+  });
+  try {
+    const result = await operation();
+    devTrace("runtime.invoke.end", {
+      method,
+      durationMs: durationMs(startedAt)
+    });
+    return result;
+  } catch (error) {
+    devTrace("runtime.invoke.error", {
+      method,
+      durationMs: durationMs(startedAt),
+      ...errorSummary(error)
+    });
+    throw error;
+  }
 }
 
 function parseSessionScopedParams(params: unknown): {

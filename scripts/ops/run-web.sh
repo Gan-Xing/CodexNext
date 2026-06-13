@@ -25,8 +25,16 @@ if [[ -n "${CODEXNEXT_ALLOW_URL_TOKEN:-}" ]]; then
   export NEXT_PUBLIC_CODEXNEXT_ALLOW_URL_TOKEN="$CODEXNEXT_ALLOW_URL_TOKEN"
 fi
 
+if [[ "${NODE_ENV:-}" != "production" && "${CODEXNEXT_PRODUCTION:-0}" != "1" && "${CODEXNEXT_TRACE:-0}" == "1" ]]; then
+  export NEXT_PUBLIC_CODEXNEXT_TRACE="1"
+fi
+
 HOST="${CODEXNEXT_WEB_HOST:-0.0.0.0}"
 PORT="${CODEXNEXT_WEB_PORT:-3002}"
 
 cd "$ROOT_DIR"
+if [[ "${CODEXNEXT_WEB_MODE:-start}" == "dev" ]]; then
+  exec pnpm --filter @codexnext/web exec next dev -H "$HOST" -p "$PORT"
+fi
+
 exec pnpm --filter @codexnext/web exec next start -H "$HOST" -p "$PORT"
