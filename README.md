@@ -79,6 +79,29 @@ network history refresh run in the background.
   count, latest sequence, status counts, and latest item metadata. Do not log
   every visible message on each render.
 
+### Completed Cold-Switching Implementation Checklist
+
+All seven cold conversation switching requirements are implemented. Keep every
+item completed when modifying chat, history, sidebar, rendering, or diagnostics:
+
+- [x] Status: completed - Conversation selection is local-first and must not
+  await `getCodexHistoryTurns`, `listSessions`, replay, or history hydration.
+- [x] Status: completed - The chat surface renders the best local state first:
+  normalized in-memory conversation, persisted conversation cache, or a
+  lightweight thread skeleton.
+- [x] Status: completed - Recent conversation bodies are persisted in bounded
+  IndexedDB cache, separate from the outbox recovery layer.
+- [x] Status: completed - Network history refresh runs as background
+  stale-while-revalidate and reconciles by message id, turn id, and client
+  message id.
+- [x] Status: completed - Sidebar history prefetch runs during idle time for
+  visible, pinned, and recent threads with bounded concurrency.
+- [x] Status: completed - Large chat histories use virtualized rendering so the
+  UI does not synchronously render hundreds of Markdown/code-highlighted
+  messages.
+- [x] Status: completed - Development render logs are summary-only and must not
+  write the full visible message list per render.
+
 ## Not Included
 
 - React Native
