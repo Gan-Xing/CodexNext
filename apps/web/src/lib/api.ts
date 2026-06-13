@@ -239,6 +239,7 @@ export function getCodexHistoryDetail(
 export function getCodexHistoryTurns(
   connection: AgentConnection,
   input: {
+    cacheMode?: "bypass";
     id: string;
     cwd?: string;
     cursor?: string | null;
@@ -356,6 +357,9 @@ export function resolveAgentUrl(connection: AgentConnection, path: string): URL 
   if (base.pathname === "/api/codex-history/turns") {
     return buildCodexHistoryTurnsUrl(connection, {
       id: base.searchParams.get("id") ?? "",
+      ...(base.searchParams.get("cacheMode") === "bypass"
+        ? { cacheMode: "bypass" }
+        : {}),
       ...(base.searchParams.has("cwd")
         ? { cwd: base.searchParams.get("cwd") ?? "" }
         : {}),

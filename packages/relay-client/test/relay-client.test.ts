@@ -202,6 +202,14 @@ describe("relay client contract helpers", () => {
     ).toBe(
       "https://relay.example/api/relay/devices/device%2Fone/codex-history/turns?id=thread%2F1&cwd=%2Ftmp%2Frepo&cursor=older%2F1&limit=25&sortDirection=desc&itemsView=summary"
     );
+    expect(
+      buildCodexHistoryTurnsUrl(connection, {
+        id: "thread/1",
+        cacheMode: "bypass"
+      }).toString()
+    ).toBe(
+      "https://relay.example/api/relay/devices/device%2Fone/codex-history/turns?id=thread%2F1&cacheMode=bypass&sortDirection=desc&itemsView=summary"
+    );
     expect(buildCodexHistoryArchiveUrl(connection).toString()).toBe(
       "https://relay.example/api/relay/devices/device%2Fone/codex-history/archive"
     );

@@ -265,6 +265,7 @@ export function registerRelayRoutes(input: RelayRouteDependencies): void {
       limit?: string;
       sortDirection?: string;
       itemsView?: string;
+      cacheMode?: string;
     };
     if (!input.requireUserAccess(request, reply)) {
       return { error: "Missing or invalid user token" };
@@ -279,11 +280,14 @@ export function registerRelayRoutes(input: RelayRouteDependencies): void {
       ...(query.itemsView ? { itemsView: query.itemsView } : {})
     };
     try {
-      const cached = input.readCachedHistoryPage(
-        input.devices.get(deviceId) ?? null,
-        params,
-        input.recentHistoryCacheTtlMs
-      );
+      const bypassCache = query.cacheMode === "bypass";
+      const cached = bypassCache
+        ? null
+        : input.readCachedHistoryPage(
+            input.devices.get(deviceId) ?? null,
+            params,
+            input.recentHistoryCacheTtlMs
+          );
       if (cached) {
         devTrace("relay.rpc.cache_hit", {
           deviceId,
@@ -298,6 +302,13 @@ export function registerRelayRoutes(input: RelayRouteDependencies): void {
           outcome: "success"
         });
         return cached.page;
+      }
+      if (bypassCache) {
+        devTrace("relay.rpc.cache_bypass", {
+          deviceId,
+          method: RelayMethodValue.CodexHistoryTurns,
+          ...payloadSummary(params)
+        });
       }
       const rawResult = await invokeMachineRpc(
         input.devices,

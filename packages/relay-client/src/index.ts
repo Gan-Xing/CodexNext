@@ -147,6 +147,7 @@ export function buildCodexHistoryDetailUrl(
 export function buildCodexHistoryTurnsUrl(
   connection: Pick<RelayClientConnection, "deviceId" | "relayUrl">,
   input: {
+    cacheMode?: "bypass";
     id: string;
     cwd?: string;
     cursor?: string | null;
@@ -163,6 +164,9 @@ export function buildCodexHistoryTurnsUrl(
   }
   if (typeof input.limit === "number" && Number.isFinite(input.limit)) {
     url.searchParams.set("limit", String(normalizeSeq(input.limit)));
+  }
+  if (input.cacheMode === "bypass") {
+    url.searchParams.set("cacheMode", "bypass");
   }
   url.searchParams.set("sortDirection", "desc");
   url.searchParams.set("itemsView", "summary");

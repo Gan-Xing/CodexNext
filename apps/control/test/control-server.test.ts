@@ -643,6 +643,92 @@ describe("control server relay", () => {
     expect(callCount).toBe(1);
   });
 
+  it("bypasses recent history page cache when explicitly requested", async () => {
+    const { baseUrl } = await startServer({ rpcTimeoutMs: 50 });
+    const machine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    await waitForConnect(machine, () =>
+      emitAck(machine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
+        startedAt: Date.now()
+      })
+    );
+
+    let callCount = 0;
+    machine.on("rpc:request", (payload, ack) => {
+      if (payload.method !== RelayMethodValue.CodexHistoryTurns) {
+        return;
+      }
+      callCount += 1;
+      ack({
+        ok: true,
+        result: {
+          entry: {
+            id: "thread_1",
+            cwd: "/tmp",
+            cwdExists: true,
+            title: "Thread",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            source: "cli"
+          },
+          messages: [
+            {
+              id: `msg_${callCount}`,
+              role: "assistant",
+              text: `page ${callCount}`,
+              ts: "2026-01-01T00:00:00.000Z"
+            }
+          ],
+          nextCursor: null,
+          backwardsCursor: null
+        }
+      });
+    });
+
+    const first = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/turns?id=thread_1&limit=20`
+    );
+    expect(first.status).toBe(200);
+    await expect(first.json()).resolves.toMatchObject({
+      messages: [{ text: "page 1" }]
+    });
+
+    const cached = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/turns?id=thread_1&limit=20`
+    );
+    expect(cached.status).toBe(200);
+    await expect(cached.json()).resolves.toMatchObject({
+      messages: [{ text: "page 1" }]
+    });
+    expect(callCount).toBe(1);
+
+    const bypassed = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/turns?id=thread_1&limit=20&cacheMode=bypass`
+    );
+    expect(bypassed.status).toBe(200);
+    await expect(bypassed.json()).resolves.toMatchObject({
+      messages: [{ text: "page 2" }]
+    });
+    expect(callCount).toBe(2);
+
+    const refreshedCache = await authorizedFetch(
+      `${baseUrl}/api/relay/devices/device_1/codex-history/turns?id=thread_1&limit=20`
+    );
+    expect(refreshedCache.status).toBe(200);
+    await expect(refreshedCache.json()).resolves.toMatchObject({
+      messages: [{ text: "page 2" }]
+    });
+    expect(callCount).toBe(2);
+  });
+
   it("rejects malformed history turns without caching the bad page", async () => {
     const { baseUrl } = await startServer({ rpcTimeoutMs: 50 });
     const machine = createMachineSocket(baseUrl, "device_1", {

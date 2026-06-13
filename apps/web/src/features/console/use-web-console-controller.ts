@@ -543,6 +543,7 @@ export function useWebConsoleController() {
     new Map<string, { fetchedAt: number; page: LocalCodexHistoryPageResponse }>()
   );
   const prefetchingHistoryKeysRef = useRef(new Set<string>());
+  const refreshingHistoryKeysRef = useRef(new Set<string>());
   const deviceHydrationVersionsRef = useRef(new Map<string, number>());
   const pendingHistoryHydrationsRef = useRef(new Set<string>());
   const desktopFrameRef = useRef<HTMLDivElement | null>(null);
@@ -2594,6 +2595,7 @@ export function useWebConsoleController() {
       revealMainOnMobile();
     }
     let showedCachedPage = false;
+    let startedRefresh = false;
     try {
       const cachedRecord = historyPageCacheRef.current.get(key) ?? null;
       const hasFreshCache =
@@ -2630,11 +2632,14 @@ export function useWebConsoleController() {
         );
       }
 
-      if (hasFreshCache) {
+      if (hasFreshCache && refreshingHistoryKeysRef.current.has(key)) {
         return;
       }
 
+      refreshingHistoryKeysRef.current.add(key);
+      startedRefresh = true;
       const page = await getCodexHistoryTurns(deviceConnection, {
+        cacheMode: "bypass",
         id: entry.id,
         cwd: entry.cwd,
         limit: 40
@@ -2694,6 +2699,10 @@ export function useWebConsoleController() {
       );
       if (!showedCachedPage) {
         setError(formatConsoleError(err));
+      }
+    } finally {
+      if (startedRefresh) {
+        refreshingHistoryKeysRef.current.delete(key);
       }
     }
   }
@@ -2943,6 +2952,7 @@ export function useWebConsoleController() {
       let shouldStopReconciliation = false;
       if (targetSession.threadId) {
         const page = await getCodexHistoryTurns(request.connection, {
+          cacheMode: "bypass",
           id: targetSession.threadId,
           cwd: targetSession.cwd,
           limit: 40

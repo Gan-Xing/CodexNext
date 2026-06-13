@@ -22,6 +22,7 @@ import { ThinkingRow } from "./ThinkingRow";
 const VIRTUALIZE_AFTER_ITEMS = 80;
 const VIRTUAL_OVERSCAN_PX = 900;
 const VIRTUAL_ROW_GAP = 16;
+const BOTTOM_STICK_WINDOW_MS = 1_000;
 
 export function ChatCanvas(props: {
   active: boolean;
@@ -48,6 +49,8 @@ export function ChatCanvas(props: {
   const previousTailRef = useRef("");
   const previousHeightRef = useRef(0);
   const previousLengthRef = useRef(0);
+  const bottomStickUntilRef = useRef(0);
+  const bottomStickFrameRef = useRef<number | null>(null);
   const [showJumpButton, setShowJumpButton] = useState(false);
   const [measurementVersion, setMeasurementVersion] = useState(0);
   const [virtualViewport, setVirtualViewport] = useState({
@@ -108,17 +111,56 @@ export function ChatCanvas(props: {
     ? virtualRows.rows.slice(virtualWindow.startIndex, virtualWindow.endIndex)
     : [];
 
+  const scrollToBottomNow = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    viewport.scrollTop = viewport.scrollHeight;
+    pinnedRef.current = true;
+    setShowJumpButton(false);
+    previousHeightRef.current = viewport.scrollHeight;
+  }, []);
+
+  const scheduleBottomStick = useCallback(() => {
+    const run = () => {
+      bottomStickFrameRef.current = null;
+      if (bottomStickUntilRef.current <= Date.now()) {
+        return;
+      }
+      scrollToBottomNow();
+    };
+    if (bottomStickFrameRef.current !== null) {
+      cancelAnimationFrame(bottomStickFrameRef.current);
+    }
+    if (typeof requestAnimationFrame === "undefined") {
+      run();
+      return;
+    }
+    bottomStickFrameRef.current = requestAnimationFrame(run);
+  }, [scrollToBottomNow]);
+
+  const beginBottomStick = useCallback(() => {
+    bottomStickUntilRef.current = Date.now() + BOTTOM_STICK_WINDOW_MS;
+    scrollToBottomNow();
+    scheduleBottomStick();
+  }, [scheduleBottomStick, scrollToBottomNow]);
+
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) {
       return;
     }
 
-    const commit = () => {
+    const commit = (source: "scroll" | "resize" = "resize") => {
       const distanceFromBottom =
         viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-      pinnedRef.current = distanceFromBottom < 56;
-      setShowJumpButton(!pinnedRef.current);
+      const isPinned = distanceFromBottom < 56;
+      pinnedRef.current = isPinned;
+      if (source === "scroll" && !isPinned) {
+        bottomStickUntilRef.current = 0;
+      }
+      setShowJumpButton(!isPinned);
       setVirtualViewport((current) => {
         const next = {
           height: viewport.clientHeight,
@@ -131,17 +173,26 @@ export function ChatCanvas(props: {
     };
 
     commit();
-    viewport.addEventListener("scroll", commit, { passive: true });
+    const handleScroll = () => commit("scroll");
+    viewport.addEventListener("scroll", handleScroll, { passive: true });
     const observer =
       typeof ResizeObserver !== "undefined"
-        ? new ResizeObserver(commit)
+        ? new ResizeObserver(() => commit("resize"))
         : null;
     observer?.observe(viewport);
     return () => {
-      viewport.removeEventListener("scroll", commit);
+      viewport.removeEventListener("scroll", handleScroll);
       observer?.disconnect();
     };
   }, [props.session.sessionId]);
+
+  useEffect(() => {
+    return () => {
+      if (bottomStickFrameRef.current !== null) {
+        cancelAnimationFrame(bottomStickFrameRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     itemHeightsRef.current.clear();
@@ -157,9 +208,7 @@ export function ChatCanvas(props: {
     const tailChanged = previousTailRef.current !== tailSignature;
 
     if (sessionChanged || (tailChanged && pinnedRef.current)) {
-      viewport.scrollTop = viewport.scrollHeight;
-      pinnedRef.current = true;
-      setShowJumpButton(false);
+      beginBottomStick();
     } else if (!tailChanged && visibleItems.length > previousLengthRef.current) {
       const delta = viewport.scrollHeight - previousHeightRef.current;
       if (delta > 0) {
@@ -173,7 +222,21 @@ export function ChatCanvas(props: {
     previousTailRef.current = tailSignature;
     previousHeightRef.current = viewport.scrollHeight;
     previousLengthRef.current = visibleItems.length;
-  }, [props.session.sessionId, tailSignature, visibleItems.length]);
+  }, [beginBottomStick, props.session.sessionId, tailSignature, visibleItems.length]);
+
+  useLayoutEffect(() => {
+    if (bottomStickUntilRef.current <= Date.now()) {
+      return;
+    }
+    scheduleBottomStick();
+  }, [
+    measurementVersion,
+    scheduleBottomStick,
+    shouldVirtualize,
+    tailSignature,
+    virtualRows.totalHeight,
+    visibleItems.length
+  ]);
 
   const handleMeasure = useCallback((id: string, height: number) => {
     const rounded = Math.ceil(height);
