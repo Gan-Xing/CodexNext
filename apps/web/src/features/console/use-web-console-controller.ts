@@ -47,6 +47,7 @@ import type {
   PendingApprovalView
 } from "../../lib/types";
 import {
+  buildConversationCacheEntries,
   addOptimisticUserMessage,
   createDeviceWorkspace,
   hydrateSessionFromHistory,
@@ -56,6 +57,7 @@ import {
   prependSessionHistoryMessages,
   reassignSessionChatItems,
   rememberSessionHistoryOrigin,
+  restoreConversationCacheEntries,
   restoreOutboxEntries,
   resolveStateUpdater,
   selectConversationChatItems,
@@ -63,6 +65,7 @@ import {
   setLoadedThreadIds,
   setSessionHistoryPageState,
   type AttachmentDraft,
+  type ConversationCacheEntry,
   type DeviceWorkspace,
   type OutboxEntry,
   type ResumeState,
@@ -102,6 +105,10 @@ import {
   resolveHistoryPreviewEntryToHydrate,
   type SavedSessionSelection
 } from "./console-hydration";
+import {
+  readConversationCacheStorage,
+  writeConversationCacheStorage
+} from "./conversation-cache";
 import {
   createSavedDeviceId,
   connectionFromSavedDevice,
@@ -535,6 +542,7 @@ export function useWebConsoleController() {
   const historyPageCacheRef = useRef(
     new Map<string, { fetchedAt: number; page: LocalCodexHistoryPageResponse }>()
   );
+  const prefetchingHistoryKeysRef = useRef(new Set<string>());
   const deviceHydrationVersionsRef = useRef(new Map<string, number>());
   const pendingHistoryHydrationsRef = useRef(new Set<string>());
   const desktopFrameRef = useRef<HTMLDivElement | null>(null);
@@ -545,6 +553,7 @@ export function useWebConsoleController() {
   const latestProjectSidebarPrefsRef = useRef(projectSidebarPrefs);
   const latestDeviceWorkspacesRef = useRef(deviceWorkspaces);
   const latestWorkspaceSidebarSnapshotRef = useRef("");
+  const latestConversationCacheSnapshotRef = useRef("");
   const latestConversationOutboxSnapshotRef = useRef("");
   const selectedConversationRenderTraceRef = useRef("");
 
@@ -605,6 +614,18 @@ export function useWebConsoleController() {
     ? historyPages[currentSession.sessionId] ?? null
     : null;
   const currentResumeState = currentSession ? resumeStates[currentSession.sessionId] ?? null : null;
+  const initialHistoryLoading = Boolean(
+    currentSession &&
+      visibleChatItems.length === 0 &&
+      currentResumeState !== "missing" &&
+      currentResumeState !== "failed" &&
+      (historyLoadingKey === selectedHistoryKey ||
+        Boolean(
+          currentSessionId &&
+            sessionHistoryOrigins[currentSessionId] &&
+            !currentHistoryPageState
+        ))
+  );
   const selectedHistoryEntry = selectedHistoryKey
     ? codexHistory.find((entry) => codexHistoryKey(entry) === selectedHistoryKey) ?? null
     : null;
@@ -991,6 +1012,12 @@ export function useWebConsoleController() {
       return;
     }
     selectedConversationRenderTraceRef.current = signature;
+    const statusCounts = visibleChatItems.reduce<Record<string, number>>((counts, item) => {
+      const key = `${item.role}:${item.status ?? "unset"}`;
+      counts[key] = (counts[key] ?? 0) + 1;
+      return counts;
+    }, {});
+    const latestItem = visibleChatItems.at(-1) ?? null;
     webDevTrace("console.render.selected_conversation", {
       deviceId: selectedDeviceId,
       selectedHistoryKey,
@@ -999,13 +1026,17 @@ export function useWebConsoleController() {
       conversationKey: selectedConversationRenderSnapshot.key,
       latestSeq: selectedConversationRenderSnapshot.latestSeq,
       messageCount: selectedConversationRenderSnapshot.messageCount,
-      itemStatuses: visibleChatItems.map((item) => ({
-        id: item.id,
-        role: item.role,
-        status: item.status ?? null,
-        turnId: item.turnId ?? null,
-        clientMessageId: item.clientMessageId ?? null
-      }))
+      statusCounts,
+      latestItem: latestItem
+        ? {
+            id: latestItem.id,
+            role: latestItem.role,
+            status: latestItem.status ?? null,
+            turnId: latestItem.turnId ?? null,
+            clientMessageId: latestItem.clientMessageId ?? null,
+            textLength: latestItem.text.length
+          }
+        : null
     });
   }, [
     currentSession?.sessionId,
@@ -1020,92 +1051,109 @@ export function useWebConsoleController() {
   ]);
 
   useEffect(() => {
-    const { devices: storedDevices, droppedLegacyDirectDevices } = readSavedDevicesState();
-    const storedSidebarWidth = readSidebarWidth(clampSidebarWidth);
-    const storedThreadPrefs = readThreadSidebarPrefs();
-    const storedProjectPrefs = readProjectSidebarPrefs();
-    const storedSessionSelections = readSessionSelectionStorage();
-    const storedWorkspaceSnapshots = readWorkspaceSidebarSnapshotsStorage();
-    const storedConversationOutbox = readConversationOutboxStorage();
-    const params = new URLSearchParams(window.location.search);
-    const queryDeviceId = params.get("deviceId");
-
-    setSavedDevices(storedDevices);
-    setDeviceWorkspaces(
-      Object.fromEntries(
-        storedDevices
-          .map((device) => {
-            const snapshot = storedWorkspaceSnapshots[device.id];
-            const outboxEntries = storedConversationOutbox[device.id] ?? [];
-            if (!snapshot && outboxEntries.length === 0) {
-              return null;
-            }
-            const deviceConnection: AgentConnection = {
-              mode: "relay",
-              relayUrl: device.relayUrl,
-              sessionToken: "",
-              deviceId: device.deviceId
-            };
-            const restored = snapshot
-              ? restoreWorkspaceFromSidebarSnapshot(deviceConnection, snapshot)
-              : createDeviceWorkspace(deviceConnection);
-            return [
-              device.id,
-              restoreOutboxEntries(restored, outboxEntries)
-            ] as const;
-          })
-          .filter((entry): entry is readonly [string, DeviceWorkspace] => Boolean(entry))
-      )
-    );
-    if (storedSidebarWidth !== null) {
-      setSidebarWidth(storedSidebarWidth);
-    }
-    setThreadSidebarPrefs(storedThreadPrefs);
-    setProjectSidebarPrefs(storedProjectPrefs);
-    setSessionSelections(storedSessionSelections);
-    latestWorkspaceSidebarSnapshotRef.current = JSON.stringify(storedWorkspaceSnapshots);
-    latestConversationOutboxSnapshotRef.current = JSON.stringify(storedConversationOutbox);
-    setLocalStorageReady(true);
-
-    if (droppedLegacyDirectDevices > 0) {
-      const noticeSeen = hasRelayOnlyMigrationNoticeSeen(window.localStorage);
-      if (!noticeSeen) {
-        writeRelayOnlyMigrationNoticeSeen(window.localStorage);
-        setMigrationNotice(
-          `已移除 ${droppedLegacyDirectDevices} 个旧版直连设备。现在请通过“接入设备”完成配对。`
-        );
+    let cancelled = false;
+    void (async () => {
+      const { devices: storedDevices, droppedLegacyDirectDevices } = readSavedDevicesState();
+      const storedSidebarWidth = readSidebarWidth(clampSidebarWidth);
+      const storedThreadPrefs = readThreadSidebarPrefs();
+      const storedProjectPrefs = readProjectSidebarPrefs();
+      const storedSessionSelections = readSessionSelectionStorage();
+      const storedWorkspaceSnapshots = readWorkspaceSidebarSnapshotsStorage();
+      const storedConversationOutbox = readConversationOutboxStorage();
+      const storedConversationCache = await readConversationCacheStorage();
+      if (cancelled) {
+        return;
       }
-    }
+      const params = new URLSearchParams(window.location.search);
+      const queryDeviceId = params.get("deviceId");
 
-    const preferredDevice = queryDeviceId
-      ? storedDevices.find((device) => device.id === queryDeviceId || device.deviceId === queryDeviceId) ?? null
-      : [...storedDevices].sort((a, b) => (b.lastConnectedAt ?? 0) - (a.lastConnectedAt ?? 0))[0] ?? null;
+      setSavedDevices(storedDevices);
+      setDeviceWorkspaces(
+        Object.fromEntries(
+          storedDevices
+            .map((device) => {
+              const snapshot = storedWorkspaceSnapshots[device.id];
+              const outboxEntries = storedConversationOutbox[device.id] ?? [];
+              const cacheEntries = storedConversationCache[device.id] ?? [];
+              if (!snapshot && outboxEntries.length === 0 && cacheEntries.length === 0) {
+                return null;
+              }
+              const deviceConnection: AgentConnection = {
+                mode: "relay",
+                relayUrl: device.relayUrl,
+                sessionToken: "",
+                deviceId: device.deviceId
+              };
+              const restored = snapshot
+                ? restoreWorkspaceFromSidebarSnapshot(deviceConnection, snapshot)
+                : createDeviceWorkspace(deviceConnection);
+              return [
+                device.id,
+                restoreOutboxEntries(
+                  restoreConversationCacheEntries(restored, cacheEntries),
+                  outboxEntries
+                )
+              ] as const;
+            })
+            .filter((entry): entry is readonly [string, DeviceWorkspace] => Boolean(entry))
+        )
+      );
+      if (storedSidebarWidth !== null) {
+        setSidebarWidth(storedSidebarWidth);
+      }
+      setThreadSidebarPrefs(storedThreadPrefs);
+      setProjectSidebarPrefs(storedProjectPrefs);
+      setSessionSelections(storedSessionSelections);
+      latestWorkspaceSidebarSnapshotRef.current = JSON.stringify(storedWorkspaceSnapshots);
+      latestConversationOutboxSnapshotRef.current = JSON.stringify(storedConversationOutbox);
+      latestConversationCacheSnapshotRef.current = conversationCacheSignature(storedConversationCache);
+      setLocalStorageReady(true);
 
-    if (preferredDevice) {
-      setSelectedDeviceId(preferredDevice.id);
-      setDeviceName(preferredDevice.name);
-    }
-
-    if (!resolveDefaultRelayUrl()) {
-      return;
-    }
-
-    void requestRelaySession()
-      .then((session) => {
-        if (!session) {
-          return;
+      if (droppedLegacyDirectDevices > 0) {
+        const noticeSeen = hasRelayOnlyMigrationNoticeSeen(window.localStorage);
+        if (!noticeSeen) {
+          writeRelayOnlyMigrationNoticeSeen(window.localStorage);
+          setMigrationNotice(
+            `已移除 ${droppedLegacyDirectDevices} 个旧版直连设备。现在请通过“接入设备”完成配对。`
+          );
         }
-        setRelayBootstrap({
-          sessionToken: session.sessionToken,
-          relayUrl: normalizeAgentUrl(session.relayUrl)
+      }
+
+      const preferredDevice = queryDeviceId
+        ? storedDevices.find((device) => device.id === queryDeviceId || device.deviceId === queryDeviceId) ?? null
+        : [...storedDevices].sort((a, b) => (b.lastConnectedAt ?? 0) - (a.lastConnectedAt ?? 0))[0] ?? null;
+
+      if (preferredDevice) {
+        setSelectedDeviceId(preferredDevice.id);
+        setDeviceName(preferredDevice.name);
+      }
+
+      if (!resolveDefaultRelayUrl()) {
+        return;
+      }
+
+      void requestRelaySession()
+        .then((session) => {
+          if (!session || cancelled) {
+            return;
+          }
+          setRelayBootstrap({
+            sessionToken: session.sessionToken,
+            relayUrl: normalizeAgentUrl(session.relayUrl)
+          });
+          if (queryDeviceId) {
+            setSelectedDeviceId(queryDeviceId);
+          }
+        })
+        .catch((sessionError) => {
+          if (!cancelled) {
+            setError(formatConsoleError(sessionError));
+          }
         });
-        if (queryDeviceId) {
-          setSelectedDeviceId(queryDeviceId);
-        }
-      })
-      .catch((sessionError) => {
-        setError(formatConsoleError(sessionError));
-      });
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -1160,6 +1208,74 @@ export function useWebConsoleController() {
       // Outbox persistence is a recovery layer; live state remains in memory.
     }
   }, [deviceWorkspaces, localStorageReady, savedDevices]);
+
+  useEffect(() => {
+    if (!localStorageReady) {
+      return;
+    }
+    const entriesByDeviceId = Object.fromEntries(
+      savedDevices.map((device) => [
+        device.id,
+        deviceWorkspaces[device.id]
+          ? buildConversationCacheEntries(deviceWorkspaces[device.id]!)
+          : []
+      ])
+    );
+    const serialized = conversationCacheSignature(entriesByDeviceId);
+    if (serialized === latestConversationCacheSnapshotRef.current) {
+      return;
+    }
+    latestConversationCacheSnapshotRef.current = serialized;
+    const timeoutId = window.setTimeout(() => {
+      void writeConversationCacheStorage(entriesByDeviceId).catch(() => {
+        // Conversation cache is a performance layer; normalized live state remains authoritative.
+      });
+    }, 350);
+    return () => window.clearTimeout(timeoutId);
+  }, [deviceWorkspaces, localStorageReady, savedDevices]);
+
+  useEffect(() => {
+    if (!connected || !selectedDeviceId) {
+      return;
+    }
+    const candidates = [
+      ...pinnedThreadItems,
+      ...visibleProjectGroups.flatMap((group) => group.items.slice(0, 4))
+    ]
+      .map((item) => item.entry ?? null)
+      .filter((entry): entry is LocalCodexHistoryEntry => Boolean(entry))
+      .filter(isRestorableHistoryEntry);
+    const deduped = Array.from(
+      new Map(candidates.map((entry) => [codexHistoryKey(entry), entry])).values()
+    ).slice(0, 6);
+    if (deduped.length === 0) {
+      return;
+    }
+    const idleWindow = window as Window & {
+      cancelIdleCallback?: (handle: number) => void;
+      requestIdleCallback?: (
+        callback: () => void,
+        options?: { timeout?: number }
+      ) => number;
+    };
+    const run = () => {
+      for (const entry of deduped) {
+        prefetchHistoryEntry(entry, connection);
+      }
+    };
+    if (idleWindow.requestIdleCallback) {
+      const handle = idleWindow.requestIdleCallback(run, { timeout: 1_500 });
+      return () => idleWindow.cancelIdleCallback?.(handle);
+    }
+    const timeoutId = window.setTimeout(run, 450);
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    connected,
+    connection,
+    pinnedThreadItems,
+    selectedDeviceId,
+    visibleProjectGroups
+  ]);
 
   const refreshRelayDevices = useCallback(async () => {
     if (!relayBootstrap) {
@@ -2490,7 +2606,10 @@ export function useWebConsoleController() {
             hydrateSessionFromHistory(
               {
                 ...currentWorkspace,
-                historyLoadingKey: null,
+                historyLoadingKey:
+                  currentWorkspace.historyLoadingKey === key
+                    ? null
+                    : currentWorkspace.historyLoadingKey,
                 resumeStates: {
                   ...currentWorkspace.resumeStates,
                   [previewSession.sessionId]: isPreviewOnlyHistoryEntry(cachedRecord.page.entry)
@@ -2529,10 +2648,15 @@ export function useWebConsoleController() {
           hydrateSessionFromHistory(
             {
               ...currentWorkspace,
-              historyLoadingKey: null,
+              historyLoadingKey:
+                currentWorkspace.historyLoadingKey === key
+                  ? null
+                  : currentWorkspace.historyLoadingKey,
               resumeStates: {
                 ...currentWorkspace.resumeStates,
-                [previewSession.sessionId]: isPreviewOnlyHistoryEntry(page.entry) ? "missing" : "history"
+                [previewSession.sessionId]: isPreviewOnlyHistoryEntry(page.entry)
+                  ? "missing"
+                  : "history"
               }
             },
             previewSession.sessionId,
@@ -2551,11 +2675,17 @@ export function useWebConsoleController() {
         showedCachedPage
           ? {
               ...currentWorkspace,
-              historyLoadingKey: null
+              historyLoadingKey:
+                currentWorkspace.historyLoadingKey === key
+                  ? null
+                  : currentWorkspace.historyLoadingKey
             }
           : {
               ...currentWorkspace,
-              historyLoadingKey: null,
+              historyLoadingKey:
+                currentWorkspace.historyLoadingKey === key
+                  ? null
+                  : currentWorkspace.historyLoadingKey,
               resumeStates: {
                 ...currentWorkspace.resumeStates,
                 [previewSession.sessionId]: isMissingHistoryCwdError(err) ? "missing" : "failed"
@@ -2568,12 +2698,63 @@ export function useWebConsoleController() {
     }
   }
 
-  async function selectHistory(entry: LocalCodexHistoryEntry) {
+  function prefetchHistoryEntry(
+    entry: LocalCodexHistoryEntry,
+    deviceConnection: AgentConnection
+  ) {
+    const key = codexHistoryKey(entry);
+    const cachedRecord = historyPageCacheRef.current.get(key) ?? null;
+    if (
+      cachedRecord &&
+      Date.now() - cachedRecord.fetchedAt < HISTORY_PAGE_CACHE_TTL_MS
+    ) {
+      return;
+    }
+    if (prefetchingHistoryKeysRef.current.has(key)) {
+      return;
+    }
+    prefetchingHistoryKeysRef.current.add(key);
+    webDevTrace("console.history.prefetch.begin", {
+      historyKey: key,
+      threadId: entry.id,
+      cwd: entry.cwd
+    });
+    void getCodexHistoryTurns(deviceConnection, {
+      id: entry.id,
+      cwd: entry.cwd,
+      limit: 40
+    })
+      .then((page) => {
+        historyPageCacheRef.current.set(key, {
+          fetchedAt: Date.now(),
+          page
+        });
+        webDevTrace("console.history.prefetch.end", {
+          historyKey: key,
+          threadId: entry.id,
+          cwd: entry.cwd,
+          messageCount: page.messages.length
+        });
+      })
+      .catch((err) => {
+        webDevTrace("console.history.prefetch.error", {
+          historyKey: key,
+          threadId: entry.id,
+          cwd: entry.cwd,
+          error: webErrorSummary(err)
+        });
+      })
+      .finally(() => {
+        prefetchingHistoryKeysRef.current.delete(key);
+      });
+  }
+
+  function selectHistory(entry: LocalCodexHistoryEntry) {
     if (!connected) {
       setActiveSheet("device");
       return;
     }
-    await hydrateHistorySelection(entry, { revealMain: true });
+    void hydrateHistorySelection(entry, { revealMain: true });
   }
 
   function clearMessageReconciliation(
@@ -4144,6 +4325,7 @@ export function useWebConsoleController() {
     healthStatus,
     historyLoadingKey,
     migrationNotice,
+    initialHistoryLoading,
     initialGoal,
     initialTokenBudget,
     model,
@@ -4269,6 +4451,38 @@ function summarizeOutboxStatuses(outbox: Record<string, OutboxEntry>): Record<st
     counts[entry.status] = (counts[entry.status] ?? 0) + 1;
   }
   return counts;
+}
+
+function conversationCacheSignature(
+  entriesByDeviceId: Record<string, ConversationCacheEntry[]>
+): string {
+  return JSON.stringify(
+    Object.entries(entriesByDeviceId)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([deviceId, entries]) => [
+        deviceId,
+        entries.map((entry) => {
+          const latestItem = entry.items.at(-1) ?? null;
+          return {
+            key: entry.conversationKey,
+            latestSeq: entry.latestSeq,
+            messageCount: entry.items.length,
+            sessionIds: entry.sessionIds,
+            threadId: entry.threadId,
+            updatedAt: entry.updatedAt,
+            latestItem: latestItem
+              ? {
+                  id: latestItem.id,
+                  role: latestItem.role,
+                  status: latestItem.status ?? null,
+                  textLength: latestItem.text.length,
+                  createdAt: latestItem.createdAt ?? null
+                }
+              : null
+          };
+        })
+      ])
+  );
 }
 
 function summarizeLocalEventTypes(events: LocalEvent[]): string[] {

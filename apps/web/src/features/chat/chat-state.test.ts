@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { LocalEvent } from "../../lib/types";
+import type { LocalEvent, LocalSessionSummary } from "../../lib/types";
 import {
   addOptimisticUserMessage,
+  buildConversationCacheEntries,
   createDeviceWorkspace,
   hydrateSessionFromHistory,
   ingestEventsIntoWorkspace,
   markOptimisticMessageFailed,
   mergeLocalEvents,
   reassignSessionChatItems,
+  restoreConversationCacheEntries,
+  upsertSessionInWorkspace,
   selectConversationChatItems
 } from "./chat-state";
 
@@ -30,6 +33,25 @@ function makeEvent(input: Partial<LocalEvent> & Pick<LocalEvent, "seq" | "type">
     ...(input.threadId ? { threadId: input.threadId } : {}),
     ...(input.turnId ? { turnId: input.turnId } : {}),
     ...(input.payload !== undefined ? { payload: input.payload } : {})
+  };
+}
+
+function makeSession(input: Partial<LocalSessionSummary> = {}): LocalSessionSummary {
+  return {
+    sessionId: input.sessionId ?? "session_1",
+    threadId: input.threadId ?? "thread_1",
+    status: input.status ?? "idle",
+    cwd: input.cwd ?? "/repo",
+    title: input.title ?? null,
+    model: input.model ?? null,
+    reasoningEffort: input.reasoningEffort ?? null,
+    permissionMode: input.permissionMode ?? "request-approval",
+    approvalPolicy: input.approvalPolicy ?? "on-request",
+    approvalsReviewer: input.approvalsReviewer ?? "user",
+    sandbox: input.sandbox ?? "workspace-write",
+    goal: input.goal ?? null,
+    createdAt: input.createdAt ?? 1,
+    updatedAt: input.updatedAt ?? 2
   };
 }
 
@@ -233,6 +255,30 @@ describe("chat state", () => {
       status: "sent",
       turnId: "turn_1"
     });
+  });
+
+  it("restores persisted conversation cache into normalized aliases", () => {
+    const workspace = upsertSessionInWorkspace(
+      makeWorkspace(),
+      makeSession({ sessionId: "session_1", threadId: "thread_1" })
+    );
+    const hydrated = hydrateSessionFromHistory(workspace, "session_1", [
+      { id: "item-1", role: "user", text: "你好", ts: new Date(1).toISOString() },
+      {
+        id: "item-2",
+        role: "assistant",
+        text: "你好！",
+        ts: new Date(2).toISOString()
+      }
+    ]);
+
+    const cache = buildConversationCacheEntries(hydrated);
+    const restored = restoreConversationCacheEntries(makeWorkspace(), cache);
+
+    expect(selectConversationChatItems(restored, { threadId: "thread_1" }).map((item) => item.text))
+      .toEqual(["你好", "你好！"]);
+    expect(selectConversationChatItems(restored, { sessionId: "session_1" }).map((item) => item.text))
+      .toEqual(["你好", "你好！"]);
   });
 
   it("marks failed optimistic messages", () => {

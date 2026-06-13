@@ -54,26 +54,30 @@ optimizing UI:
 
 ## Conversation Performance Guardrails
 
-Cold conversation switching is a product-critical path. The target behavior is
-that clicking a conversation commits selection immediately and never waits for
-network history loading before showing the thread surface.
+Cold conversation switching is a product-critical path. The implemented
+architecture is local-first: clicking a conversation commits selection
+immediately, renders normalized in-memory or persisted cache first, and lets
+network history refresh run in the background.
 
 - Selection should commit in under 50 ms. Do not block the click path on
   `getCodexHistoryTurns`, `listSessions`, event replay, or history hydration.
 - Show the best local state first: in-memory conversation, persisted
   conversation cache, or a lightweight thread skeleton using sidebar title and
   preview metadata. Avoid empty waits for unopened conversations.
-- Persist a bounded recent message cache per conversation, separate from the
-  outbox. The outbox is for unsent/in-flight recovery; it is not enough for fast
-  cold thread switching.
+- Persist a bounded recent message cache per conversation in IndexedDB,
+  separate from the outbox. The outbox is for unsent/in-flight recovery; it is
+  not enough for fast cold thread switching.
 - Revalidate stale conversations in the background and merge by message id,
   turn id, and client message id. Users should not experience "loading the whole
   history" as the primary interaction.
 - Prefetch visible sidebar threads, pinned threads, and recent threads during
   idle time with a small concurrency budget.
 - Large histories must use virtualized rendering or an equivalent windowing
-  strategy. Do not render hundreds of Markdown/code-highlighted messages in one
-  synchronous pass.
+  strategy. The chat canvas must not render hundreds of Markdown/code-highlighted
+  messages in one synchronous pass.
+- Development render logs must remain summary-only: selected key, message
+  count, latest sequence, status counts, and latest item metadata. Do not log
+  every visible message on each render.
 
 ## Not Included
 

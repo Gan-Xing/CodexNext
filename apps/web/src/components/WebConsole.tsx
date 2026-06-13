@@ -136,6 +136,7 @@ export function WebConsole() {
     healthStatus,
     historyLoadingKey,
     migrationNotice,
+    initialHistoryLoading,
     initialGoal,
     initialTokenBudget,
     model,
@@ -597,10 +598,13 @@ export function WebConsole() {
               blockedNotice={missingHistoryNotice}
               canLoadOlderHistory={canLoadOlderHistory}
               items={visibleChatItems}
+              loadingInitialHistory={initialHistoryLoading}
               loadingOlderHistory={loadingOlderHistory}
               onLoadOlderHistory={() => void loadOlderHistory()}
               pendingApprovals={pendingApprovals.length}
               session={currentSession}
+              threadSubtitle={selectedHistoryEntry?.cwd ?? currentSession.cwd}
+              threadTitle={headerTitle}
               onOpenSummary={openSummarySheet}
             />
           ) : (

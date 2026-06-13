@@ -5763,7 +5763,8 @@ summary {
   position: relative;
 }
 
-.cn-thread-empty {
+.cn-thread-empty,
+.cn-thread-loading-skeleton {
   background: linear-gradient(180deg, rgba(246, 247, 245, 0.96), rgba(241, 243, 240, 0.9));
   border: 1px solid rgba(113, 118, 123, 0.18);
   border-radius: 24px;
@@ -5774,17 +5775,51 @@ summary {
   padding: 1.15rem 1.2rem;
 }
 
-.cn-thread-empty strong {
+.cn-thread-empty strong,
+.cn-thread-loading-skeleton strong {
   font-size: 1rem;
   font-weight: 680;
   letter-spacing: -0.02em;
 }
 
-.cn-thread-empty span {
+.cn-thread-empty span,
+.cn-thread-loading-skeleton span {
   color: var(--cn-muted);
   font-size: 0.9rem;
   font-weight: 620;
   line-height: 1.55;
+}
+
+.cn-thread-loading-lines {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.62rem;
+}
+
+.cn-thread-loading-lines span {
+  animation: cn-loading-shimmer 1.24s ease-in-out infinite;
+  background: linear-gradient(90deg, rgba(214, 218, 211, 0.46), rgba(245, 247, 244, 0.92), rgba(214, 218, 211, 0.46));
+  background-size: 220% 100%;
+  border-radius: 999px;
+  display: block;
+  height: 0.72rem;
+}
+
+.cn-thread-loading-lines span:nth-child(2) {
+  width: 82%;
+}
+
+.cn-thread-loading-lines span:nth-child(3) {
+  width: 58%;
+}
+
+@keyframes cn-loading-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
 }
 
 .cn-history-preview-strip {
@@ -5853,10 +5888,7 @@ summary {
   width: 100%;
 }
 
-.cn-message-window {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
+.cn-message-virtual-row {
   left: 0;
   position: absolute;
   right: 0;

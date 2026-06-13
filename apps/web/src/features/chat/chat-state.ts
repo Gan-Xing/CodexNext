@@ -36,6 +36,15 @@ export interface ConversationRecord {
   updatedAt: number;
 }
 
+export interface ConversationCacheEntry {
+  conversationKey: ConversationKey;
+  items: ChatItem[];
+  latestSeq: number | null;
+  sessionIds: string[];
+  threadId: string | null;
+  updatedAt: number;
+}
+
 export interface OutboxEntry {
   clientMessageId: string;
   conversationKey: ConversationKey;
@@ -81,6 +90,8 @@ export interface DeviceWorkspace {
 
 type LocalCodexHistoryEntryLike = LocalCodexHistoryDetailResponse["entry"];
 const THINKING_TEXT = "正在思考";
+const CONVERSATION_CACHE_THREAD_LIMIT = 120;
+const CONVERSATION_CACHE_MESSAGE_LIMIT = 100;
 
 export interface SessionHistoryPageState {
   loadingOlder: boolean;
@@ -207,9 +218,7 @@ export function selectConversationRenderSnapshot(
     key: canonicalKey,
     latestSeq: conversation.latestSeq,
     messageCount: conversation.items.length,
-    statusSignature: conversation.items
-      .map((item) => `${item.id}:${item.status ?? "unset"}`)
-      .join("|")
+    statusSignature: buildConversationStatusSignature(conversation)
   };
 }
 
@@ -261,6 +270,64 @@ export function restoreOutboxEntries(
     next = setOutboxEntry(next, entry);
   }
   return materializeWorkspace(next);
+}
+
+export function restoreConversationCacheEntries(
+  workspace: DeviceWorkspace,
+  entries: ConversationCacheEntry[]
+): DeviceWorkspace {
+  let next = workspace;
+  for (const entry of entries
+    .filter((item) => item.items.length > 0)
+    .sort((left, right) => left.updatedAt - right.updatedAt)) {
+    next = ensureConversation(next, {
+      conversationKey: entry.conversationKey,
+      ...(entry.threadId ? { threadId: entry.threadId } : {})
+    });
+    for (const sessionId of entry.sessionIds) {
+      next = ensureConversation(next, {
+        conversationKey: entry.conversationKey,
+        sessionId,
+        ...(entry.threadId ? { threadId: entry.threadId } : {})
+      });
+    }
+    const finalKey = canonicalConversationKey(
+      next,
+      entry.threadId ?? entry.sessionIds[0] ?? entry.conversationKey
+    );
+    next = upsertConversationItems(
+      next,
+      finalKey,
+      entry.items.map(sanitizeCachedChatItem).filter((item): item is ChatItem => Boolean(item)),
+      { latestSeq: entry.latestSeq }
+    );
+  }
+  return materializeWorkspace(next);
+}
+
+export function buildConversationCacheEntries(
+  workspace: DeviceWorkspace
+): ConversationCacheEntry[] {
+  return Object.values(workspace.conversations)
+    .map((conversation) => {
+      const items = conversation.items
+        .filter(shouldPersistChatItem)
+        .slice(-CONVERSATION_CACHE_MESSAGE_LIMIT);
+      if (items.length === 0) {
+        return null;
+      }
+      return {
+        conversationKey: conversation.key,
+        items,
+        latestSeq: conversation.latestSeq,
+        sessionIds: conversation.sessionIds,
+        threadId: conversation.threadId,
+        updatedAt: conversation.updatedAt
+      } satisfies ConversationCacheEntry;
+    })
+    .filter((entry): entry is ConversationCacheEntry => Boolean(entry))
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, CONVERSATION_CACHE_THREAD_LIMIT);
 }
 
 function findConversationKey(
@@ -591,6 +658,54 @@ function mergeConversationItems(existing: ChatItem[], incoming: ChatItem[]): Cha
   return next
     .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0))
     .slice(-500);
+}
+
+function shouldPersistChatItem(item: ChatItem): boolean {
+  if (item.text.trim().length === 0) {
+    return false;
+  }
+  if (item.status === "pending" || item.status === "failed") {
+    return false;
+  }
+  const metaKind = typeof item.meta?.kind === "string" ? item.meta.kind : null;
+  if (metaKind === "thinking" || metaKind === "error") {
+    return false;
+  }
+  return true;
+}
+
+function buildConversationStatusSignature(conversation: ConversationRecord): string {
+  const statusCounts = conversation.items.reduce<Record<string, number>>((counts, item) => {
+    const key = `${item.role}:${item.status ?? "unset"}`;
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, {});
+  const tail = conversation.items
+    .slice(-6)
+    .map((item) => `${item.id}:${item.status ?? "unset"}:${item.text.length}`)
+    .join("|");
+  return `${conversation.items.length}|${conversation.latestSeq ?? "none"}|${Object.entries(statusCounts)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, count]) => `${key}=${count}`)
+    .join(",")}|${tail}`;
+}
+
+function sanitizeCachedChatItem(item: ChatItem): ChatItem | null {
+  if (!shouldPersistChatItem(item)) {
+    return null;
+  }
+  return {
+    id: item.id,
+    role: item.role,
+    text: item.text.slice(0, 120_000),
+    ...(item.sessionId ? { sessionId: item.sessionId } : {}),
+    ...(item.turnId ? { turnId: item.turnId } : {}),
+    ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
+    ...(item.status ? { status: item.status } : {}),
+    ...(typeof item.createdAt === "number" ? { createdAt: item.createdAt } : {}),
+    ...(item.error ? { error: item.error.slice(0, 4_000) } : {}),
+    ...(item.meta ? { meta: item.meta } : {})
+  };
 }
 
 function materializeWorkspace(workspace: DeviceWorkspace): DeviceWorkspace {
