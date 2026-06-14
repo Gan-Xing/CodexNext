@@ -4955,8 +4955,10 @@ summary {
 .cn-project-group {
   display: grid;
   gap: 0.08rem;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   position: relative;
+  width: 100%;
 }
 
 .cn-project-header {
@@ -5092,7 +5094,9 @@ summary {
 .cn-thread-list {
   display: grid;
   gap: 0.02rem;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
+  width: 100%;
 }
 
 .cn-thread-list-toggle {
