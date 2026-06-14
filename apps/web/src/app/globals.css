@@ -5883,6 +5883,7 @@ summary {
 }
 
 .cn-message-virtual-list {
+  flex: 0 0 auto;
   min-height: 0;
   position: relative;
   width: 100%;

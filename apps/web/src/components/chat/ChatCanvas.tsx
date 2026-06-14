@@ -9,6 +9,7 @@ import {
   useRef,
   useState
 } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ChatItem, LocalSessionSummary } from "../../lib/types";
 import { buildChatTailSignature } from "../../lib/format/text";
 import { CommandOutputBlock } from "./CommandOutputBlock";
@@ -20,7 +21,7 @@ import { SystemStatusRow } from "./SystemStatusRow";
 import { ThinkingRow } from "./ThinkingRow";
 
 const VIRTUALIZE_AFTER_ITEMS = 80;
-const VIRTUAL_OVERSCAN_PX = 900;
+const VIRTUAL_OVERSCAN_ITEMS = 10;
 const VIRTUAL_ROW_GAP = 16;
 const BOTTOM_STICK_WINDOW_MS = 1_000;
 
@@ -43,7 +44,6 @@ export function ChatCanvas(props: {
 }) {
   const viewportRef = useRef<HTMLElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
-  const itemHeightsRef = useRef(new Map<string, number>());
   const pinnedRef = useRef(true);
   const previousSessionRef = useRef<string | null>(null);
   const previousTailRef = useRef("");
@@ -52,75 +52,37 @@ export function ChatCanvas(props: {
   const bottomStickUntilRef = useRef(0);
   const bottomStickFrameRef = useRef<number | null>(null);
   const [showJumpButton, setShowJumpButton] = useState(false);
-  const [measurementVersion, setMeasurementVersion] = useState(0);
-  const [virtualViewport, setVirtualViewport] = useState({
-    height: 0,
-    scrollTop: 0
-  });
 
   const tailSignature = buildChatTailSignature(props.items.at(-1));
   const visibleItems = useMemo(() => props.items, [props.items]);
   const shouldVirtualize = visibleItems.length > VIRTUALIZE_AFTER_ITEMS;
-  const virtualRows = useMemo(() => {
-    if (!shouldVirtualize) {
-      return {
-        rows: [],
-        totalHeight: 0
-      };
-    }
-    let top = 0;
-    const rows = visibleItems.map((item, index) => {
-      const height = itemHeightsRef.current.get(item.id) ?? estimateItemHeight(item);
-      const row = {
-        height,
-        index,
-        item,
-        top
-      };
-      top += height + VIRTUAL_ROW_GAP;
-      return row;
-    });
-    return {
-      rows,
-      totalHeight: Math.max(0, top - VIRTUAL_ROW_GAP)
-    };
-  }, [measurementVersion, shouldVirtualize, visibleItems]);
-  const virtualWindow = useMemo(() => {
-    if (!shouldVirtualize) {
-      return {
-        endIndex: visibleItems.length,
-        startIndex: 0
-      };
-    }
-    const startPx = Math.max(0, virtualViewport.scrollTop - VIRTUAL_OVERSCAN_PX);
-    const endPx =
-      virtualViewport.scrollTop +
-      Math.max(virtualViewport.height, 560) +
-      VIRTUAL_OVERSCAN_PX;
-    const startIndex = Math.max(
-      0,
-      virtualRows.rows.findIndex((row) => row.top + row.height >= startPx)
-    );
-    const endCandidate = virtualRows.rows.findIndex((row) => row.top > endPx);
-    return {
-      startIndex,
-      endIndex: endCandidate === -1 ? virtualRows.rows.length : endCandidate + 1
-    };
-  }, [shouldVirtualize, virtualRows.rows, virtualViewport.height, virtualViewport.scrollTop, visibleItems.length]);
-  const virtualItems = shouldVirtualize
-    ? virtualRows.rows.slice(virtualWindow.startIndex, virtualWindow.endIndex)
-    : [];
+  const rowVirtualizer = useVirtualizer({
+    count: shouldVirtualize ? visibleItems.length : 0,
+    estimateSize: (index) => estimateItemHeight(visibleItems[index] ?? null),
+    gap: VIRTUAL_ROW_GAP,
+    getItemKey: (index) => visibleItems[index]?.id ?? index,
+    getScrollElement: () => viewportRef.current,
+    overscan: VIRTUAL_OVERSCAN_ITEMS
+  });
+  const virtualItems = shouldVirtualize ? rowVirtualizer.getVirtualItems() : [];
+  const virtualTotalSize = shouldVirtualize ? rowVirtualizer.getTotalSize() : 0;
 
   const scrollToBottomNow = useCallback(() => {
     const viewport = viewportRef.current;
     if (!viewport) {
       return;
     }
-    viewport.scrollTop = viewport.scrollHeight;
+    if (shouldVirtualize && visibleItems.length > 0) {
+      rowVirtualizer.scrollToIndex(visibleItems.length - 1, {
+        align: "end"
+      });
+    } else {
+      viewport.scrollTop = viewport.scrollHeight;
+    }
     pinnedRef.current = true;
     setShowJumpButton(false);
     previousHeightRef.current = viewport.scrollHeight;
-  }, []);
+  }, [rowVirtualizer, shouldVirtualize, visibleItems.length]);
 
   const scheduleBottomStick = useCallback(() => {
     const run = () => {
@@ -152,36 +114,31 @@ export function ChatCanvas(props: {
       return;
     }
 
-    const commit = (source: "scroll" | "resize" = "resize") => {
+    const commit = () => {
       const distanceFromBottom =
         viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
       const isPinned = distanceFromBottom < 56;
       pinnedRef.current = isPinned;
-      if (source === "scroll" && !isPinned) {
-        bottomStickUntilRef.current = 0;
-      }
       setShowJumpButton(!isPinned);
-      setVirtualViewport((current) => {
-        const next = {
-          height: viewport.clientHeight,
-          scrollTop: viewport.scrollTop
-        };
-        return current.height === next.height && current.scrollTop === next.scrollTop
-          ? current
-          : next;
-      });
+    };
+    const cancelBottomStick = () => {
+      bottomStickUntilRef.current = 0;
     };
 
     commit();
-    const handleScroll = () => commit("scroll");
+    const handleScroll = () => commit();
     viewport.addEventListener("scroll", handleScroll, { passive: true });
+    viewport.addEventListener("wheel", cancelBottomStick, { passive: true });
+    viewport.addEventListener("touchstart", cancelBottomStick, { passive: true });
     const observer =
       typeof ResizeObserver !== "undefined"
-        ? new ResizeObserver(() => commit("resize"))
+        ? new ResizeObserver(() => commit())
         : null;
     observer?.observe(viewport);
     return () => {
       viewport.removeEventListener("scroll", handleScroll);
+      viewport.removeEventListener("wheel", cancelBottomStick);
+      viewport.removeEventListener("touchstart", cancelBottomStick);
       observer?.disconnect();
     };
   }, [props.session.sessionId]);
@@ -193,11 +150,6 @@ export function ChatCanvas(props: {
       }
     };
   }, []);
-
-  useEffect(() => {
-    itemHeightsRef.current.clear();
-    setMeasurementVersion((version) => version + 1);
-  }, [props.session.sessionId]);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
@@ -230,23 +182,12 @@ export function ChatCanvas(props: {
     }
     scheduleBottomStick();
   }, [
-    measurementVersion,
     scheduleBottomStick,
     shouldVirtualize,
     tailSignature,
-    virtualRows.totalHeight,
+    virtualTotalSize,
     visibleItems.length
   ]);
-
-  const handleMeasure = useCallback((id: string, height: number) => {
-    const rounded = Math.ceil(height);
-    const current = itemHeightsRef.current.get(id);
-    if (current !== undefined && Math.abs(current - rounded) < 2) {
-      return;
-    }
-    itemHeightsRef.current.set(id, rounded);
-    setMeasurementVersion((version) => version + 1);
-  }, []);
 
   return (
     <section className="cn-thread-canvas cn-live-thread" ref={viewportRef}>
@@ -282,16 +223,25 @@ export function ChatCanvas(props: {
           {shouldVirtualize ? (
             <div
               className="cn-message-virtual-list"
-              style={{ height: `${virtualRows.totalHeight}px` }}
+              style={{ height: `${virtualTotalSize}px` }}
             >
-              {virtualItems.map((row) => (
-                <MeasuredVirtualMessageRow
-                  key={row.item.id}
-                  item={row.item}
-                  top={row.top}
-                  onMeasure={handleMeasure}
-                />
-              ))}
+              {virtualItems.map((virtualItem) => {
+                const item = visibleItems[virtualItem.index];
+                if (!item) {
+                  return null;
+                }
+                return (
+                  <div
+                    key={virtualItem.key}
+                    ref={rowVirtualizer.measureElement}
+                    className="cn-message-virtual-row"
+                    data-index={virtualItem.index}
+                    style={{ transform: `translateY(${virtualItem.start}px)` }}
+                  >
+                    <ChatMessageRow item={item} />
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div className="cn-message-list">
@@ -342,38 +292,6 @@ export function ChatCanvas(props: {
     </section>
   );
 }
-
-const MeasuredVirtualMessageRow = memo(function MeasuredVirtualMessageRow(props: {
-  item: ChatItem;
-  onMeasure: (id: string, height: number) => void;
-  top: number;
-}) {
-  const rowRef = useRef<HTMLDivElement | null>(null);
-  useLayoutEffect(() => {
-    const row = rowRef.current;
-    if (!row) {
-      return;
-    }
-    const measure = () => props.onMeasure(props.item.id, row.getBoundingClientRect().height);
-    measure();
-    if (typeof ResizeObserver === "undefined") {
-      return;
-    }
-    const observer = new ResizeObserver(measure);
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, [props.item.id, props.onMeasure]);
-
-  return (
-    <div
-      ref={rowRef}
-      className="cn-message-virtual-row"
-      style={{ transform: `translateY(${props.top}px)` }}
-    >
-      <ChatMessageRow item={props.item} />
-    </div>
-  );
-});
 
 const ChatMessageRow = memo(function ChatMessageRow(props: {
   item: ChatItem;
@@ -449,7 +367,10 @@ function messageClass(item: ChatItem): string {
   return "user";
 }
 
-function estimateItemHeight(item: ChatItem): number {
+function estimateItemHeight(item: ChatItem | null | undefined): number {
+  if (!item) {
+    return 120;
+  }
   const base = item.role === "user" ? 58 : 72;
   const textLines = Math.max(1, Math.ceil(item.text.length / 86));
   const blockBoost =

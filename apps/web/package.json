@@ -9,12 +9,13 @@
   },
   "dependencies": {
     "@codexnext/codex-icons": "workspace:*",
-    "@codexnext/relay-client": "workspace:*",
     "@codexnext/protocol": "workspace:*",
+    "@codexnext/relay-client": "workspace:*",
+    "@tanstack/react-virtual": "^3.14.2",
     "next": "^16.2.2",
-    "react-markdown": "^10.1.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
+    "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
     "socket.io-client": "^4.8.1"
