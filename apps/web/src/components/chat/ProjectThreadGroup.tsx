@@ -38,6 +38,13 @@ function SidebarThreadRow(
   }
 ) {
   const pinnedVariant = props.variant === "pinned";
+  const hideThreadPreviewAfterAction = () => {
+    if (typeof window === "undefined") {
+      props.onHideThreadPreview();
+      return;
+    }
+    window.requestAnimationFrame(() => props.onHideThreadPreview());
+  };
 
   return (
     <article
@@ -63,18 +70,18 @@ function SidebarThreadRow(
         }
         props.onHideThreadPreview();
       }}
-      onFocus={(event) =>
-        props.onShowThreadPreview(event.currentTarget, props.item.title)
-      }
-      onMouseEnter={(event) =>
-        props.onShowThreadPreview(event.currentTarget, props.item.title)
-      }
       onMouseLeave={props.onHideThreadPreview}
     >
       <button
         className={pinnedVariant ? "cn-thread-main cn-pinned-thread-main" : "cn-thread-main"}
         title={props.item.title}
         type="button"
+        onFocus={(event) =>
+          props.onShowThreadPreview(event.currentTarget, props.item.title)
+        }
+        onMouseEnter={(event) =>
+          props.onShowThreadPreview(event.currentTarget, props.item.title)
+        }
         onClick={() => {
           props.onHideThreadPreview();
           selectThread(props.item, props);
@@ -102,8 +109,6 @@ function SidebarThreadRow(
       </button>
       <div
         className="cn-thread-actions"
-        onFocus={props.onHideThreadPreview}
-        onMouseEnter={props.onHideThreadPreview}
       >
         <button
           className={props.item.pinned ? "cn-thread-action active" : "cn-thread-action"}
@@ -111,8 +116,8 @@ function SidebarThreadRow(
           aria-label={props.item.pinned ? "取消置顶会话" : "置顶会话"}
           title={props.item.pinned ? "取消置顶会话" : "置顶会话"}
           onClick={() => {
-            props.onHideThreadPreview();
             props.onTogglePinnedThread(props.item.threadId);
+            hideThreadPreviewAfterAction();
           }}
         >
           <CodexIcon name="pin" />
@@ -123,8 +128,8 @@ function SidebarThreadRow(
           aria-label="归档会话"
           title="归档会话"
           onClick={() => {
-            props.onHideThreadPreview();
             props.onArchiveThread(props.item);
+            hideThreadPreviewAfterAction();
           }}
         >
           <CodexIcon name="archive" />
