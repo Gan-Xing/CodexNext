@@ -53,7 +53,8 @@ describe("CodexHistoryStore", () => {
         id: "thread_empty",
         title: "Untitled Codex thread"
       }),
-      messages: []
+      messages: [],
+      turns: []
     });
   });
 });

@@ -52,6 +52,30 @@ optimizing UI:
   reconciliation or failure. Render traces must stay summarized; never log the
   full visible message list on every render.
 
+## Codex App-Server Semantic Guardrails
+
+CodexNext must preserve Codex app-server turn/item semantics. Do not collapse
+official app-server `ThreadItem` data into flat chat text as the integration
+boundary.
+
+- [x] Status: completed - Protocol schemas use official turn fields:
+  `itemsView`, `status`, `error`, `startedAt`, `completedAt`, and `durationMs`
+  are required on app-server turns.
+- [x] Status: completed - Protocol schemas require app-server item `id` and
+  `type`, and expose item render classification for user, assistant, process,
+  and metadata items.
+- [x] Status: completed - Agent event adaptation records app-server item
+  lifecycle, reasoning deltas, MCP progress, and process output as structured
+  local events.
+- [x] Status: completed - Historical `thread/read` / `thread/turns/list` data
+  and realtime app-server notifications enter the same normalized turn store
+  before chat rendering. Refresh, cold switching, replay, and live streaming
+  must project from that store instead of maintaining separate history/live UI
+  paths.
+- [x] Status: completed - Model selection remains part of the start/resume/turn
+  path. Schema or adapter work must not drop the selected model when switching
+  or sending.
+
 ## Conversation Performance Guardrails
 
 Cold conversation switching is a product-critical path. The implemented

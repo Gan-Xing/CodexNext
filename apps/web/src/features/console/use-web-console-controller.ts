@@ -50,11 +50,11 @@ import {
   buildConversationCacheEntries,
   addOptimisticUserMessage,
   createDeviceWorkspace,
-  hydrateSessionFromHistory,
+  hydrateSessionFromTurns,
   ingestEventsIntoWorkspace,
   markOptimisticMessageFailed,
   markOptimisticMessageSent,
-  prependSessionHistoryMessages,
+  prependSessionHistoryTurns,
   reassignSessionChatItems,
   rememberSessionHistoryOrigin,
   restoreConversationCacheEntries,
@@ -966,7 +966,7 @@ export function useWebConsoleController() {
             return currentWorkspace;
           }
           return setSessionHistoryPageState(
-            hydrateSessionFromHistory(currentWorkspace, sessionId, page.messages),
+            hydrateSessionFromTurns(currentWorkspace, sessionId, page.turns),
             sessionId,
             {
               loadingOlder: false,
@@ -2620,7 +2620,7 @@ export function useWebConsoleController() {
         showedCachedPage = true;
         patchDeviceWorkspace(deviceId, (currentWorkspace) =>
           setSessionHistoryPageState(
-            hydrateSessionFromHistory(
+            hydrateSessionFromTurns(
               {
                 ...currentWorkspace,
                 historyLoadingKey:
@@ -2635,7 +2635,7 @@ export function useWebConsoleController() {
                 }
               },
               previewSession.sessionId,
-              cachedRecord.page.messages
+              cachedRecord.page.turns
             ),
             previewSession.sessionId,
             {
@@ -2665,7 +2665,7 @@ export function useWebConsoleController() {
       });
       patchDeviceWorkspace(deviceId, (currentWorkspace) =>
         setSessionHistoryPageState(
-          hydrateSessionFromHistory(
+          hydrateSessionFromTurns(
             {
               ...currentWorkspace,
               historyLoadingKey:
@@ -2680,7 +2680,7 @@ export function useWebConsoleController() {
               }
             },
             previewSession.sessionId,
-            page.messages
+            page.turns
           ),
           previewSession.sessionId,
           {
@@ -2999,7 +2999,7 @@ export function useWebConsoleController() {
           let next = upsertSessionInWorkspace(currentWorkspace, targetSession);
           next = rememberSessionHistoryOrigin(next, targetSession.sessionId, page.entry.id);
           if (historyDecision.shouldApplyHistory) {
-            next = hydrateSessionFromHistory(next, targetSession.sessionId, page.messages);
+            next = hydrateSessionFromTurns(next, targetSession.sessionId, page.turns);
             next = setSessionHistoryPageState(next, targetSession.sessionId, {
               loadingOlder: false,
               olderCursor: page.nextCursor,
@@ -3155,7 +3155,7 @@ export function useWebConsoleController() {
           result.history.entry.id
         );
         next = reassignSessionChatItems(next, previewSession.sessionId, result.session.sessionId);
-        next = hydrateSessionFromHistory(next, result.session.sessionId, result.history.messages);
+        next = hydrateSessionFromTurns(next, result.session.sessionId, result.history.turns);
         next = setSessionHistoryPageState(next, result.session.sessionId, {
           loadingOlder: false,
           olderCursor: result.history.nextCursor,
@@ -3323,7 +3323,7 @@ export function useWebConsoleController() {
           result.history.entry.id
         );
         next = reassignSessionChatItems(next, previewSession.sessionId, result.session.sessionId);
-        next = hydrateSessionFromHistory(next, result.session.sessionId, result.history.messages);
+        next = hydrateSessionFromTurns(next, result.session.sessionId, result.history.turns);
         next = setSessionHistoryPageState(next, result.session.sessionId, {
           loadingOlder: false,
           olderCursor: result.history.nextCursor,
@@ -3997,7 +3997,7 @@ export function useWebConsoleController() {
       const nextSourceKey = codexHistoryKey(page.entry);
       patchActiveWorkspace((workspace) => {
         let next = rememberSessionHistoryOrigin(workspace, sessionId, page.entry.id);
-        next = prependSessionHistoryMessages(next, sessionId, page.messages);
+        next = prependSessionHistoryTurns(next, sessionId, page.turns);
         return setSessionHistoryPageState(next, sessionId, {
           loadingOlder: false,
           olderCursor: page.nextCursor,

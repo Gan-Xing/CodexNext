@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { LocalEvent, LocalSessionSummary } from "../../lib/types";
+import type { CodexThreadTurn } from "@codexnext/protocol";
+import { CodexNotificationMethod } from "@codexnext/protocol";
 import {
   addOptimisticUserMessage,
   buildConversationCacheEntries,
   createDeviceWorkspace,
   hydrateSessionFromHistory,
+  hydrateSessionFromTurns,
   ingestEventsIntoWorkspace,
   markOptimisticMessageFailed,
   mergeLocalEvents,
@@ -424,8 +427,8 @@ describe("chat state", () => {
     ]);
 
     expect(hydrated.chatItems.map((item) => item.id)).toEqual([
-      "history-session_1-item-1",
-      "history-session_1-item-2"
+      "turn-synthetic-item-1-item-1",
+      "turn-synthetic-item-2-item-2"
     ]);
     expect(hydrated.chatItems.map((item) => item.text)).toEqual([
       "你好",
@@ -525,6 +528,273 @@ describe("chat state", () => {
 
     expect(second.chatItems).toHaveLength(1);
     expect(second.chatItems[0]?.text).toBe("hello");
+  });
+
+  it("projects historical turns and realtime app-server notifications through the same turn store", () => {
+    const turn: CodexThreadTurn = {
+      id: "turn_1",
+      items: [
+        {
+          id: "item_user",
+          type: "userMessage",
+          clientId: "msg_1",
+          content: [{ type: "text", text: "你好", text_elements: [] }]
+        },
+        {
+          id: "item_agent",
+          type: "agentMessage",
+          text: "你好！"
+        }
+      ],
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: 1,
+      completedAt: 2,
+      durationMs: 1_000
+    };
+
+    const historical = hydrateSessionFromTurns(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      "session_1",
+      [turn]
+    );
+    const realtime = ingestEventsIntoWorkspace(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      [
+        makeEvent({
+          seq: 1,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            method: CodexNotificationMethod.ItemStarted,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              startedAtMs: 1_000,
+              item: turn.items[0]
+            }
+          }
+        }),
+        makeEvent({
+          seq: 2,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            method: CodexNotificationMethod.ItemStarted,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              startedAtMs: 1_000,
+              item: {
+                id: "item_agent",
+                type: "agentMessage",
+                text: ""
+              }
+            }
+          }
+        }),
+        makeEvent({
+          seq: 3,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            method: CodexNotificationMethod.AgentMessageDelta,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              itemId: "item_agent",
+              delta: "你好！"
+            }
+          }
+        }),
+        makeEvent({
+          seq: 4,
+          type: "turn.completed",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            threadId: "thread_1",
+            turn
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    expect(realtime.chatItems.map(({ role, text, status }) => ({ role, text, status })))
+      .toEqual(historical.chatItems.map(({ role, text, status }) => ({ role, text, status })));
+    expect(realtime.chatItems.map((item) => item.meta?.source)).toEqual([
+      "turn-store",
+      "turn-store"
+    ]);
+  });
+
+  it("does not let stale history overwrite a live turn-store stream", () => {
+    const live = ingestEventsIntoWorkspace(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      [
+        makeEvent({
+          seq: 1,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            method: CodexNotificationMethod.ItemStarted,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              item: {
+                id: "item_agent",
+                type: "agentMessage",
+                text: ""
+              }
+            }
+          }
+        }),
+        makeEvent({
+          seq: 2,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            method: CodexNotificationMethod.AgentMessageDelta,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              itemId: "item_agent",
+              delta: "hello world"
+            }
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    const staleHistory: CodexThreadTurn = {
+      id: "turn_1",
+      items: [
+        {
+          id: "item_agent",
+          type: "agentMessage",
+          text: "hello"
+        }
+      ],
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: 1,
+      completedAt: 2,
+      durationMs: 1_000
+    };
+    const hydrated = hydrateSessionFromTurns(live, "session_1", [staleHistory]);
+
+    expect(hydrated.chatItems).toHaveLength(1);
+    expect(hydrated.chatItems[0]).toMatchObject({
+      role: "assistant",
+      text: "hello world",
+      status: "complete",
+      meta: {
+        source: "turn-store"
+      }
+    });
+  });
+
+  it("dedupes optimistic user messages after app-server projection and keeps thinking until a response", () => {
+    const optimistic = addOptimisticUserMessage(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      {
+        sessionId: "session_1",
+        clientMessageId: "msg_1",
+        text: "hello"
+      }
+    );
+
+    const afterUserProjection = ingestEventsIntoWorkspace(
+      optimistic,
+      [
+        makeEvent({
+          seq: 1,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            method: CodexNotificationMethod.ItemStarted,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              item: {
+                id: "item_user",
+                type: "userMessage",
+                clientId: "msg_1",
+                content: [{ type: "text", text: "hello", text_elements: [] }]
+              }
+            }
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    expect(afterUserProjection.chatItems.map((item) => item.role)).toEqual([
+      "user",
+      "system"
+    ]);
+    expect(afterUserProjection.chatItems[0]).toMatchObject({
+      clientMessageId: "msg_1",
+      text: "hello",
+      meta: {
+        source: "turn-store"
+      }
+    });
+    expect(afterUserProjection.chatItems[1]).toMatchObject({
+      role: "system",
+      text: "正在思考"
+    });
+
+    const afterAssistantProjection = ingestEventsIntoWorkspace(
+      afterUserProjection,
+      [
+        makeEvent({
+          seq: 2,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            method: CodexNotificationMethod.AgentMessageDelta,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              itemId: "item_agent",
+              delta: "hi"
+            }
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    expect(afterAssistantProjection.chatItems.map((item) => item.role)).toEqual([
+      "user",
+      "assistant"
+    ]);
+    expect(afterAssistantProjection.chatItems[1]).toMatchObject({
+      text: "hi",
+      meta: {
+        source: "turn-store"
+      }
+    });
   });
 
   it("keeps plan.updated out of the main chat stream", () => {

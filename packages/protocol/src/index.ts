@@ -94,14 +94,30 @@ export const CodexNotificationMethod = {
   Warning: "warning",
   ThreadStarted: "thread/started",
   ThreadStatusChanged: "thread/status/changed",
+  ThreadArchived: "thread/archived",
+  ThreadUnarchived: "thread/unarchived",
+  ThreadClosed: "thread/closed",
+  ThreadNameUpdated: "thread/name/updated",
   ThreadGoalUpdated: "thread/goal/updated",
   ThreadGoalCleared: "thread/goal/cleared",
+  ThreadSettingsUpdated: "thread/settings/updated",
+  ThreadTokenUsageUpdated: "thread/tokenUsage/updated",
   TurnStarted: "turn/started",
   TurnPlanUpdated: "turn/plan/updated",
+  ItemStarted: "item/started",
+  ItemCompleted: "item/completed",
+  RawResponseItemCompleted: "rawResponseItem/completed",
+  ReasoningSummaryTextDelta: "item/reasoning/summaryTextDelta",
+  ReasoningSummaryPartAdded: "item/reasoning/summaryPartAdded",
+  ReasoningTextDelta: "item/reasoning/textDelta",
+  McpToolCallProgress: "item/mcpToolCall/progress",
   PlanDelta: "item/plan/delta",
   AgentMessageDelta: "item/agentMessage/delta",
   CommandExecOutputDelta: "command/exec/outputDelta",
+  ProcessOutputDelta: "process/outputDelta",
+  ProcessExited: "process/exited",
   CommandExecutionOutputDelta: "item/commandExecution/outputDelta",
+  TerminalInteraction: "item/commandExecution/terminalInteraction",
   FileChangeOutputDelta: "item/fileChange/outputDelta",
   FileChangePatchUpdated: "item/fileChange/patchUpdated",
   TurnDiffUpdated: "turn/diff/updated",
@@ -471,47 +487,210 @@ export interface CodexThread {
   [key: string]: unknown;
 }
 
+export const CodexThreadItemType = {
+  UserMessage: "userMessage",
+  HookPrompt: "hookPrompt",
+  AgentMessage: "agentMessage",
+  Plan: "plan",
+  Reasoning: "reasoning",
+  CommandExecution: "commandExecution",
+  FileChange: "fileChange",
+  McpToolCall: "mcpToolCall",
+  DynamicToolCall: "dynamicToolCall",
+  CollabAgentToolCall: "collabAgentToolCall",
+  WebSearch: "webSearch",
+  ImageView: "imageView",
+  ImageGeneration: "imageGeneration",
+  EnteredReviewMode: "enteredReviewMode",
+  ExitedReviewMode: "exitedReviewMode",
+  ContextCompaction: "contextCompaction"
+} as const;
+
+export type KnownCodexThreadItemType =
+  (typeof CodexThreadItemType)[keyof typeof CodexThreadItemType];
+
+export type CodexThreadItemType =
+  | KnownCodexThreadItemType
+  | (string & {});
+
+export type CodexThreadTurnItemsView = "notLoaded" | "summary" | "full";
+export type CodexThreadTurnStatus =
+  | "completed"
+  | "interrupted"
+  | "failed"
+  | "inProgress";
+
 export interface CodexThreadTurn {
   id: string;
   items: CodexThreadItem[];
   params?: unknown;
-  status?: unknown;
-  startedAt?: number | null;
-  completedAt?: number | null;
+  itemsView: CodexThreadTurnItemsView;
+  status: CodexThreadTurnStatus;
+  error: unknown | null;
+  startedAt: number | null;
+  completedAt: number | null;
+  durationMs: number | null;
   [key: string]: unknown;
 }
 
 export type CodexThreadItem = {
-  id?: string;
-  type?: string;
+  id: string;
+  type: CodexThreadItemType;
+  clientId?: string | null;
   content?: unknown;
   text?: string;
+  phase?: string | null;
+  memoryCitation?: unknown;
   summary?: string[];
+  fragments?: unknown[];
   command?: string;
+  cwd?: string;
+  processId?: string | null;
+  source?: unknown;
+  status?: unknown;
+  commandActions?: unknown[];
   aggregatedOutput?: string | null;
+  exitCode?: number | null;
+  durationMs?: number | null;
   changes?: unknown[];
+  server?: string;
+  namespace?: string | null;
+  tool?: unknown;
+  arguments?: unknown;
+  result?: unknown;
+  error?: unknown;
+  contentItems?: unknown[] | null;
+  success?: boolean | null;
+  query?: string;
+  action?: unknown;
+  path?: string;
+  review?: string;
+  prompt?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
+  receiverThreadIds?: string[];
+  senderThreadId?: string;
+  agentsStates?: Record<string, unknown>;
   [key: string]: unknown;
 };
 
 export const CodexThreadItemSchema = z.object({
-  id: z.string().optional(),
-  type: z.string().optional(),
+  id: z.string().min(1),
+  type: z.string().min(1),
+  clientId: z.string().nullable().optional(),
   content: z.unknown().optional(),
   text: z.string().optional(),
+  phase: z.string().nullable().optional(),
+  memoryCitation: z.unknown().optional(),
   summary: z.array(z.string()).optional(),
+  fragments: z.array(z.unknown()).optional(),
   command: z.string().optional(),
+  cwd: z.string().optional(),
+  processId: z.string().nullable().optional(),
+  source: z.unknown().optional(),
+  status: z.unknown().optional(),
+  commandActions: z.array(z.unknown()).optional(),
   aggregatedOutput: z.string().nullable().optional(),
-  changes: z.array(z.unknown()).optional()
+  exitCode: z.number().nullable().optional(),
+  durationMs: z.number().nullable().optional(),
+  changes: z.array(z.unknown()).optional(),
+  server: z.string().optional(),
+  namespace: z.string().nullable().optional(),
+  tool: z.unknown().optional(),
+  arguments: z.unknown().optional(),
+  result: z.unknown().optional(),
+  error: z.unknown().optional(),
+  contentItems: z.array(z.unknown()).nullable().optional(),
+  success: z.boolean().nullable().optional(),
+  query: z.string().optional(),
+  action: z.unknown().optional(),
+  path: z.string().optional(),
+  review: z.string().optional(),
+  prompt: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  reasoningEffort: z.string().nullable().optional(),
+  receiverThreadIds: z.array(z.string()).optional(),
+  senderThreadId: z.string().optional(),
+  agentsStates: z.record(z.string(), z.unknown()).optional()
 }).passthrough();
+
+export const CodexThreadTurnItemsViewSchema = z.enum([
+  "notLoaded",
+  "summary",
+  "full"
+]);
+
+export const CodexThreadTurnStatusSchema = z.enum([
+  "completed",
+  "interrupted",
+  "failed",
+  "inProgress"
+]);
 
 export const CodexThreadTurnSchema = z.object({
   id: z.string().min(1),
   items: z.array(CodexThreadItemSchema),
   params: z.unknown().optional(),
-  status: z.unknown().optional(),
-  startedAt: z.number().nullable().optional(),
-  completedAt: z.number().nullable().optional()
+  itemsView: CodexThreadTurnItemsViewSchema,
+  status: CodexThreadTurnStatusSchema,
+  error: z.unknown().nullable(),
+  startedAt: z.number().nullable(),
+  completedAt: z.number().nullable(),
+  durationMs: z.number().nullable()
 }).passthrough();
+
+export type CodexThreadItemRenderKind =
+  | "user"
+  | "assistant"
+  | "process"
+  | "metadata";
+
+const PROCESS_THREAD_ITEM_TYPES = new Set<string>([
+  CodexThreadItemType.HookPrompt,
+  CodexThreadItemType.Plan,
+  CodexThreadItemType.Reasoning,
+  CodexThreadItemType.CommandExecution,
+  CodexThreadItemType.FileChange,
+  CodexThreadItemType.McpToolCall,
+  CodexThreadItemType.DynamicToolCall,
+  CodexThreadItemType.CollabAgentToolCall,
+  CodexThreadItemType.WebSearch,
+  CodexThreadItemType.ImageView,
+  CodexThreadItemType.ImageGeneration,
+  CodexThreadItemType.EnteredReviewMode,
+  CodexThreadItemType.ExitedReviewMode,
+  CodexThreadItemType.ContextCompaction
+]);
+
+export function codexThreadItemRenderKind(
+  item: Pick<CodexThreadItem, "type"> | null | undefined
+): CodexThreadItemRenderKind {
+  if (!item) {
+    return "metadata";
+  }
+  if (item.type === CodexThreadItemType.UserMessage) {
+    return "user";
+  }
+  if (item.type === CodexThreadItemType.AgentMessage) {
+    return "assistant";
+  }
+  if (PROCESS_THREAD_ITEM_TYPES.has(item.type)) {
+    return "process";
+  }
+  return "metadata";
+}
+
+export function isCodexProcessThreadItem(
+  item: Pick<CodexThreadItem, "type"> | null | undefined
+): boolean {
+  return codexThreadItemRenderKind(item) === "process";
+}
+
+export function codexThreadTurnHasProcessItems(
+  turn: Pick<CodexThreadTurn, "items"> | null | undefined
+): boolean {
+  return Boolean(turn?.items.some(isCodexProcessThreadItem));
+}
 
 export const CodexThreadSchema = z.object({
   id: z.string().min(1),
@@ -888,13 +1067,6 @@ const NotificationThreadSchema = z
   })
   .passthrough();
 
-const NotificationTurnSchema = z
-  .object({
-    id: z.string().min(1).optional(),
-    status: z.string().optional()
-  })
-  .passthrough();
-
 const NotificationGoalSchema = z
   .object({
     threadId: z.string().min(1).optional(),
@@ -915,6 +1087,13 @@ const NotificationIdFieldsSchema = z
   })
   .passthrough();
 
+const RequiredTurnScopedNotificationSchema = z
+  .object({
+    threadId: z.string().min(1),
+    turnId: z.string().min(1)
+  })
+  .passthrough();
+
 export const ThreadStatusChangedNotificationParamsSchema =
   NotificationIdFieldsSchema.extend({
     status: z.unknown().optional(),
@@ -931,30 +1110,91 @@ export const ThreadGoalClearedNotificationParamsSchema =
     goal: NotificationGoalSchema.nullable().optional()
   }).passthrough();
 
-export const TurnNotificationParamsSchema = NotificationIdFieldsSchema.extend({
-  turn: NotificationTurnSchema.optional()
+export const TurnNotificationParamsSchema = z.object({
+  threadId: z.string().min(1),
+  turn: CodexThreadTurnSchema
 }).passthrough();
 
 export const TextDeltaNotificationParamsSchema =
-  NotificationIdFieldsSchema.extend({
-    delta: z.string().optional()
+  RequiredTurnScopedNotificationSchema.extend({
+    itemId: z.string().min(1),
+    delta: z.string()
   }).passthrough();
 
 export const CommandExecOutputDeltaNotificationParamsSchema =
-  NotificationIdFieldsSchema.extend({
-    deltaBase64: z.string().optional()
+  z.object({
+    processId: z.string().min(1),
+    stream: z.string().min(1),
+    deltaBase64: z.string(),
+    capReached: z.boolean()
+  }).passthrough();
+
+export const ProcessOutputDeltaNotificationParamsSchema =
+  z.object({
+    processHandle: z.string().min(1),
+    stream: z.string().min(1),
+    deltaBase64: z.string(),
+    capReached: z.boolean()
+  }).passthrough();
+
+export const ProcessExitedNotificationParamsSchema = z.object({
+  processHandle: z.string().min(1),
+  exitCode: z.number(),
+  stdout: z.string(),
+  stdoutCapReached: z.boolean(),
+  stderr: z.string(),
+  stderrCapReached: z.boolean()
+}).passthrough();
+
+export const ItemLifecycleNotificationParamsSchema =
+  RequiredTurnScopedNotificationSchema.extend({
+    item: CodexThreadItemSchema
+  }).passthrough();
+
+export const ItemStartedNotificationParamsSchema =
+  ItemLifecycleNotificationParamsSchema.extend({
+    startedAtMs: z.number()
+  }).passthrough();
+
+export const ItemCompletedNotificationParamsSchema =
+  ItemLifecycleNotificationParamsSchema.extend({
+    completedAtMs: z.number()
+  }).passthrough();
+
+export const ReasoningSummaryTextDeltaNotificationParamsSchema =
+  TextDeltaNotificationParamsSchema.extend({
+    summaryIndex: z.number().int().nonnegative()
+  }).passthrough();
+
+export const ReasoningSummaryPartAddedNotificationParamsSchema =
+  RequiredTurnScopedNotificationSchema.extend({
+    itemId: z.string().min(1),
+    summaryIndex: z.number().int().nonnegative()
+  }).passthrough();
+
+export const ReasoningTextDeltaNotificationParamsSchema =
+  TextDeltaNotificationParamsSchema.extend({
+    contentIndex: z.number().int().nonnegative()
+  }).passthrough();
+
+export const McpToolCallProgressNotificationParamsSchema =
+  RequiredTurnScopedNotificationSchema.extend({
+    itemId: z.string().min(1),
+    message: z.string()
   }).passthrough();
 
 export const DiffUpdatedNotificationParamsSchema =
-  NotificationIdFieldsSchema.extend({
-    diff: z.string().optional()
+  RequiredTurnScopedNotificationSchema.extend({
+    diff: z.string()
   }).passthrough();
 
-export const PlanNotificationParamsSchema = NotificationIdFieldsSchema.extend({
-  delta: z.string().optional(),
-  explanation: z.string().optional(),
-  plan: z.unknown().optional()
-}).passthrough();
+export const PlanNotificationParamsSchema =
+  RequiredTurnScopedNotificationSchema.extend({
+    delta: z.string().optional(),
+    itemId: z.string().min(1).optional(),
+    explanation: z.string().nullable().optional(),
+    plan: z.unknown().optional()
+  }).passthrough();
 
 const KnownNotificationParamsSchemas = {
   [CodexNotificationMethod.ThreadStatusChanged]:
@@ -965,6 +1205,10 @@ const KnownNotificationParamsSchemas = {
     ThreadGoalClearedNotificationParamsSchema,
   [CodexNotificationMethod.TurnStarted]: TurnNotificationParamsSchema,
   [CodexNotificationMethod.TurnCompleted]: TurnNotificationParamsSchema,
+  [CodexNotificationMethod.ItemStarted]: ItemStartedNotificationParamsSchema,
+  [CodexNotificationMethod.ItemCompleted]: ItemCompletedNotificationParamsSchema,
+  [CodexNotificationMethod.RawResponseItemCompleted]:
+    RequiredTurnScopedNotificationSchema,
   [CodexNotificationMethod.AgentMessageDelta]:
     TextDeltaNotificationParamsSchema,
   [CodexNotificationMethod.CommandExecutionOutputDelta]:
@@ -973,9 +1217,25 @@ const KnownNotificationParamsSchemas = {
     TextDeltaNotificationParamsSchema,
   [CodexNotificationMethod.CommandExecOutputDelta]:
     CommandExecOutputDeltaNotificationParamsSchema,
+  [CodexNotificationMethod.ProcessOutputDelta]:
+    ProcessOutputDeltaNotificationParamsSchema,
+  [CodexNotificationMethod.ProcessExited]:
+    ProcessExitedNotificationParamsSchema,
   [CodexNotificationMethod.TurnDiffUpdated]: DiffUpdatedNotificationParamsSchema,
   [CodexNotificationMethod.TurnPlanUpdated]: PlanNotificationParamsSchema,
-  [CodexNotificationMethod.PlanDelta]: PlanNotificationParamsSchema
+  [CodexNotificationMethod.PlanDelta]: PlanNotificationParamsSchema,
+  [CodexNotificationMethod.ReasoningSummaryTextDelta]:
+    ReasoningSummaryTextDeltaNotificationParamsSchema,
+  [CodexNotificationMethod.ReasoningSummaryPartAdded]:
+    ReasoningSummaryPartAddedNotificationParamsSchema,
+  [CodexNotificationMethod.ReasoningTextDelta]:
+    ReasoningTextDeltaNotificationParamsSchema,
+  [CodexNotificationMethod.McpToolCallProgress]:
+    McpToolCallProgressNotificationParamsSchema,
+  [CodexNotificationMethod.TerminalInteraction]:
+    RequiredTurnScopedNotificationSchema,
+  [CodexNotificationMethod.FileChangePatchUpdated]:
+    RequiredTurnScopedNotificationSchema
 } as const;
 
 export function appServerNotificationParamsSchemaForMethod(
@@ -1041,6 +1301,12 @@ export const LocalEventType = {
   ApprovalRequested: "approval.requested",
   ApprovalResolved: "approval.resolved",
   CodexNotification: "codex.notification",
+  AppServerItemStarted: "app-server.item.started",
+  AppServerItemCompleted: "app-server.item.completed",
+  AppServerReasoningDelta: "app-server.reasoning.delta",
+  AppServerMcpProgress: "app-server.mcp.progress",
+  AppServerProcessOutput: "app-server.process.output",
+  AppServerProcessExited: "app-server.process.exited",
   CodexError: "codex.error",
   ChatUser: "chat.user",
   ChatAssistantDelta: "chat.assistant.delta",
@@ -1309,16 +1575,19 @@ export const LocalLoadedThreadsResponseSchema = z.object({
 export interface LocalCodexHistoryDetailResponse {
   entry: LocalCodexHistoryEntry;
   messages: LocalCodexHistoryMessage[];
+  turns: CodexThreadTurn[];
 }
 
 export const LocalCodexHistoryDetailResponseSchema = z.object({
   entry: LocalCodexHistoryEntrySchema,
-  messages: z.array(LocalCodexHistoryMessageSchema)
+  messages: z.array(LocalCodexHistoryMessageSchema),
+  turns: z.array(CodexThreadTurnSchema).default([])
 });
 
 export interface LocalCodexHistoryPageResponse {
   entry: LocalCodexHistoryEntry;
   messages: LocalCodexHistoryMessage[];
+  turns: CodexThreadTurn[];
   nextCursor: string | null;
   backwardsCursor: string | null;
 }
@@ -1326,6 +1595,7 @@ export interface LocalCodexHistoryPageResponse {
 export const LocalCodexHistoryPageResponseSchema = z.object({
   entry: LocalCodexHistoryEntrySchema,
   messages: z.array(LocalCodexHistoryMessageSchema),
+  turns: z.array(CodexThreadTurnSchema).default([]),
   nextCursor: z.string().nullable(),
   backwardsCursor: z.string().nullable()
 });

@@ -5,6 +5,7 @@ import {
   AppServerNotificationSchema,
   CodexNotificationMethod,
   CodexThreadSchema,
+  CodexThreadItemType,
   CodexThreadTurnSchema,
   CommandExecutionRequestApprovalParamsSchema,
   CommandExecutionRequestApprovalResponseSchema,
@@ -77,6 +78,9 @@ import {
   TurnStartResponseSchema,
   TurnStartParamsSchema,
   TurnSteerParamsSchema,
+  codexThreadItemRenderKind,
+  codexThreadTurnHasProcessItems,
+  isCodexProcessThreadItem,
   makeTextInput,
   appServerNotificationParamsSchemaForMethod,
   parseAppServerNotification
@@ -490,7 +494,17 @@ describe("relay protocol schemas", () => {
         method: CodexNotificationMethod.TurnStarted,
         params: {
           threadId: "thread_1",
-          turn: { id: "turn_1", status: "running", extra: true }
+          turn: {
+            id: "turn_1",
+            items: [],
+            itemsView: "full",
+            status: "inProgress",
+            error: null,
+            startedAt: 1,
+            completedAt: null,
+            durationMs: null,
+            extra: true
+          }
         },
         passthrough: true
       })
@@ -521,17 +535,78 @@ describe("relay protocol schemas", () => {
     expect(
       parseAppServerNotification({
         method: CodexNotificationMethod.AgentMessageDelta,
-        params: { threadId: "thread_1", turnId: "turn_1", delta: "hello" }
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          itemId: "item_agent",
+          delta: "hello"
+        }
       })
     ).toMatchObject({
-      params: { delta: "hello" }
+      params: { itemId: "item_agent", delta: "hello" }
+    });
+
+    expect(
+      parseAppServerNotification({
+        method: CodexNotificationMethod.ItemStarted,
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          startedAtMs: 1_786_000_000_000,
+          item: {
+            id: "item_cmd",
+            type: "commandExecution",
+            command: "pnpm test",
+            cwd: "/repo",
+            processId: null,
+            source: "shell",
+            status: "inProgress",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null
+          }
+        }
+      })
+    ).toMatchObject({
+      params: {
+        item: {
+          id: "item_cmd",
+          type: CodexThreadItemType.CommandExecution
+        }
+      }
+    });
+
+    expect(
+      parseAppServerNotification({
+        method: CodexNotificationMethod.ReasoningSummaryTextDelta,
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          itemId: "item_reasoning",
+          summaryIndex: 0,
+          delta: "checked files"
+        }
+      })
+    ).toMatchObject({
+      params: { itemId: "item_reasoning", summaryIndex: 0 }
     });
 
     expect(
       appServerNotificationParamsSchemaForMethod(
         CodexNotificationMethod.CommandExecOutputDelta
-      )?.parse({ deltaBase64: "aGVsbG8=" })
-    ).toEqual({ deltaBase64: "aGVsbG8=" });
+      )?.parse({
+        processId: "process_1",
+        stream: "stdout",
+        deltaBase64: "aGVsbG8=",
+        capReached: false
+      })
+    ).toEqual({
+      processId: "process_1",
+      stream: "stdout",
+      deltaBase64: "aGVsbG8=",
+      capReached: false
+    });
   });
 
   it("rejects malformed known app-server notification params", () => {
@@ -539,7 +614,12 @@ describe("relay protocol schemas", () => {
     expect(
       parseAppServerNotification({
         method: CodexNotificationMethod.AgentMessageDelta,
-        params: { delta: 123 }
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          itemId: "item_1",
+          delta: 123
+        }
       })
     ).toBeUndefined();
     expect(
@@ -755,7 +835,10 @@ describe("relay protocol schemas", () => {
     const turn = CodexThreadTurnSchema.parse(codexTurn());
 
     expect(thread.id).toBe("thread_1");
-    expect(turn.items[0]?.type).toBe("assistant_message");
+    expect(turn.items[0]?.type).toBe(CodexThreadItemType.AgentMessage);
+    expect(codexThreadItemRenderKind(turn.items[0])).toBe("assistant");
+    expect(isCodexProcessThreadItem(turn.items[1])).toBe(true);
+    expect(codexThreadTurnHasProcessItems(turn)).toBe(true);
     expect(
       ThreadStartResponseSchema.parse({
         thread: {
@@ -1098,14 +1181,23 @@ function codexTurn() {
     items: [
       {
         id: "item_1",
-        type: "assistant_message",
+        type: "agentMessage",
         text: "done"
+      },
+      {
+        id: "item_2",
+        type: "reasoning",
+        summary: ["checked repo"],
+        content: []
       }
     ],
+    itemsView: "full",
     params: { model: "gpt-5" },
-    status: { type: "completed" },
+    status: "completed",
+    error: null,
     startedAt: 1,
-    completedAt: 2
+    completedAt: 2,
+    durationMs: 1_000
   };
 }
 

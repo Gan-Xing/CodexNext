@@ -261,6 +261,7 @@ describe("CodexAppServerClient notification validation", () => {
     transport.emitNotification(CodexNotificationMethod.AgentMessageDelta, {
       threadId: "thread_1",
       turnId: "turn_1",
+      itemId: "item_agent",
       delta: "hello",
       extra: true
     });
@@ -279,6 +280,7 @@ describe("CodexAppServerClient notification validation", () => {
         params: {
           threadId: "thread_1",
           turnId: "turn_1",
+          itemId: "item_agent",
           delta: "hello",
           extra: true
         }
@@ -309,7 +311,16 @@ describe("CodexAppServerClient notification validation", () => {
 
     transport.emitNotification(CodexNotificationMethod.TurnCompleted, {
       threadId: "thread_1",
-      turn: { id: "turn_1", status: "completed" }
+      turn: {
+        id: "turn_1",
+        items: [],
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: 1,
+        completedAt: 2,
+        durationMs: 1_000
+      }
     });
     transport.emitNotification(CodexNotificationMethod.TurnCompleted, {
       turn: { id: "" }
@@ -321,7 +332,16 @@ describe("CodexAppServerClient notification validation", () => {
         method: CodexNotificationMethod.TurnCompleted,
         params: {
           threadId: "thread_1",
-          turn: { id: "turn_1", status: "completed" }
+          turn: {
+            id: "turn_1",
+            items: [],
+            itemsView: "full",
+            status: "completed",
+            error: null,
+            startedAt: 1,
+            completedAt: 2,
+            durationMs: 1_000
+          }
         }
       }
     ]);
@@ -544,12 +564,16 @@ function codexTurn() {
     items: [
       {
         id: "item_1",
-        type: "assistant_message",
+        type: "agentMessage",
         text: "done"
       }
     ],
+    itemsView: "full",
+    status: "completed",
+    error: null,
     startedAt: 1,
-    completedAt: 2
+    completedAt: 2,
+    durationMs: 1_000
   };
 }
 

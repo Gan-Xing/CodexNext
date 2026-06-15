@@ -3,6 +3,8 @@ import path from "node:path";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  CodexThreadItem,
+  CodexThreadTurn,
   LocalCodexHistoryDetailResponse,
   LocalCodexHistoryEntry,
   LocalCodexHistoryMessage
@@ -188,7 +190,8 @@ export class CodexHistoryStore {
 
     return {
       entry,
-      messages: display.messages ?? []
+      messages: display.messages ?? [],
+      turns: historyMessagesToSyntheticTurns(row.id, display.messages ?? [])
     };
   }
 
@@ -465,6 +468,66 @@ function makeHistoryMessage(
     text: trimmed.slice(0, 16_000),
     ts
   };
+}
+
+function historyMessagesToSyntheticTurns(
+  threadId: string,
+  messages: LocalCodexHistoryMessage[]
+): CodexThreadTurn[] {
+  return messages.map((message, index) => {
+    const tsMs = Date.parse(message.ts);
+    const ts = Number.isFinite(tsMs) ? tsMs / 1000 : null;
+    return {
+      id: `synthetic-${threadId}-${message.id || index}`,
+      items: [historyMessageToSyntheticThreadItem(message, index)],
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: ts,
+      completedAt: ts,
+      durationMs: null
+    };
+  });
+}
+
+function historyMessageToSyntheticThreadItem(
+  message: LocalCodexHistoryMessage,
+  index: number
+): CodexThreadItem {
+  const id = message.id || `message-${index}`;
+  switch (message.role) {
+    case "user":
+      return {
+        id,
+        type: "userMessage",
+        content: [{ type: "text", text: message.text, text_elements: [] }]
+      };
+    case "assistant":
+      return {
+        id,
+        type: "agentMessage",
+        text: message.text
+      };
+    case "command":
+      return {
+        id,
+        type: "commandExecution",
+        command: "",
+        aggregatedOutput: message.text
+      };
+    case "diff":
+      return {
+        id,
+        type: "fileChange",
+        text: message.text,
+        changes: []
+      };
+    default:
+      return {
+        id,
+        type: "contextCompaction"
+      };
+  }
 }
 
 async function directoryExists(candidatePath: string): Promise<boolean> {

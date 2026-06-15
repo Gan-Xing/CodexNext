@@ -13,6 +13,7 @@ import type {
   LocalSendMessageInput
 } from "@codexnext/protocol";
 import {
+  CodexNotificationMethod,
   CodexServerRequestMethod,
   LocalEventType,
   LocalSendMessageSchema
@@ -287,6 +288,86 @@ describe("SessionManager messages", () => {
     });
   });
 
+  it("keeps the selected model on thread/start and turn/start", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    const session = await manager.startSession({
+      cwd: process.cwd(),
+      permissionMode: "request-approval",
+      model: "gpt-5.5"
+    });
+    await manager.startTurn(session.sessionId, { text: "hello" });
+
+    expect(fake.threadStartParams[0]).toMatchObject({ model: "gpt-5.5" });
+    expect(fake.turnStartParams[0]).toMatchObject({ model: "gpt-5.5" });
+  });
+
+  it("stores app-server semantic item and reasoning events", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    await manager.startSession({
+      cwd: process.cwd(),
+      permissionMode: "request-approval"
+    });
+    fake.emit("notification", {
+      method: CodexNotificationMethod.ItemStarted,
+      params: {
+        threadId: "thread_1",
+        turnId: "turn_1",
+        startedAtMs: 1,
+        item: {
+          id: "item_reasoning",
+          type: "reasoning",
+          summary: [],
+          content: []
+        }
+      }
+    } satisfies AppServerNotification);
+    fake.emit("notification", {
+      method: CodexNotificationMethod.ReasoningSummaryTextDelta,
+      params: {
+        threadId: "thread_1",
+        turnId: "turn_1",
+        itemId: "item_reasoning",
+        summaryIndex: 0,
+        delta: "checked context"
+      }
+    } satisfies AppServerNotification);
+    fake.emit("notification", {
+      method: CodexNotificationMethod.McpToolCallProgress,
+      params: {
+        threadId: "thread_1",
+        turnId: "turn_1",
+        itemId: "item_tool",
+        message: "running"
+      }
+    } satisfies AppServerNotification);
+
+    expect(
+      store.all().map((event) => event.type)
+    ).toEqual(expect.arrayContaining([
+      LocalEventType.AppServerItemStarted,
+      LocalEventType.AppServerReasoningDelta,
+      LocalEventType.AppServerMcpProgress
+    ]));
+  });
+
   it("resumes an existing Codex thread by id", async () => {
     const store = new EventStore();
     const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
@@ -404,6 +485,12 @@ describe("SessionManager messages", () => {
           {
             id: "turn_1",
             items: [],
+            itemsView: "full",
+            status: "completed",
+            error: null,
+            startedAt: 1,
+            completedAt: 2,
+            durationMs: 1_000,
             params: {
               input: [{ type: "text", text: "继续检查 sidebar title 为什么和原生 Codex 不一致" }]
             }
@@ -714,6 +801,10 @@ describe("local HTTP server guards", () => {
             id: "turn_1",
             startedAt: 1_786_000_010,
             completedAt: 1_786_000_020,
+            itemsView: "full",
+            status: "completed",
+            error: null,
+            durationMs: 10_000,
             items: [
               {
                 id: "item_user",
@@ -737,6 +828,10 @@ describe("local HTTP server guards", () => {
           id: "turn_1",
           startedAt: 1_786_000_010,
           completedAt: 1_786_000_020,
+          itemsView: "summary",
+          status: "completed",
+          error: null,
+          durationMs: 10_000,
           items: [
             {
               id: "item_user",
@@ -889,6 +984,7 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
   public threadLoadedListCalls = 0;
   public threadReadParams: unknown[] = [];
   public threadTurnsListParams: unknown[] = [];
+  public turnStartParams: unknown[] = [];
   public failNextResumeAsArchived = false;
   public failNextArchiveAsMissingRollout = false;
   public failNextTurnStart: Error | null = null;
@@ -1017,7 +1113,10 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
 
   public clearGoal = async () => ({ goal: null });
 
-  public turnStart = async () => {
+  public turnStart = async (
+    params: Parameters<ManagedCodexClient["turnStart"]>[0]
+  ) => {
+    this.turnStartParams.push(params);
     this.turnStartCalls += 1;
     if (this.failNextTurnStart) {
       const error = this.failNextTurnStart;

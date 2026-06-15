@@ -1,4 +1,10 @@
 import type { AgentConnection } from "../../lib/api";
+import type { CodexThreadItem, CodexThreadTurn } from "@codexnext/protocol";
+import {
+  CodexNotificationMethod,
+  CodexThreadItemType,
+  codexThreadItemRenderKind
+} from "@codexnext/protocol";
 import type {
   ChatItem,
   LocalCodexHistoryDetailResponse,
@@ -11,7 +17,6 @@ import type {
 } from "../../lib/types";
 import { stripAnsi } from "../../lib/format/diff";
 import { isRecord } from "../../lib/format/text";
-import { historyMessageToChatItem } from "../sessions/session-utils";
 
 export interface AttachmentDraft {
   name: string;
@@ -33,6 +38,8 @@ export interface ConversationRecord {
   pendingClientIds: string[];
   sessionIds: string[];
   threadId: string | null;
+  turnOrder: string[];
+  turns: Record<string, NormalizedConversationTurn>;
   updatedAt: number;
 }
 
@@ -42,6 +49,38 @@ export interface ConversationCacheEntry {
   latestSeq: number | null;
   sessionIds: string[];
   threadId: string | null;
+  turnOrder?: string[] | undefined;
+  turns?: Record<string, NormalizedConversationTurn> | undefined;
+  updatedAt: number;
+}
+
+export interface NormalizedConversationTurn {
+  completedAt: number | null;
+  durationMs: number | null;
+  error: unknown | null;
+  id: string;
+  itemOrder: string[];
+  items: Record<string, NormalizedConversationTurnItem>;
+  itemsView: "notLoaded" | "summary" | "full";
+  latestSeq: number | null;
+  startedAt: number | null;
+  status: "completed" | "interrupted" | "failed" | "inProgress";
+}
+
+export interface NormalizedConversationTurnItem {
+  aggregatedOutput?: string | null | undefined;
+  changes?: unknown[] | undefined;
+  clientMessageId?: string | undefined;
+  completedAtMs?: number | undefined;
+  content?: unknown;
+  createdAt?: number | undefined;
+  id: string;
+  kind: "user" | "assistant" | "process" | "metadata";
+  role: ChatItem["role"] | null;
+  startedAtMs?: number | undefined;
+  status?: unknown;
+  text: string;
+  type: string;
   updatedAt: number;
 }
 
@@ -301,6 +340,12 @@ export function restoreConversationCacheEntries(
       entry.items.map(sanitizeCachedChatItem).filter((item): item is ChatItem => Boolean(item)),
       { latestSeq: entry.latestSeq }
     );
+    if (entry.turns && entry.turnOrder) {
+      next = upsertNormalizedTurns(next, finalKey, {
+        turnOrder: entry.turnOrder,
+        turns: entry.turns
+      }, { latestSeq: entry.latestSeq });
+    }
   }
   return materializeWorkspace(next);
 }
@@ -308,24 +353,26 @@ export function restoreConversationCacheEntries(
 export function buildConversationCacheEntries(
   workspace: DeviceWorkspace
 ): ConversationCacheEntry[] {
-  return Object.values(workspace.conversations)
-    .map((conversation) => {
-      const items = conversation.items
-        .filter(shouldPersistChatItem)
-        .slice(-CONVERSATION_CACHE_MESSAGE_LIMIT);
-      if (items.length === 0) {
-        return null;
-      }
-      return {
-        conversationKey: conversation.key,
-        items,
-        latestSeq: conversation.latestSeq,
-        sessionIds: conversation.sessionIds,
-        threadId: conversation.threadId,
-        updatedAt: conversation.updatedAt
-      } satisfies ConversationCacheEntry;
-    })
-    .filter((entry): entry is ConversationCacheEntry => Boolean(entry))
+  const entries: ConversationCacheEntry[] = [];
+  for (const conversation of Object.values(workspace.conversations)) {
+    const items = conversation.items
+      .filter(shouldPersistChatItem)
+      .slice(-CONVERSATION_CACHE_MESSAGE_LIMIT);
+    if (items.length === 0) {
+      continue;
+    }
+    entries.push({
+      conversationKey: conversation.key,
+      items,
+      latestSeq: conversation.latestSeq,
+      sessionIds: conversation.sessionIds,
+      threadId: conversation.threadId,
+      turnOrder: conversation.turnOrder,
+      turns: conversation.turns,
+      updatedAt: conversation.updatedAt
+    });
+  }
+  return entries
     .sort((left, right) => right.updatedAt - left.updatedAt)
     .slice(0, CONVERSATION_CACHE_THREAD_LIMIT);
 }
@@ -379,6 +426,8 @@ function ensureConversation(
           pendingClientIds: [],
           sessionIds: [],
           threadId: input.threadId ?? null,
+          turnOrder: [],
+          turns: {},
           updatedAt: Date.now()
         }
       }
@@ -495,6 +544,8 @@ function mergeConversationKeys(
     pendingClientIds: [...new Set([...preferred.pendingClientIds, ...alias.pendingClientIds])],
     sessionIds: [...new Set([...preferred.sessionIds, ...alias.sessionIds])],
     threadId: preferred.threadId ?? alias.threadId,
+    turnOrder: mergeTurnOrder(preferred.turnOrder, alias.turnOrder),
+    turns: mergeNormalizedTurns(preferred.turns, alias.turns),
     updatedAt: Math.max(preferred.updatedAt, alias.updatedAt, Date.now())
   };
   const remapRecord = (record: Record<string, string>) =>
@@ -539,6 +590,8 @@ function emptyConversation(key: ConversationKey): ConversationRecord {
     pendingClientIds: [],
     sessionIds: [],
     threadId: null,
+    turnOrder: [],
+    turns: {},
     updatedAt: Date.now()
   };
 }
@@ -602,6 +655,387 @@ function updateConversationItems(
   });
 }
 
+interface NormalizedTurnCollection {
+  turnOrder: string[];
+  turns: Record<string, NormalizedConversationTurn>;
+}
+
+function upsertNormalizedTurns(
+  workspace: DeviceWorkspace,
+  key: ConversationKey,
+  incoming: NormalizedTurnCollection,
+  options: {
+    latestSeq?: number | null;
+    order?: "existing-first" | "incoming-first";
+  } = {}
+): DeviceWorkspace {
+  const canonicalKey = canonicalConversationKey(workspace, key);
+  const conversation = workspace.conversations[canonicalKey] ?? emptyConversation(canonicalKey);
+  const turns = mergeNormalizedTurns(conversation.turns, incoming.turns);
+  const turnOrder =
+    options.order === "incoming-first"
+      ? mergeTurnOrder(incoming.turnOrder, conversation.turnOrder)
+      : mergeTurnOrder(conversation.turnOrder, incoming.turnOrder);
+  return materializeWorkspace({
+    ...workspace,
+    conversations: {
+      ...workspace.conversations,
+      [canonicalKey]: {
+        ...conversation,
+        latestSeq:
+          options.latestSeq !== undefined
+            ? Math.max(conversation.latestSeq ?? 0, options.latestSeq ?? 0) || null
+            : conversation.latestSeq,
+        turnOrder,
+        turns,
+        updatedAt: Date.now()
+      }
+    }
+  });
+}
+
+function normalizeCodexTurns(
+  turns: CodexThreadTurn[],
+  input: { latestSeq: number | null; source: "history" | "live" }
+): NormalizedTurnCollection {
+  const normalizedTurns = turns.map((turn) =>
+    normalizeCodexTurn(turn, {
+      latestSeq: input.latestSeq,
+      source: input.source
+    })
+  );
+  return {
+    turnOrder: normalizedTurns.map((turn) => turn.id),
+    turns: Object.fromEntries(normalizedTurns.map((turn) => [turn.id, turn]))
+  };
+}
+
+function normalizeCodexTurn(
+  turn: CodexThreadTurn,
+  input: { latestSeq: number | null; source: "history" | "live" }
+): NormalizedConversationTurn {
+  const items = turn.items.map((item) =>
+    normalizeCodexThreadItem(item, {
+      defaultStatus: turn.status,
+      latestSeq: input.latestSeq,
+      source: input.source,
+      turnStartedAt: turn.startedAt
+    })
+  );
+  return {
+    id: turn.id,
+    itemOrder: items.map((item) => item.id),
+    items: Object.fromEntries(items.map((item) => [item.id, item])),
+    itemsView: turn.itemsView,
+    status: turn.status,
+    error: turn.error,
+    startedAt: turn.startedAt,
+    completedAt: turn.completedAt,
+    durationMs: turn.durationMs,
+    latestSeq: input.latestSeq
+  };
+}
+
+function normalizeCodexThreadItem(
+  item: CodexThreadItem,
+  input: {
+    defaultStatus: NormalizedConversationTurn["status"];
+    latestSeq: number | null;
+    source: "history" | "live";
+    turnStartedAt: number | null;
+  }
+): NormalizedConversationTurnItem {
+  const kind = codexThreadItemRenderKind(item);
+  const role = codexThreadItemRole(item);
+  return {
+    id: item.id,
+    type: item.type,
+    kind,
+    role,
+    text: codexThreadItemText(item),
+    ...(typeof item.clientId === "string" ? { clientMessageId: item.clientId } : {}),
+    content: item.content,
+    ...(typeof item.aggregatedOutput === "string" || item.aggregatedOutput === null
+      ? { aggregatedOutput: item.aggregatedOutput }
+      : {}),
+    ...(Array.isArray(item.changes) ? { changes: item.changes } : {}),
+    status: item.status ?? input.defaultStatus,
+    createdAt: timestampSecondsToMs(input.turnStartedAt),
+    updatedAt: Date.now()
+  };
+}
+
+function mergeTurnOrder(left: string[], right: string[]): string[] {
+  return [...new Set([...left, ...right])];
+}
+
+function mergeNormalizedTurns(
+  existing: Record<string, NormalizedConversationTurn>,
+  incoming: Record<string, NormalizedConversationTurn>
+): Record<string, NormalizedConversationTurn> {
+  const next = { ...existing };
+  for (const [turnId, incomingTurn] of Object.entries(incoming)) {
+    const current = next[turnId];
+    next[turnId] = current ? mergeNormalizedTurn(current, incomingTurn) : incomingTurn;
+  }
+  return next;
+}
+
+function mergeNormalizedTurn(
+  current: NormalizedConversationTurn,
+  incoming: NormalizedConversationTurn
+): NormalizedConversationTurn {
+  const incomingIsHistory = incoming.latestSeq === null;
+  const currentHasLiveEvents = current.latestSeq !== null;
+  const preferExistingText = incomingIsHistory && currentHasLiveEvents;
+  const status =
+    current.status === "completed" || incoming.status === "completed"
+      ? "completed"
+      : preferExistingText
+        ? current.status
+        : incoming.status;
+  return {
+    ...current,
+    ...incoming,
+    itemOrder: mergeTurnOrder(current.itemOrder, incoming.itemOrder),
+    items: mergeNormalizedTurnItems(current.items, incoming.items, {
+      preferExistingText
+    }),
+    status,
+    startedAt: incoming.startedAt ?? current.startedAt,
+    completedAt: incoming.completedAt ?? current.completedAt,
+    durationMs: incoming.durationMs ?? current.durationMs,
+    error: incoming.error ?? current.error,
+    latestSeq: Math.max(current.latestSeq ?? 0, incoming.latestSeq ?? 0) || null
+  };
+}
+
+function mergeNormalizedTurnItems(
+  existing: Record<string, NormalizedConversationTurnItem>,
+  incoming: Record<string, NormalizedConversationTurnItem>,
+  options: { preferExistingText?: boolean } = {}
+): Record<string, NormalizedConversationTurnItem> {
+  const next = { ...existing };
+  for (const [itemId, incomingItem] of Object.entries(incoming)) {
+    const current = next[itemId];
+    next[itemId] = current
+      ? {
+          ...current,
+          ...incomingItem,
+          text: mergeNormalizedItemText(current.text, incomingItem.text, options),
+          aggregatedOutput:
+            incomingItem.aggregatedOutput !== undefined
+              ? mergeNormalizedItemText(
+                  current.aggregatedOutput ?? "",
+                  incomingItem.aggregatedOutput ?? "",
+                  options
+                )
+              : current.aggregatedOutput,
+          updatedAt: Date.now()
+        }
+      : incomingItem;
+  }
+  return next;
+}
+
+function mergeNormalizedItemText(
+  current: string,
+  incoming: string,
+  options: { preferExistingText?: boolean } = {}
+): string {
+  if (!incoming) {
+    return current;
+  }
+  if (!current) {
+    return incoming;
+  }
+  if (options.preferExistingText && current.length > incoming.length) {
+    return current;
+  }
+  return incoming;
+}
+
+function projectNormalizedTurnsToChatItems(
+  collection: NormalizedTurnCollection,
+  input: { sessionId?: string | undefined; threadId?: string | null | undefined }
+): ChatItem[] {
+  return collection.turnOrder
+    .map((turnId) => collection.turns[turnId])
+    .filter((turn): turn is NormalizedConversationTurn => Boolean(turn))
+    .flatMap((turn) =>
+      turn.itemOrder
+        .map((itemId) => turn.items[itemId])
+        .filter((item): item is NormalizedConversationTurnItem => Boolean(item))
+        .map((item) => normalizedTurnItemToChatItem(turn, item, input.sessionId))
+        .filter((item): item is ChatItem => Boolean(item))
+    );
+}
+
+function normalizedTurnItemToChatItem(
+  turn: NormalizedConversationTurn,
+  item: NormalizedConversationTurnItem,
+  sessionId: string | undefined
+): ChatItem | null {
+  if (!item.role || item.text.trim().length === 0) {
+    return null;
+  }
+  const status: ChatItem["status"] =
+    turn.status === "completed"
+      ? "complete"
+      : turn.status === "failed"
+        ? "failed"
+        : "streaming";
+  return {
+    id: `turn-${turn.id}-${item.id}`,
+    role: item.role,
+    text: item.text,
+    ...(sessionId ? { sessionId } : {}),
+    turnId: turn.id,
+    ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
+    status,
+    createdAt:
+      item.createdAt ??
+      timestampSecondsToMs(turn.startedAt) ??
+      timestampSecondsToMs(turn.completedAt) ??
+      Date.now(),
+    meta: {
+      appServerItemId: item.id,
+      appServerItemType: item.type,
+      source: "turn-store"
+    }
+  };
+}
+
+function codexThreadItemRole(item: CodexThreadItem): ChatItem["role"] | null {
+  switch (item.type) {
+    case CodexThreadItemType.UserMessage:
+      return "user";
+    case CodexThreadItemType.AgentMessage:
+      return "assistant";
+    case CodexThreadItemType.CommandExecution:
+      return "command";
+    case CodexThreadItemType.FileChange:
+      return "diff";
+    default:
+      return null;
+  }
+}
+
+function codexThreadItemText(item: CodexThreadItem): string {
+  switch (item.type) {
+    case CodexThreadItemType.UserMessage:
+      return userInputText(item.content);
+    case CodexThreadItemType.AgentMessage:
+      return typeof item.text === "string" ? item.text : "";
+    case CodexThreadItemType.CommandExecution:
+      return commandExecutionText(item);
+    case CodexThreadItemType.FileChange:
+      return fileChangeText(item);
+    default:
+      return typeof item.text === "string" ? item.text : "";
+  }
+}
+
+function userInputText(content: unknown): string {
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((part) =>
+      isRecord(part) && part.type === "text" && typeof part.text === "string"
+        ? part.text
+        : ""
+    )
+    .filter(Boolean)
+    .join("\n");
+}
+
+function commandExecutionText(item: CodexThreadItem): string {
+  const command = typeof item.command === "string" ? item.command.trim() : "";
+  const output =
+    typeof item.aggregatedOutput === "string"
+      ? stripAnsi(item.aggregatedOutput).trim()
+      : "";
+  return [command ? `$ ${command}` : "", output].filter(Boolean).join("\n");
+}
+
+function fileChangeText(item: CodexThreadItem): string {
+  if (typeof item.text === "string") {
+    return item.text;
+  }
+  if (Array.isArray(item.changes) && item.changes.length > 0) {
+    return JSON.stringify(item.changes, null, 2);
+  }
+  return "";
+}
+
+function timestampSecondsToMs(value: number | null | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return value > 10_000_000_000 ? value : value * 1000;
+}
+
+function historyMessagesToSyntheticTurns(
+  _sessionId: string,
+  messages: LocalCodexHistoryMessage[]
+): CodexThreadTurn[] {
+  return messages.map((message, index) => {
+    const tsMs = Date.parse(message.ts);
+    const ts = Number.isFinite(tsMs) ? tsMs / 1000 : null;
+    return {
+      id: `synthetic-${message.id || index}`,
+      items: [historyMessageToSyntheticThreadItem(message, index)],
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: ts,
+      completedAt: ts,
+      durationMs: null
+    };
+  });
+}
+
+function historyMessageToSyntheticThreadItem(
+  message: LocalCodexHistoryMessage,
+  index: number
+): CodexThreadItem {
+  const id = message.id || `message-${index}`;
+  switch (message.role) {
+    case "user":
+      return {
+        id,
+        type: CodexThreadItemType.UserMessage,
+        content: [{ type: "text", text: message.text, text_elements: [] }]
+      };
+    case "assistant":
+      return {
+        id,
+        type: CodexThreadItemType.AgentMessage,
+        text: message.text
+      };
+    case "command":
+      return {
+        id,
+        type: CodexThreadItemType.CommandExecution,
+        command: "",
+        aggregatedOutput: message.text
+      };
+    case "diff":
+      return {
+        id,
+        type: CodexThreadItemType.FileChange,
+        text: message.text,
+        changes: []
+      };
+    default:
+      return {
+        id,
+        type: CodexThreadItemType.ContextCompaction
+      };
+  }
+}
+
 function setOutboxEntry(workspace: DeviceWorkspace, entry: OutboxEntry): DeviceWorkspace {
   return {
     ...workspace,
@@ -633,7 +1067,9 @@ function mergeConversationItems(existing: ChatItem[], incoming: ChatItem[]): Cha
         (item.clientMessageId !== undefined &&
           current.clientMessageId === item.clientMessageId &&
           current.role === item.role) ||
-        (item.turnId !== undefined &&
+        (!isTurnStoreProjectedItem(item) &&
+          !isTurnStoreProjectedItem(current) &&
+          item.turnId !== undefined &&
           current.turnId === item.turnId &&
           current.sessionId === item.sessionId &&
           current.role === item.role)
@@ -1066,47 +1502,17 @@ export function hydrateSessionFromHistory(
   sessionId: string,
   messages: LocalCodexHistoryMessage[]
 ): DeviceWorkspace {
-  const session = workspace.sessions.find((item) => item.sessionId === sessionId);
-  const threadId = session?.threadId ?? workspace.sessionHistoryOrigins[sessionId];
-  let next = ensureConversation(workspace, {
+  return hydrateSessionFromTurns(
+    workspace,
     sessionId,
-    ...(threadId ? { threadId } : {})
-  });
-  const conversationKey =
-    findConversationKey(next, { sessionId, ...(threadId ? { threadId } : {}) }) ??
-    sessionId;
-  const canonicalKey = canonicalConversationKey(next, conversationKey);
-  const historyItems = dedupeChatItemsById(
-    messages
-      .filter((message) => isRenderableHistoryRole(message.role))
-      .map((message) => historyMessageToChatItem(sessionId, message))
+    historyMessagesToSyntheticTurns(sessionId, messages)
   );
-  const conversationItems =
-    next.conversations[canonicalKey]?.items ??
-    workspace.chatItems.filter((item) => item.sessionId === sessionId);
-  const preservedSessionItems = conversationItems
-    .filter(
-      (item) =>
-        item.sessionId === sessionId &&
-        !item.id.startsWith(`history-${sessionId}-`)
-    )
-    .filter((item) =>
-      shouldPreserveAfterHistoryHydration(item, historyItems, conversationItems)
-    );
-  const overlap = findHistoryOverlap(historyItems, preservedSessionItems);
-  next = updateConversationItems(next, canonicalKey, () =>
-    [
-      ...historyItems,
-      ...preservedSessionItems.slice(overlap)
-    ].slice(-500)
-  );
-  return materializeWorkspace(next);
 }
 
-export function prependSessionHistoryMessages(
+export function hydrateSessionFromTurns(
   workspace: DeviceWorkspace,
   sessionId: string,
-  messages: LocalCodexHistoryMessage[]
+  turns: CodexThreadTurn[]
 ): DeviceWorkspace {
   const session = workspace.sessions.find((item) => item.sessionId === sessionId);
   const threadId = session?.threadId ?? workspace.sessionHistoryOrigins[sessionId];
@@ -1118,25 +1524,95 @@ export function prependSessionHistoryMessages(
     findConversationKey(next, { sessionId, ...(threadId ? { threadId } : {}) }) ??
     sessionId;
   const canonicalKey = canonicalConversationKey(next, conversationKey);
-  const olderHistoryItems = dedupeChatItemsById(
-    messages
-      .filter((message) => isRenderableHistoryRole(message.role))
-      .map((message) => historyMessageToChatItem(sessionId, message))
+  const normalizedTurns = normalizeCodexTurns(turns, {
+    latestSeq: null,
+    source: "history"
+  });
+  const incomingHistoryItems = projectNormalizedTurnsToChatItems(
+    normalizedTurns,
+    { sessionId, threadId }
+  );
+  const conversationItems =
+    next.conversations[canonicalKey]?.items ??
+    workspace.chatItems.filter((item) => item.sessionId === sessionId);
+  next = upsertNormalizedTurns(next, canonicalKey, normalizedTurns, {
+    order: "incoming-first"
+  });
+  const mergedConversation = next.conversations[canonicalKey] ?? emptyConversation(canonicalKey);
+  const projectedItems = projectNormalizedTurnsToChatItems(mergedConversation, {
+    sessionId,
+    threadId
+  });
+  const preservedSessionItems = conversationItems
+    .filter((item) => item.sessionId === sessionId)
+    .filter((item) =>
+      shouldPreserveAfterProjection(item, projectedItems, incomingHistoryItems, conversationItems)
+    );
+  const overlap = findHistoryOverlap(projectedItems, preservedSessionItems);
+  next = updateConversationItems(next, canonicalKey, () =>
+    [
+      ...projectedItems,
+      ...preservedSessionItems.slice(overlap)
+    ].slice(-500)
+  );
+  return materializeWorkspace(next);
+}
+
+export function prependSessionHistoryMessages(
+  workspace: DeviceWorkspace,
+  sessionId: string,
+  messages: LocalCodexHistoryMessage[]
+): DeviceWorkspace {
+  return prependSessionHistoryTurns(
+    workspace,
+    sessionId,
+    historyMessagesToSyntheticTurns(sessionId, messages)
+  );
+}
+
+export function prependSessionHistoryTurns(
+  workspace: DeviceWorkspace,
+  sessionId: string,
+  turns: CodexThreadTurn[]
+): DeviceWorkspace {
+  const session = workspace.sessions.find((item) => item.sessionId === sessionId);
+  const threadId = session?.threadId ?? workspace.sessionHistoryOrigins[sessionId];
+  let next = ensureConversation(workspace, {
+    sessionId,
+    ...(threadId ? { threadId } : {})
+  });
+  const conversationKey =
+    findConversationKey(next, { sessionId, ...(threadId ? { threadId } : {}) }) ??
+    sessionId;
+  const canonicalKey = canonicalConversationKey(next, conversationKey);
+  const normalizedTurns = normalizeCodexTurns(turns, {
+    latestSeq: null,
+    source: "history"
+  });
+  const incomingHistoryItems = projectNormalizedTurnsToChatItems(
+    normalizedTurns,
+    { sessionId, threadId }
   );
   const sessionItems =
     next.conversations[canonicalKey]?.items ??
     workspace.chatItems.filter((item) => item.sessionId === sessionId);
-  const existingHistoryItems = sessionItems.filter((item) =>
-    item.id.startsWith(`history-${sessionId}-`)
-  );
-  const preservedSessionItems = sessionItems.filter(
-    (item) => !item.id.startsWith(`history-${sessionId}-`)
-  );
 
+  next = upsertNormalizedTurns(next, canonicalKey, normalizedTurns, {
+    order: "incoming-first"
+  });
+  const mergedConversation = next.conversations[canonicalKey] ?? emptyConversation(canonicalKey);
+  const projectedItems = projectNormalizedTurnsToChatItems(mergedConversation, {
+    sessionId,
+    threadId
+  });
+  const preservedSessionItems = sessionItems.filter((item) =>
+    shouldPreserveAfterProjection(item, projectedItems, incomingHistoryItems, sessionItems)
+  );
+  const overlap = findHistoryOverlap(projectedItems, preservedSessionItems);
   next = updateConversationItems(next, canonicalKey, () =>
     [
-      ...dedupeChatItemsById([...olderHistoryItems, ...existingHistoryItems]),
-      ...preservedSessionItems
+      ...projectedItems,
+      ...preservedSessionItems.slice(overlap)
     ].slice(-500)
   );
   return materializeWorkspace(next);
@@ -1243,9 +1719,20 @@ function applyEventToWorkspace(
       };
     case "thread.status.changed":
       return applyThreadStatusChanged(workspace, event);
+    case "codex.notification":
+      return applyCodexNotificationToWorkspace(workspace, event);
+    case "app-server.item.started":
+      return applyAppServerItemLifecycleEvent(workspace, event, "started");
+    case "app-server.item.completed":
+      return applyAppServerItemLifecycleEvent(workspace, event, "completed");
+    case "app-server.reasoning.delta":
+      return applyAppServerReasoningDelta(workspace, event);
     case "chat.user":
       return applyServerChatUser(workspace, event);
     case "chat.assistant.delta":
+      if (hasTurnStoreRenderableText(workspace, event.sessionId, event.threadId, event.turnId, "assistant")) {
+        return setConversationLatestSeqForEvent(workspace, event);
+      }
       return appendStreamingItemToWorkspace(
         workspace,
         "assistant",
@@ -1257,6 +1744,9 @@ function applyEventToWorkspace(
         event.seq
       );
     case "command.output.delta":
+      if (hasTurnStoreRenderableText(workspace, event.sessionId, event.threadId, event.turnId, "command")) {
+        return setConversationLatestSeqForEvent(workspace, event);
+      }
       return appendStreamingItemToWorkspace(
         workspace,
         "command",
@@ -1286,7 +1776,7 @@ function applyEventToWorkspace(
     case "plan.updated":
       return workspace;
     case "turn.completed":
-      return markTurnItemsComplete(workspace, event.turnId);
+      return applyTurnCompletedEvent(workspace, event);
     case "agent.error":
       return applyAgentError(workspace, event);
     default:
@@ -1378,6 +1868,407 @@ function applyThreadStatusChanged(
     ...workspace,
     loadedThreadIds: [...next].sort()
   };
+}
+
+function applyCodexNotificationToWorkspace(
+  workspace: DeviceWorkspace,
+  event: LocalEvent
+): DeviceWorkspace {
+  const notification = isRecord(event.payload) ? event.payload : null;
+  const method = typeof notification?.method === "string" ? notification.method : null;
+  const params = isRecord(notification?.params) ? notification.params : null;
+  if (!method || !params) {
+    return workspace;
+  }
+
+  switch (method) {
+    case CodexNotificationMethod.ItemStarted:
+      return applyAppServerItemLifecycleParams(workspace, event, params, "started");
+    case CodexNotificationMethod.ItemCompleted:
+      return applyAppServerItemLifecycleParams(workspace, event, params, "completed");
+    case CodexNotificationMethod.AgentMessageDelta:
+      return applyAppServerItemDelta(workspace, event, params, {
+        type: CodexThreadItemType.AgentMessage,
+        target: "text"
+      });
+    case CodexNotificationMethod.CommandExecutionOutputDelta:
+      return applyAppServerItemDelta(workspace, event, params, {
+        type: CodexThreadItemType.CommandExecution,
+        target: "aggregatedOutput"
+      });
+    case CodexNotificationMethod.FileChangeOutputDelta:
+      return applyAppServerItemDelta(workspace, event, params, {
+        type: CodexThreadItemType.FileChange,
+        target: "text"
+      });
+    case CodexNotificationMethod.ReasoningSummaryTextDelta:
+    case CodexNotificationMethod.ReasoningTextDelta:
+      return applyAppServerReasoningDeltaParams(workspace, event, params);
+    case CodexNotificationMethod.TurnCompleted:
+      return applyTurnPayloadToTurnStore(workspace, event, params);
+    default:
+      return workspace;
+  }
+}
+
+function applyAppServerItemLifecycleEvent(
+  workspace: DeviceWorkspace,
+  event: LocalEvent,
+  phase: "started" | "completed"
+): DeviceWorkspace {
+  const params = isRecord(event.payload) ? event.payload : null;
+  return params
+    ? applyAppServerItemLifecycleParams(workspace, event, params, phase)
+    : workspace;
+}
+
+function applyAppServerItemLifecycleParams(
+  workspace: DeviceWorkspace,
+  event: LocalEvent,
+  params: Record<string, unknown>,
+  phase: "started" | "completed"
+): DeviceWorkspace {
+  const item = readCodexThreadItem(params.item);
+  const turnId = readTurnId(event, params);
+  if (!item || !turnId) {
+    return workspace;
+  }
+  const normalizedItem = normalizeCodexThreadItem(item, {
+    defaultStatus: phase === "completed" ? "completed" : "inProgress",
+    latestSeq: event.seq,
+    source: "live",
+    turnStartedAt: event.ts / 1000
+  });
+  const startedAtMs = readNumber(params, "startedAtMs");
+  const completedAtMs = readNumber(params, "completedAtMs");
+  return upsertLiveTurnItems(workspace, event, turnId, [
+    {
+      ...normalizedItem,
+      ...(startedAtMs !== null ? { startedAtMs } : {}),
+      ...(completedAtMs !== null ? { completedAtMs } : {})
+    }
+  ]);
+}
+
+function applyAppServerReasoningDelta(
+  workspace: DeviceWorkspace,
+  event: LocalEvent
+): DeviceWorkspace {
+  const params = isRecord(event.payload) ? event.payload : null;
+  return params ? applyAppServerReasoningDeltaParams(workspace, event, params) : workspace;
+}
+
+function applyAppServerReasoningDeltaParams(
+  workspace: DeviceWorkspace,
+  event: LocalEvent,
+  params: Record<string, unknown>
+): DeviceWorkspace {
+  const turnId = readTurnId(event, params);
+  const itemId = readString(params, "itemId");
+  const delta = readString(params, "delta") ?? "";
+  if (!turnId || !itemId || !delta) {
+    return workspace;
+  }
+  return appendLiveTurnItemText(workspace, event, turnId, itemId, {
+    type: CodexThreadItemType.Reasoning,
+    role: null,
+    target: "text",
+    delta
+  });
+}
+
+function applyAppServerItemDelta(
+  workspace: DeviceWorkspace,
+  event: LocalEvent,
+  params: Record<string, unknown>,
+  input: {
+    type: string;
+    target: "text" | "aggregatedOutput";
+  }
+): DeviceWorkspace {
+  const turnId = readTurnId(event, params);
+  const itemId = readString(params, "itemId");
+  const delta = readString(params, "delta") ?? "";
+  if (!turnId || !itemId || !delta) {
+    return workspace;
+  }
+  return appendLiveTurnItemText(workspace, event, turnId, itemId, {
+    type: input.type,
+    role: codexThreadItemRole({ id: itemId, type: input.type }),
+    target: input.target,
+    delta: input.target === "aggregatedOutput" ? stripAnsi(delta) : delta
+  });
+}
+
+function appendLiveTurnItemText(
+  workspace: DeviceWorkspace,
+  event: LocalEvent,
+  turnId: string,
+  itemId: string,
+  input: {
+    delta: string;
+    role: ChatItem["role"] | null;
+    target: "text" | "aggregatedOutput";
+    type: string;
+  }
+): DeviceWorkspace {
+  const key = liveConversationKey(workspace, event, turnId);
+  let next = ensureConversation(workspace, {
+    conversationKey: key,
+    sessionId: event.sessionId,
+    threadId: event.threadId
+  });
+  const canonicalKey = canonicalConversationKey(next, key);
+  const conversation = next.conversations[canonicalKey] ?? emptyConversation(canonicalKey);
+  const currentTurn = conversation.turns[turnId] ?? emptyLiveTurn(turnId, event);
+  const currentItem = currentTurn.items[itemId] ?? emptyLiveTurnItem(itemId, input.type, input.role, event);
+  const nextItem: NormalizedConversationTurnItem =
+    input.target === "aggregatedOutput"
+      ? {
+          ...currentItem,
+          type: input.type,
+          role: input.role,
+          aggregatedOutput: `${currentItem.aggregatedOutput ?? ""}${input.delta}`,
+          text: commandExecutionText({
+            id: itemId,
+            type: input.type,
+            aggregatedOutput: `${currentItem.aggregatedOutput ?? ""}${input.delta}`
+          }),
+          updatedAt: Date.now()
+        }
+      : {
+          ...currentItem,
+          type: input.type,
+          role: input.role,
+          text: `${currentItem.text}${input.delta}`,
+          updatedAt: Date.now()
+        };
+  next = upsertLiveTurnItems(next, event, turnId, [nextItem]);
+  return syncConversationProjection(next, canonicalKey, {
+    sessionId: event.sessionId,
+    threadId: event.threadId
+  });
+}
+
+function applyTurnCompletedEvent(
+  workspace: DeviceWorkspace,
+  event: LocalEvent
+): DeviceWorkspace {
+  const params = isRecord(event.payload) ? event.payload : null;
+  const withTurn = params
+    ? applyTurnPayloadToTurnStore(workspace, event, params)
+    : workspace;
+  return markTurnItemsComplete(withTurn, event.turnId);
+}
+
+function applyTurnPayloadToTurnStore(
+  workspace: DeviceWorkspace,
+  event: LocalEvent,
+  params: Record<string, unknown>
+): DeviceWorkspace {
+  const turn = readCodexTurn(params.turn);
+  if (!turn) {
+    return workspace;
+  }
+  const key = liveConversationKey(workspace, event, turn.id);
+  let next = ensureConversation(workspace, {
+    conversationKey: key,
+    sessionId: event.sessionId,
+    threadId: event.threadId ?? readString(params, "threadId") ?? undefined
+  });
+  const canonicalKey = canonicalConversationKey(next, key);
+  next = upsertNormalizedTurns(
+    next,
+    canonicalKey,
+    normalizeCodexTurns([turn], {
+      latestSeq: event.seq,
+      source: "live"
+    }),
+    { latestSeq: event.seq }
+  );
+  return syncConversationProjection(next, canonicalKey, {
+    sessionId: event.sessionId,
+    threadId: event.threadId ?? readString(params, "threadId")
+  });
+}
+
+function upsertLiveTurnItems(
+  workspace: DeviceWorkspace,
+  event: LocalEvent,
+  turnId: string,
+  items: NormalizedConversationTurnItem[]
+): DeviceWorkspace {
+  const key = liveConversationKey(workspace, event, turnId);
+  let next = ensureConversation(workspace, {
+    conversationKey: key,
+    sessionId: event.sessionId,
+    threadId: event.threadId
+  });
+  const canonicalKey = canonicalConversationKey(next, key);
+  const conversation = next.conversations[canonicalKey] ?? emptyConversation(canonicalKey);
+  const currentTurn = conversation.turns[turnId] ?? emptyLiveTurn(turnId, event);
+  const incomingTurn: NormalizedConversationTurn = {
+    ...currentTurn,
+    itemOrder: mergeTurnOrder(currentTurn.itemOrder, items.map((item) => item.id)),
+    items: mergeNormalizedTurnItems(
+      currentTurn.items,
+      Object.fromEntries(items.map((item) => [item.id, item]))
+    ),
+    latestSeq: Math.max(currentTurn.latestSeq ?? 0, event.seq) || null,
+    status: currentTurn.status === "completed" ? "completed" : "inProgress"
+  };
+  next = upsertNormalizedTurns(
+    next,
+    canonicalKey,
+    {
+      turnOrder: [turnId],
+      turns: {
+        [turnId]: incomingTurn
+      }
+    },
+    { latestSeq: event.seq }
+  );
+  return syncConversationProjection(next, canonicalKey, {
+    sessionId: event.sessionId,
+    threadId: event.threadId
+  });
+}
+
+function syncConversationProjection(
+  workspace: DeviceWorkspace,
+  key: ConversationKey,
+  input: { sessionId?: string | undefined; threadId?: string | null | undefined }
+): DeviceWorkspace {
+  const canonicalKey = canonicalConversationKey(workspace, key);
+  const conversation = workspace.conversations[canonicalKey];
+  if (!conversation) {
+    return workspace;
+  }
+  const projected = projectNormalizedTurnsToChatItems(conversation, input);
+  const projectedIds = new Set(projected.map((item) => item.id));
+  return updateConversationItems(workspace, canonicalKey, (items) => [
+    ...projected,
+    ...items.filter((item) => {
+      if (isTurnStoreProjectedItem(item)) {
+        return !projectedIds.has(item.id);
+      }
+      return shouldPreserveAfterProjection(item, projected, projected, items);
+    })
+  ]);
+}
+
+function setConversationLatestSeqForEvent(
+  workspace: DeviceWorkspace,
+  event: LocalEvent
+): DeviceWorkspace {
+  const key = findConversationKeyForTurn(
+    workspace,
+    event.sessionId,
+    event.threadId,
+    event.turnId
+  );
+  return key ? setConversationLatestSeq(workspace, key, event.seq) : workspace;
+}
+
+function hasTurnStoreRenderableText(
+  workspace: DeviceWorkspace,
+  sessionId: string | undefined,
+  threadId: string | undefined,
+  turnId: string | undefined,
+  role: ChatItem["role"]
+): boolean {
+  const key = findConversationKeyForTurn(workspace, sessionId, threadId, turnId);
+  if (!key || !turnId) {
+    return false;
+  }
+  const turn = workspace.conversations[canonicalConversationKey(workspace, key)]?.turns[turnId];
+  return Boolean(
+    turn?.itemOrder.some((itemId) => {
+      const item = turn.items[itemId];
+      return item?.role === role && item.text.trim().length > 0;
+    })
+  );
+}
+
+function isTurnStoreProjectedItem(item: ChatItem): boolean {
+  return item.meta?.source === "turn-store";
+}
+
+function liveConversationKey(
+  workspace: DeviceWorkspace,
+  event: LocalEvent,
+  turnId: string
+): ConversationKey {
+  return (
+    findConversationKeyForTurn(workspace, event.sessionId, event.threadId, turnId) ??
+    conversationKeyFor({ sessionId: event.sessionId, threadId: event.threadId })
+  );
+}
+
+function emptyLiveTurn(turnId: string, event: LocalEvent): NormalizedConversationTurn {
+  return {
+    id: turnId,
+    itemOrder: [],
+    items: {},
+    itemsView: "full",
+    status: "inProgress",
+    error: null,
+    startedAt: event.ts / 1000,
+    completedAt: null,
+    durationMs: null,
+    latestSeq: event.seq
+  };
+}
+
+function emptyLiveTurnItem(
+  itemId: string,
+  type: string,
+  role: ChatItem["role"] | null,
+  event: LocalEvent
+): NormalizedConversationTurnItem {
+  return {
+    id: itemId,
+    type,
+    kind: codexThreadItemRenderKind({ type }),
+    role,
+    text: "",
+    createdAt: event.ts,
+    updatedAt: Date.now()
+  };
+}
+
+function readCodexThreadItem(value: unknown): CodexThreadItem | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.type !== "string") {
+    return null;
+  }
+  return value as unknown as CodexThreadItem;
+}
+
+function readCodexTurn(value: unknown): CodexThreadTurn | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    !Array.isArray(value.items) ||
+    typeof value.itemsView !== "string" ||
+    typeof value.status !== "string"
+  ) {
+    return null;
+  }
+  return value as unknown as CodexThreadTurn;
+}
+
+function readTurnId(event: LocalEvent, params: Record<string, unknown>): string | null {
+  return event.turnId ?? readString(params, "turnId");
+}
+
+function readString(record: Record<string, unknown>, field: string): string | null {
+  const value = record[field];
+  return typeof value === "string" ? value : null;
+}
+
+function readNumber(record: Record<string, unknown>, field: string): number | null {
+  const value = record[field];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function upsertTurnScopedItem(
@@ -1492,19 +2383,6 @@ function addChatItemToWorkspace(
   return materializeWorkspace(next);
 }
 
-function dedupeChatItemsById(items: ChatItem[]): ChatItem[] {
-  const seen = new Set<string>();
-  const next: ChatItem[] = [];
-  for (const item of items) {
-    if (seen.has(item.id)) {
-      continue;
-    }
-    seen.add(item.id);
-    next.push(item);
-  }
-  return next;
-}
-
 function reassignHistoryPageState(
   pages: Record<string, SessionHistoryPageState>,
   fromSessionId: string,
@@ -1590,6 +2468,65 @@ function historyConfirmsUserTurn(
 
 function isHistoryReplaceableRole(role: ChatItem["role"]): boolean {
   return role === "user" || role === "assistant" || role === "command";
+}
+
+function shouldPreserveAfterProjection(
+  item: ChatItem,
+  projectedItems: ChatItem[],
+  incomingHistoryItems: ChatItem[],
+  liveItems: ChatItem[]
+): boolean {
+  if (isTurnStoreProjectedItem(item)) {
+    return false;
+  }
+  if (matchesProjectedClientMessage(item, projectedItems)) {
+    return false;
+  }
+  if (matchesProjectedRenderableMessage(item, projectedItems)) {
+    return false;
+  }
+  if (
+    isOptimisticThinkingItem(item) &&
+    item.turnId &&
+    projectedHasResponseForTurn(projectedItems, item.turnId)
+  ) {
+    return false;
+  }
+  return shouldPreserveAfterHistoryHydration(item, incomingHistoryItems, liveItems);
+}
+
+function matchesProjectedClientMessage(item: ChatItem, projectedItems: ChatItem[]): boolean {
+  return Boolean(
+    item.clientMessageId &&
+      projectedItems.some(
+        (projected) =>
+          projected.clientMessageId === item.clientMessageId &&
+          projected.role === item.role
+      )
+  );
+}
+
+function matchesProjectedRenderableMessage(item: ChatItem, projectedItems: ChatItem[]): boolean {
+  if (!item.turnId) {
+    return false;
+  }
+  return projectedItems.some(
+    (projected) =>
+      projected.turnId === item.turnId &&
+      projected.role === item.role &&
+      sameRenderableMessage(projected, item)
+  );
+}
+
+function projectedHasResponseForTurn(projectedItems: ChatItem[], turnId: string): boolean {
+  return projectedItems.some(
+    (projected) =>
+      projected.turnId === turnId &&
+      (projected.role === "assistant" ||
+        projected.role === "command" ||
+        projected.role === "diff") &&
+      projected.text.trim().length > 0
+  );
 }
 
 function appendStreamingItemToWorkspace(

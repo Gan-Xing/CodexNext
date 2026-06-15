@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { readdir } from "node:fs/promises";
 import type {
+  CodexThreadTurn,
   CodexThread,
   CodexThreadItem,
   LocalCodexHistoryDetailResponse,
@@ -379,6 +380,7 @@ async function listCodexHistoryTurns(
     return {
       entry: detail.entry,
       messages: detail.messages,
+      turns: detail.turns,
       nextCursor: null,
       backwardsCursor: null
     };
@@ -416,7 +418,12 @@ async function readCodexHistoryDetailById(
   if (historyStore) {
     const detail = await historyStore.readDetail(id, loadedThreadIds);
     if (detail) {
-      return detail;
+      return detail.turns.length > 0
+        ? detail
+        : {
+            ...detail,
+            turns: historyMessagesToSyntheticTurns(id, detail.messages)
+          };
     }
   }
   const response = await sessionManager.readThread({
@@ -425,7 +432,8 @@ async function readCodexHistoryDetailById(
   });
   return {
     entry: await threadToHistoryEntry(response.thread),
-    messages: threadToHistoryMessages(response.thread)
+    messages: threadToHistoryMessages(response.thread),
+    turns: response.thread.turns ?? []
   };
 }
 
@@ -534,6 +542,7 @@ function historyPageFromTurns(input: {
   return {
     entry: input.entry,
     messages: turnsToHistoryMessages(orderedTurns),
+    turns: orderedTurns,
     nextCursor: input.turnsPage?.nextCursor ?? null,
     backwardsCursor: input.turnsPage?.backwardsCursor ?? null
   };
@@ -556,6 +565,66 @@ function turnsToHistoryMessages(
     });
   }
   return messages;
+}
+
+function historyMessagesToSyntheticTurns(
+  threadId: string,
+  messages: LocalCodexHistoryMessage[]
+): CodexThreadTurn[] {
+  return messages.map((message, index) => {
+    const tsMs = Date.parse(message.ts);
+    const ts = Number.isFinite(tsMs) ? tsMs / 1000 : null;
+    return {
+      id: `synthetic-${threadId}-${message.id || index}`,
+      items: [historyMessageToSyntheticThreadItem(message, index)],
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: ts,
+      completedAt: ts,
+      durationMs: null
+    };
+  });
+}
+
+function historyMessageToSyntheticThreadItem(
+  message: LocalCodexHistoryMessage,
+  index: number
+): CodexThreadItem {
+  const id = message.id || `message-${index}`;
+  switch (message.role) {
+    case "user":
+      return {
+        id,
+        type: "userMessage",
+        content: [{ type: "text", text: message.text, text_elements: [] }]
+      };
+    case "assistant":
+      return {
+        id,
+        type: "agentMessage",
+        text: message.text
+      };
+    case "command":
+      return {
+        id,
+        type: "commandExecution",
+        command: "",
+        aggregatedOutput: message.text
+      };
+    case "diff":
+      return {
+        id,
+        type: "fileChange",
+        text: message.text,
+        changes: []
+      };
+    default:
+      return {
+        id,
+        type: "contextCompaction"
+      };
+  }
 }
 
 function threadItemToHistoryMessage(

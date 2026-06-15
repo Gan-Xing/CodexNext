@@ -36,6 +36,7 @@ import type {
 } from "@codexnext/protocol";
 import {
   CodexNotificationMethod,
+  codexThreadItemRenderKind,
   deriveCodexConversationTitle,
   deriveCodexGeneratedTitle,
   LocalEventType,
@@ -1442,6 +1443,36 @@ export class SessionManager {
         this.emitSessionUpdated(session);
         return;
       }
+      case CodexNotificationMethod.ItemStarted:
+        devTrace("codex.notification.item_started", {
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          ...threadItemTraceFields(notification.params)
+        });
+        this.options.eventStore.append({
+          type: LocalEventType.AppServerItemStarted,
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          payload: notification.params
+        });
+        return;
+      case CodexNotificationMethod.ItemCompleted:
+        devTrace("codex.notification.item_completed", {
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          ...threadItemTraceFields(notification.params)
+        });
+        this.options.eventStore.append({
+          type: LocalEventType.AppServerItemCompleted,
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          payload: notification.params
+        });
+        return;
       case CodexNotificationMethod.ThreadGoalUpdated:
         devTrace("codex.notification.goal_updated", {
           sessionId: session.sessionId,
@@ -1533,6 +1564,43 @@ export class SessionManager {
         });
         return;
       }
+      case CodexNotificationMethod.ProcessOutputDelta: {
+        const output = decodeBase64Field(notification.params, "deltaBase64");
+        devTrace("codex.notification.process_output_delta", {
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          processHandle: readStringField(notification.params, "processHandle"),
+          outputLength: output.length
+        });
+        this.options.eventStore.append({
+          type: LocalEventType.AppServerProcessOutput,
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          payload: {
+            ...recordPayload(notification.params),
+            text: output
+          }
+        });
+        return;
+      }
+      case CodexNotificationMethod.ProcessExited:
+        devTrace("codex.notification.process_exited", {
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          processHandle: readStringField(notification.params, "processHandle"),
+          exitCode: readNumberField(notification.params, "exitCode")
+        });
+        this.options.eventStore.append({
+          type: LocalEventType.AppServerProcessExited,
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          payload: notification.params
+        });
+        return;
       case CodexNotificationMethod.TurnDiffUpdated: {
         const diff = readStringField(notification.params, "diff") ?? "";
         devTrace("codex.notification.diff_updated", {
@@ -1561,6 +1629,41 @@ export class SessionManager {
         });
         this.options.eventStore.append({
           type: LocalEventType.PlanUpdated,
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          payload: notification.params
+        });
+        return;
+      case CodexNotificationMethod.ReasoningSummaryTextDelta:
+      case CodexNotificationMethod.ReasoningSummaryPartAdded:
+      case CodexNotificationMethod.ReasoningTextDelta:
+        devTrace("codex.notification.reasoning_delta", {
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          method: notification.method,
+          itemId: readStringField(notification.params, "itemId"),
+          deltaLength: readStringField(notification.params, "delta")?.length ?? 0
+        });
+        this.options.eventStore.append({
+          type: LocalEventType.AppServerReasoningDelta,
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          payload: notification.params
+        });
+        return;
+      case CodexNotificationMethod.McpToolCallProgress:
+        devTrace("codex.notification.mcp_progress", {
+          sessionId: session.sessionId,
+          threadId,
+          turnId,
+          itemId: readStringField(notification.params, "itemId"),
+          messageLength: readStringField(notification.params, "message")?.length ?? 0
+        });
+        this.options.eventStore.append({
+          type: LocalEventType.AppServerMcpProgress,
           sessionId: session.sessionId,
           threadId,
           turnId,
@@ -2026,9 +2129,44 @@ function readStringField(params: unknown, field: string): string | undefined {
   return typeof params[field] === "string" ? params[field] : undefined;
 }
 
+function readNumberField(params: unknown, field: string): number | undefined {
+  if (!isRecord(params)) {
+    return undefined;
+  }
+  return typeof params[field] === "number" ? params[field] : undefined;
+}
+
+function recordPayload(params: unknown): Record<string, unknown> {
+  return isRecord(params) ? params : {};
+}
+
+function threadItemTraceFields(params: unknown): Record<string, unknown> {
+  if (!isRecord(params) || !isRecord(params.item)) {
+    return {
+      itemId: null,
+      itemType: null,
+      renderKind: "metadata"
+    };
+  }
+  const itemId = typeof params.item.id === "string" ? params.item.id : null;
+  const itemType = typeof params.item.type === "string" ? params.item.type : null;
+  return {
+    itemId,
+    itemType,
+    renderKind: itemType
+      ? codexThreadItemRenderKind({ type: itemType })
+      : "metadata"
+  };
+}
+
 function decodeCommandExecOutput(params: unknown): string {
-  if (!isRecord(params) || typeof params.deltaBase64 !== "string") {
+  return decodeBase64Field(params, "deltaBase64");
+}
+
+function decodeBase64Field(params: unknown, field: string): string {
+  const encoded = readStringField(params, field);
+  if (!encoded) {
     return "";
   }
-  return Buffer.from(params.deltaBase64, "base64").toString("utf8");
+  return Buffer.from(encoded, "base64").toString("utf8");
 }
