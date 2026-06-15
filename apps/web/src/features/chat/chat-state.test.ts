@@ -124,10 +124,13 @@ describe("chat state", () => {
 
     expect(next.chatItems).toHaveLength(2);
     expect(next.chatItems[0]).toMatchObject({
-      id: "event_1",
       sessionId: "session_1",
       turnId: "turn_1",
-      status: "sent"
+      status: "sent",
+      meta: {
+        appServerItemId: "event_1",
+        source: "turn-store"
+      }
     });
     expect(next.chatItems[1]).toMatchObject({
       role: "system",
@@ -158,7 +161,12 @@ describe("chat state", () => {
     });
 
     expect(second.chatItems).toHaveLength(1);
-    expect(second.chatItems[0]?.id).toBe(event.id);
+    expect(second.chatItems[0]).toMatchObject({
+      meta: {
+        appServerItemId: event.id,
+        source: "turn-store"
+      }
+    });
   });
 
   it("remembers resumed history origin from session.created replay", () => {

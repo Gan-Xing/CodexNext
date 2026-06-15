@@ -72,6 +72,10 @@ boundary.
   before chat rendering. Refresh, cold switching, replay, and live streaming
   must project from that store instead of maintaining separate history/live UI
   paths.
+- [x] Status: completed - Local submit state, thinking feedback, ack binding,
+  agent errors, legacy assistant/command/diff deltas, and outbox recovery are
+  represented as turn/items first. `ChatItem` is a projection for the current
+  renderer, not a business-state write target for those flows.
 - [x] Status: completed - Model selection remains part of the start/resume/turn
   path. Schema or adapter work must not drop the selected model when switching
   or sending.

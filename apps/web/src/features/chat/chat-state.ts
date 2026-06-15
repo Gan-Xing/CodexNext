@@ -74,8 +74,10 @@ export interface NormalizedConversationTurnItem {
   completedAtMs?: number | undefined;
   content?: unknown;
   createdAt?: number | undefined;
+  error?: string | undefined;
   id: string;
   kind: "user" | "assistant" | "process" | "metadata";
+  metaKind?: "thinking" | "error" | "legacy" | undefined;
   role: ChatItem["role"] | null;
   startedAtMs?: number | undefined;
   status?: unknown;
@@ -131,6 +133,18 @@ type LocalCodexHistoryEntryLike = LocalCodexHistoryDetailResponse["entry"];
 const THINKING_TEXT = "正在思考";
 const CONVERSATION_CACHE_THREAD_LIMIT = 120;
 const CONVERSATION_CACHE_MESSAGE_LIMIT = 100;
+const LOCAL_THREAD_ITEM_TYPE = {
+  Thinking: "local.thinking",
+  Error: "local.error"
+} as const;
+const CHAT_ITEM_STATUSES = new Set<ChatItem["status"]>([
+  "pending",
+  "sending",
+  "sent",
+  "failed",
+  "streaming",
+  "complete"
+]);
 
 export interface SessionHistoryPageState {
   loadingOlder: boolean;
@@ -280,33 +294,33 @@ export function restoreOutboxEntries(
       threadId: entry.threadId,
       pendingClientId: entry.clientMessageId
     });
-    const itemStatus: ChatItem["status"] =
-      entry.status === "pending" ? "pending" : entry.status;
-    const userItem: ChatItem = {
-        id: `optimistic:${entry.clientMessageId}`,
-        role: "user",
-        text: entry.text,
-        ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
-        ...(entry.turnId ? { turnId: entry.turnId } : {}),
-        clientMessageId: entry.clientMessageId,
-        status: itemStatus,
-        createdAt: entry.createdAt
-      };
-    const feedbackItem: ChatItem = {
-        id: `optimistic-thinking:${entry.clientMessageId}`,
-        role: "system",
-        text: entry.status === "failed" ? entry.error ?? "消息发送失败" : THINKING_TEXT,
-        ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
-        ...(entry.turnId ? { turnId: entry.turnId } : {}),
-        status: entry.status === "failed" ? "failed" : "streaming",
-        createdAt: entry.createdAt,
-        meta: {
-          clientMessageId: entry.clientMessageId,
-          kind: entry.status === "failed" ? "error" : "thinking"
-        }
-      };
-    next = upsertConversationItems(next, conversationKey, [userItem, feedbackItem]);
     next = setOutboxEntry(next, entry);
+    next = upsertLocalTurnItems(next, {
+      key: conversationKey,
+      sessionId: entry.sessionId,
+      threadId: entry.threadId,
+      turnId: entry.turnId ?? pendingTurnIdForClientMessage(entry.clientMessageId),
+      items: [
+        localUserTurnItem({
+          clientMessageId: entry.clientMessageId,
+          text: entry.text,
+          status: entry.status === "pending" ? "pending" : entry.status,
+          ...(entry.error ? { error: entry.error } : {}),
+          createdAt: entry.createdAt
+        }),
+        entry.status === "failed"
+          ? localErrorTurnItem({
+              clientMessageId: entry.clientMessageId,
+              text: entry.error ?? "消息发送失败",
+              createdAt: entry.createdAt
+            })
+          : localThinkingTurnItem({
+              clientMessageId: entry.clientMessageId,
+              createdAt: entry.createdAt
+            })
+      ],
+      turnStatus: entry.status === "failed" ? "failed" : "inProgress"
+    });
   }
   return materializeWorkspace(next);
 }
@@ -797,8 +811,7 @@ function mergeNormalizedTurn(
   return {
     ...current,
     ...incoming,
-    itemOrder: mergeTurnOrder(current.itemOrder, incoming.itemOrder),
-    items: mergeNormalizedTurnItems(current.items, incoming.items, {
+    ...mergeNormalizedTurnItemsWithOrder(current, incoming, {
       preferExistingText
     }),
     status,
@@ -815,27 +828,93 @@ function mergeNormalizedTurnItems(
   incoming: Record<string, NormalizedConversationTurnItem>,
   options: { preferExistingText?: boolean } = {}
 ): Record<string, NormalizedConversationTurnItem> {
-  const next = { ...existing };
-  for (const [itemId, incomingItem] of Object.entries(incoming)) {
-    const current = next[itemId];
-    next[itemId] = current
-      ? {
-          ...current,
-          ...incomingItem,
-          text: mergeNormalizedItemText(current.text, incomingItem.text, options),
-          aggregatedOutput:
-            incomingItem.aggregatedOutput !== undefined
-              ? mergeNormalizedItemText(
-                  current.aggregatedOutput ?? "",
-                  incomingItem.aggregatedOutput ?? "",
-                  options
-                )
-              : current.aggregatedOutput,
-          updatedAt: Date.now()
-        }
-      : incomingItem;
+  return mergeNormalizedTurnItemsWithOrder(
+    {
+      itemOrder: Object.keys(existing),
+      items: existing
+    },
+    {
+      itemOrder: Object.keys(incoming),
+      items: incoming
+    },
+    options
+  ).items;
+}
+
+function mergeNormalizedTurnItemsWithOrder(
+  current: Pick<NormalizedConversationTurn, "itemOrder" | "items">,
+  incoming: Pick<NormalizedConversationTurn, "itemOrder" | "items">,
+  options: { preferExistingText?: boolean } = {}
+): Pick<NormalizedConversationTurn, "itemOrder" | "items"> {
+  const next = { ...current.items };
+  let itemOrder = [...current.itemOrder];
+  for (const [itemId, incomingItem] of Object.entries(incoming.items)) {
+    const semanticId = findSemanticTurnItemId(next, itemOrder, incomingItem);
+    const targetId = semanticId ?? itemId;
+    const currentItem = next[targetId];
+    const mergedItem = currentItem
+      ? mergeNormalizedTurnItem(currentItem, incomingItem, targetId, options)
+      : { ...incomingItem, id: targetId };
+    if (semanticId && semanticId !== itemId) {
+      delete next[semanticId];
+      itemOrder = itemOrder.map((id) => (id === semanticId ? itemId : id));
+      next[itemId] = {
+        ...mergedItem,
+        id: itemId
+      };
+      continue;
+    }
+    next[targetId] = mergedItem;
+    itemOrder = mergeTurnOrder(itemOrder, [targetId]);
   }
-  return next;
+  return {
+    itemOrder,
+    items: next
+  };
+}
+
+function mergeNormalizedTurnItem(
+  current: NormalizedConversationTurnItem,
+  incoming: NormalizedConversationTurnItem,
+  id: string,
+  options: { preferExistingText?: boolean } = {}
+): NormalizedConversationTurnItem {
+  return {
+    ...current,
+    ...incoming,
+    id,
+    text: mergeNormalizedItemText(current.text, incoming.text, options),
+    aggregatedOutput:
+      incoming.aggregatedOutput !== undefined
+        ? mergeNormalizedItemText(
+            current.aggregatedOutput ?? "",
+            incoming.aggregatedOutput ?? "",
+            options
+          )
+        : current.aggregatedOutput,
+    updatedAt: Date.now()
+  };
+}
+
+function findSemanticTurnItemId(
+  items: Record<string, NormalizedConversationTurnItem>,
+  itemOrder: string[],
+  incoming: NormalizedConversationTurnItem
+): string | null {
+  const incomingKey = semanticTurnItemKey(incoming);
+  if (!incomingKey) {
+    return null;
+  }
+  return itemOrder.find((itemId) => semanticTurnItemKey(items[itemId]) === incomingKey) ?? null;
+}
+
+function semanticTurnItemKey(
+  item: NormalizedConversationTurnItem | undefined
+): string | null {
+  if (!item?.clientMessageId || !item.role) {
+    return null;
+  }
+  return `${item.role}:${item.clientMessageId}`;
 }
 
 function mergeNormalizedItemText(
@@ -866,6 +945,7 @@ function projectNormalizedTurnsToChatItems(
       turn.itemOrder
         .map((itemId) => turn.items[itemId])
         .filter((item): item is NormalizedConversationTurnItem => Boolean(item))
+        .filter((item) => shouldProjectTurnItem(turn, item))
         .map((item) => normalizedTurnItemToChatItem(turn, item, input.sessionId))
         .filter((item): item is ChatItem => Boolean(item))
     );
@@ -879,12 +959,7 @@ function normalizedTurnItemToChatItem(
   if (!item.role || item.text.trim().length === 0) {
     return null;
   }
-  const status: ChatItem["status"] =
-    turn.status === "completed"
-      ? "complete"
-      : turn.status === "failed"
-        ? "failed"
-        : "streaming";
+  const status = chatStatusForTurnItem(turn, item);
   return {
     id: `turn-${turn.id}-${item.id}`,
     role: item.role,
@@ -893,6 +968,7 @@ function normalizedTurnItemToChatItem(
     turnId: turn.id,
     ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
     status,
+    ...(item.error ? { error: item.error } : {}),
     createdAt:
       item.createdAt ??
       timestampSecondsToMs(turn.startedAt) ??
@@ -901,9 +977,56 @@ function normalizedTurnItemToChatItem(
     meta: {
       appServerItemId: item.id,
       appServerItemType: item.type,
-      source: "turn-store"
+      source: "turn-store",
+      ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
+      ...(item.metaKind ? { kind: item.metaKind } : {})
     }
   };
+}
+
+function shouldProjectTurnItem(
+  turn: NormalizedConversationTurn,
+  item: NormalizedConversationTurnItem
+): boolean {
+  if (item.metaKind !== "thinking") {
+    return true;
+  }
+  return !turnHasRenderableResponse(turn);
+}
+
+function turnHasRenderableResponse(turn: NormalizedConversationTurn): boolean {
+  return turn.itemOrder.some((itemId) => {
+    const item = turn.items[itemId];
+    return Boolean(
+      item &&
+        (item.role === "assistant" || item.role === "command" || item.role === "diff") &&
+        item.text.trim().length > 0 &&
+        item.metaKind !== "error"
+    );
+  });
+}
+
+function chatStatusForTurnItem(
+  turn: NormalizedConversationTurn,
+  item: NormalizedConversationTurnItem
+): ChatItem["status"] {
+  const itemStatus = normalizeChatStatus(item.status);
+  if (itemStatus) {
+    return itemStatus;
+  }
+  if (turn.status === "completed") {
+    return "complete";
+  }
+  if (turn.status === "failed") {
+    return "failed";
+  }
+  return "streaming";
+}
+
+function normalizeChatStatus(value: unknown): ChatItem["status"] | null {
+  return typeof value === "string" && CHAT_ITEM_STATUSES.has(value as ChatItem["status"])
+    ? (value as ChatItem["status"])
+    : null;
 }
 
 function codexThreadItemRole(item: CodexThreadItem): ChatItem["role"] | null {
@@ -1233,51 +1356,226 @@ function updateOutboxStatusByTurn(
   );
 }
 
-export function createOptimisticUserMessage(input: {
+function pendingTurnIdForClientMessage(clientMessageId: string): string {
+  return `local-turn:${clientMessageId}`;
+}
+
+function localUserTurnItem(input: {
+  clientMessageId: string;
+  createdAt: number;
+  error?: string | undefined;
+  id?: string | undefined;
+  status: ChatItem["status"];
+  text: string;
+}): NormalizedConversationTurnItem {
+  return {
+    id: input.id ?? `local-user:${input.clientMessageId}`,
+    type: CodexThreadItemType.UserMessage,
+    kind: "user",
+    role: "user",
+    text: input.text,
+    clientMessageId: input.clientMessageId,
+    status: input.status,
+    ...(input.error ? { error: input.error } : {}),
+    createdAt: input.createdAt,
+    updatedAt: Date.now()
+  };
+}
+
+function localThinkingTurnItem(input: {
+  clientMessageId: string;
+  createdAt: number;
+}): NormalizedConversationTurnItem {
+  return {
+    id: `local-thinking:${input.clientMessageId}`,
+    type: LOCAL_THREAD_ITEM_TYPE.Thinking,
+    kind: "metadata",
+    role: "system",
+    text: THINKING_TEXT,
+    clientMessageId: input.clientMessageId,
+    metaKind: "thinking",
+    status: "streaming",
+    createdAt: input.createdAt,
+    updatedAt: Date.now()
+  };
+}
+
+function localErrorTurnItem(input: {
+  clientMessageId?: string | undefined;
+  createdAt: number;
+  id?: string | undefined;
+  text: string;
+}): NormalizedConversationTurnItem {
+  const id = input.id ?? `local-error:${input.clientMessageId ?? input.createdAt}`;
+  return {
+    id,
+    type: LOCAL_THREAD_ITEM_TYPE.Error,
+    kind: "metadata",
+    role: "system",
+    text: input.text,
+    ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
+    metaKind: "error",
+    status: "failed",
+    error: input.text,
+    createdAt: input.createdAt,
+    updatedAt: Date.now()
+  };
+}
+
+function upsertLocalTurnItems(
+  workspace: DeviceWorkspace,
+  input: {
+    key: ConversationKey;
+    items: NormalizedConversationTurnItem[];
+    latestSeq?: number | null | undefined;
+    sessionId?: string | undefined;
+    threadId?: string | undefined;
+    turnId: string;
+    turnStatus: NormalizedConversationTurn["status"];
+  }
+): DeviceWorkspace {
+  let next = ensureConversation(workspace, {
+    conversationKey: input.key,
+    sessionId: input.sessionId,
+    threadId: input.threadId
+  });
+  const canonicalKey = canonicalConversationKey(next, input.key);
+  const conversation = next.conversations[canonicalKey] ?? emptyConversation(canonicalKey);
+  const currentTurn = conversation.turns[input.turnId] ?? emptyLocalTurn(input.turnId, input);
+  const mergedItems = mergeNormalizedTurnItemsWithOrder(currentTurn, {
+    itemOrder: input.items.map((item) => item.id),
+    items: Object.fromEntries(input.items.map((item) => [item.id, item]))
+  });
+  const incomingTurn: NormalizedConversationTurn = {
+    ...currentTurn,
+    itemOrder: mergedItems.itemOrder,
+    items: mergedItems.items,
+    latestSeq:
+      input.latestSeq !== undefined
+        ? Math.max(currentTurn.latestSeq ?? 0, input.latestSeq ?? 0) || null
+        : currentTurn.latestSeq,
+    status: input.turnStatus
+  };
+  next = upsertNormalizedTurns(
+    next,
+    canonicalKey,
+    {
+      turnOrder: [input.turnId],
+      turns: {
+        [input.turnId]: incomingTurn
+      }
+    },
+    input.latestSeq !== undefined ? { latestSeq: input.latestSeq } : {}
+  );
+  return syncConversationProjection(next, canonicalKey, {
+    sessionId: input.sessionId,
+    threadId: input.threadId
+  });
+}
+
+function emptyLocalTurn(
+  turnId: string,
+  input: {
+    latestSeq?: number | null | undefined;
+    turnStatus: NormalizedConversationTurn["status"];
+  }
+): NormalizedConversationTurn {
+  return {
+    id: turnId,
+    itemOrder: [],
+    items: {},
+    itemsView: "full",
+    status: input.turnStatus,
+    error: null,
+    startedAt: Date.now() / 1000,
+    completedAt: null,
+    durationMs: null,
+    latestSeq: input.latestSeq ?? null
+  };
+}
+
+function remapPendingTurnToServerTurn(
+  workspace: DeviceWorkspace,
+  key: ConversationKey,
+  clientMessageId: string,
+  serverTurnId: string
+): DeviceWorkspace {
+  const pendingTurnId = pendingTurnIdForClientMessage(clientMessageId);
+  if (pendingTurnId === serverTurnId) {
+    return workspace;
+  }
+  const canonicalKey = canonicalConversationKey(workspace, key);
+  const conversation = workspace.conversations[canonicalKey];
+  const pendingTurn = conversation?.turns[pendingTurnId];
+  if (!conversation || !pendingTurn) {
+    return workspace;
+  }
+  const currentServerTurn = conversation.turns[serverTurnId] ?? {
+    ...pendingTurn,
+    id: serverTurnId,
+    itemOrder: [],
+    items: {}
+  };
+  const mergedServerTurn = mergeNormalizedTurn(currentServerTurn, {
+    ...pendingTurn,
+    id: serverTurnId
+  });
+  const turns = { ...conversation.turns };
+  delete turns[pendingTurnId];
+  turns[serverTurnId] = mergedServerTurn;
+  const turnOrder = conversation.turnOrder.map((turnId) =>
+    turnId === pendingTurnId ? serverTurnId : turnId
+  );
+  return materializeWorkspace({
+    ...workspace,
+    conversations: {
+      ...workspace.conversations,
+      [canonicalKey]: {
+        ...conversation,
+        turnOrder: [...new Set(turnOrder)],
+        turns,
+        updatedAt: Date.now()
+      }
+    }
+  });
+}
+
+function findTurnItemByClientMessageId(
+  turn: NormalizedConversationTurn | undefined,
+  clientMessageId: string,
+  role: ChatItem["role"]
+): NormalizedConversationTurnItem | null {
+  return (
+    turn?.itemOrder
+      .map((itemId) => turn.items[itemId])
+      .find((item) => item?.clientMessageId === clientMessageId && item.role === role) ??
+    null
+  );
+}
+
+function readTurnItemText(
+  workspace: DeviceWorkspace,
+  key: ConversationKey,
+  turnId: string,
+  itemId: string
+): string {
+  const canonicalKey = canonicalConversationKey(workspace, key);
+  return workspace.conversations[canonicalKey]?.turns[turnId]?.items[itemId]?.text ?? "";
+}
+
+export interface OptimisticUserMessageInput {
   clientMessageId: string;
   sessionId: string;
   text: string;
   turnId?: string;
-}): ChatItem {
-  return {
-    id: `optimistic:${input.clientMessageId}`,
-    role: "user",
-    text: input.text,
-    sessionId: input.sessionId,
-    ...(input.turnId ? { turnId: input.turnId } : {}),
-    clientMessageId: input.clientMessageId,
-    status: "pending",
-    createdAt: Date.now()
-  };
-}
-
-function createOptimisticThinkingItem(input: {
-  clientMessageId: string;
-  sessionId: string;
-  turnId?: string;
-}): ChatItem {
-  return {
-    id: `optimistic-thinking:${input.clientMessageId}`,
-    role: "system",
-    text: THINKING_TEXT,
-    sessionId: input.sessionId,
-    ...(input.turnId ? { turnId: input.turnId } : {}),
-    status: "streaming",
-    createdAt: Date.now(),
-    meta: {
-      clientMessageId: input.clientMessageId,
-      kind: "thinking"
-    }
-  };
 }
 
 export function addOptimisticUserMessage(
   workspace: DeviceWorkspace,
-  input: Parameters<typeof createOptimisticUserMessage>[0]
+  input: OptimisticUserMessageInput
 ): DeviceWorkspace {
-  const message = createOptimisticUserMessage(input);
-  const thinking = createOptimisticThinkingItem(input);
-  const createdAt = message.createdAt ?? Date.now();
+  const createdAt = Date.now();
+  const turnId = input.turnId ?? pendingTurnIdForClientMessage(input.clientMessageId);
   const key = conversationKeyFor({
     pendingClientId: input.clientMessageId,
     sessionId: input.sessionId
@@ -1297,16 +1595,24 @@ export function addOptimisticUserMessage(
     ...(input.turnId ? { turnId: input.turnId } : {}),
     updatedAt: createdAt
   });
-  next = updateConversationItems(next, key, (items) => [
-    ...items.filter(
-      (item) =>
-        item.clientMessageId !== input.clientMessageId &&
-        !isOptimisticFeedbackItem(item, input.clientMessageId)
-    ),
-    message,
-    thinking
-  ]);
-  return materializeWorkspace(next);
+  return upsertLocalTurnItems(next, {
+    key,
+    sessionId: input.sessionId,
+    turnId,
+    items: [
+      localUserTurnItem({
+        clientMessageId: input.clientMessageId,
+        text: input.text,
+        status: "pending",
+        createdAt
+      }),
+      localThinkingTurnItem({
+        clientMessageId: input.clientMessageId,
+        createdAt
+      })
+    ],
+    turnStatus: "inProgress"
+  });
 }
 
 export function markOptimisticMessageSent(
@@ -1339,26 +1645,36 @@ export function markOptimisticMessageSent(
     threadId: input?.threadId
   });
   const finalKey = canonicalConversationKey(next, input?.threadId ?? input?.sessionId ?? key);
-  next = updateConversationItems(next, finalKey, (items) =>
-    items.map((item) =>
-      item.clientMessageId === clientMessageId
-        ? {
-            ...item,
-            ...(input?.eventId ? { id: input.eventId } : {}),
-            ...(input?.sessionId ? { sessionId: input.sessionId } : {}),
-            ...(input?.turnId ? { turnId: input.turnId } : {}),
-            error: undefined,
-            status: "sent"
-          }
-        : isOptimisticFeedbackItem(item, clientMessageId)
-          ? {
-              ...item,
-              ...(input?.sessionId ? { sessionId: input.sessionId } : {}),
-              ...(input?.turnId ? { turnId: input.turnId } : {})
-            }
-        : item
-    )
+  if (input?.turnId) {
+    next = remapPendingTurnToServerTurn(next, finalKey, clientMessageId, input.turnId);
+  }
+  const turnId = input?.turnId ?? outboxEntry?.turnId ?? pendingTurnIdForClientMessage(clientMessageId);
+  const conversation = next.conversations[canonicalConversationKey(next, finalKey)];
+  const existingUser = findTurnItemByClientMessageId(
+    conversation?.turns[turnId],
+    clientMessageId,
+    "user"
   );
+  next = upsertLocalTurnItems(next, {
+    key: finalKey,
+    sessionId: input?.sessionId ?? outboxEntry?.sessionId,
+    threadId: input?.threadId ?? outboxEntry?.threadId,
+    turnId,
+    items: [
+      localUserTurnItem({
+        id: input?.eventId ?? existingUser?.id,
+        clientMessageId,
+        text: existingUser?.text ?? outboxEntry?.text ?? "",
+        status: "sent",
+        createdAt: existingUser?.createdAt ?? outboxEntry?.createdAt ?? Date.now()
+      }),
+      localThinkingTurnItem({
+        clientMessageId,
+        createdAt: outboxEntry?.createdAt ?? Date.now()
+      })
+    ],
+    turnStatus: "inProgress"
+  });
   next = updateOutboxEntry(next, clientMessageId, (entry) => ({
     ...entry,
     conversationKey: finalKey,
@@ -1382,28 +1698,36 @@ export function markOptimisticMessageFailed(
   if (!key) {
     return workspace;
   }
-  let next = updateConversationItems(workspace, key, (items) =>
-    items.map((item) =>
-      item.clientMessageId === clientMessageId
-        ? {
-            ...item,
-            error,
-            status: "failed"
-          }
-        : isOptimisticFeedbackItem(item, clientMessageId)
-          ? {
-              ...item,
-              meta: {
-                ...item.meta,
-                clientMessageId,
-                kind: "error"
-              },
-              status: "failed",
-              text: error
-            }
-        : item
-    )
+  const outboxEntry = workspace.outbox[clientMessageId];
+  const turnId = outboxEntry?.turnId ?? pendingTurnIdForClientMessage(clientMessageId);
+  const conversation = workspace.conversations[canonicalConversationKey(workspace, key)];
+  const existingUser = findTurnItemByClientMessageId(
+    conversation?.turns[turnId],
+    clientMessageId,
+    "user"
   );
+  let next = upsertLocalTurnItems(workspace, {
+    key,
+    sessionId: outboxEntry?.sessionId,
+    threadId: outboxEntry?.threadId,
+    turnId,
+    items: [
+      localUserTurnItem({
+        id: existingUser?.id,
+        clientMessageId,
+        text: existingUser?.text ?? outboxEntry?.text ?? "",
+        status: "failed",
+        error,
+        createdAt: existingUser?.createdAt ?? outboxEntry?.createdAt ?? Date.now()
+      }),
+      localErrorTurnItem({
+        clientMessageId,
+        text: error,
+        createdAt: Date.now()
+      })
+    ],
+    turnStatus: "failed"
+  });
   next = updateOutboxEntry(next, clientMessageId, (entry) => ({
     ...entry,
     error,
@@ -1538,6 +1862,7 @@ export function hydrateSessionFromTurns(
   next = upsertNormalizedTurns(next, canonicalKey, normalizedTurns, {
     order: "incoming-first"
   });
+  next = removeHistoryConfirmedLocalTurns(next, canonicalKey, incomingHistoryItems);
   const mergedConversation = next.conversations[canonicalKey] ?? emptyConversation(canonicalKey);
   const projectedItems = projectNormalizedTurnsToChatItems(mergedConversation, {
     sessionId,
@@ -1600,6 +1925,7 @@ export function prependSessionHistoryTurns(
   next = upsertNormalizedTurns(next, canonicalKey, normalizedTurns, {
     order: "incoming-first"
   });
+  next = removeHistoryConfirmedLocalTurns(next, canonicalKey, incomingHistoryItems);
   const mergedConversation = next.conversations[canonicalKey] ?? emptyConversation(canonicalKey);
   const projectedItems = projectNormalizedTurnsToChatItems(mergedConversation, {
     sessionId,
@@ -1758,21 +2084,14 @@ function applyEventToWorkspace(
         event.seq
       );
     case "diff.updated":
-      return upsertTurnScopedItem(
-        removeThinkingForTurn(workspace, event.sessionId, event.threadId, event.turnId),
-        {
+      return upsertEventScopedTurnItem(workspace, event, {
         id: event.id,
+        type: CodexThreadItemType.FileChange,
         role: "diff",
-        sessionId: event.sessionId,
-        turnId: event.turnId,
         text: readDiff(event.payload),
         status: "streaming",
-        meta: {
-          kind: "diff"
-        }
-        },
-        { threadId: event.threadId, latestSeq: event.seq }
-      );
+        latestSeq: event.seq
+      });
     case "plan.updated":
       return workspace;
     case "turn.completed":
@@ -1800,20 +2119,16 @@ function applyServerChatUser(
       });
     }
   }
-  return addChatItemToWorkspace(
-    workspace,
-    {
-      id: event.id,
-      role: "user",
-      text,
-      ...(event.sessionId ? { sessionId: event.sessionId } : {}),
-      ...(event.turnId ? { turnId: event.turnId } : {}),
-      ...(clientMessageId ? { clientMessageId } : {}),
-      status: "sent",
-      createdAt: event.ts
-    },
-    { threadId: event.threadId, latestSeq: event.seq }
-  );
+  const turnId = event.turnId ?? `event-turn:${event.id}`;
+  return upsertEventScopedTurnItem(workspace, { ...event, turnId }, {
+    id: event.id,
+    type: CodexThreadItemType.UserMessage,
+    role: "user",
+    text,
+    ...(clientMessageId ? { clientMessageId } : {}),
+    status: "sent",
+    latestSeq: event.seq
+  });
 }
 
 function applyAgentError(
@@ -1825,22 +2140,24 @@ function applyAgentError(
   if (clientMessageId) {
     return markOptimisticMessageFailed(workspace, clientMessageId, message);
   }
-  return addChatItemToWorkspace(
-    workspace,
-    {
-      id: event.id,
-      role: "system",
-      text: message,
-      ...(event.sessionId ? { sessionId: event.sessionId } : {}),
-      ...(event.turnId ? { turnId: event.turnId } : {}),
-      status: "complete",
-      createdAt: event.ts,
-      meta: {
-        kind: "error"
-      }
-    },
-    { threadId: event.threadId, latestSeq: event.seq }
-  );
+  const turnId = event.turnId ?? `event-turn:${event.id}`;
+  return upsertLocalTurnItems(workspace, {
+    key:
+      findConversationKeyForTurn(workspace, event.sessionId, event.threadId, turnId) ??
+      conversationKeyFor({ sessionId: event.sessionId, threadId: event.threadId }),
+    sessionId: event.sessionId,
+    threadId: event.threadId,
+    turnId,
+    items: [
+      localErrorTurnItem({
+        id: event.id,
+        text: message,
+        createdAt: event.ts
+      })
+    ],
+    latestSeq: event.seq,
+    turnStatus: "failed"
+  });
 }
 
 function applyThreadStatusChanged(
@@ -2098,8 +2415,9 @@ function upsertLiveTurnItems(
   turnId: string,
   items: NormalizedConversationTurnItem[]
 ): DeviceWorkspace {
-  const key = liveConversationKey(workspace, event, turnId);
-  let next = ensureConversation(workspace, {
+  let next = remapPendingTurnsForLiveItems(workspace, event, turnId, items);
+  const key = liveConversationKey(next, event, turnId);
+  next = ensureConversation(next, {
     conversationKey: key,
     sessionId: event.sessionId,
     threadId: event.threadId
@@ -2134,6 +2452,36 @@ function upsertLiveTurnItems(
   });
 }
 
+function remapPendingTurnsForLiveItems(
+  workspace: DeviceWorkspace,
+  event: LocalEvent,
+  turnId: string,
+  items: NormalizedConversationTurnItem[]
+): DeviceWorkspace {
+  let next = workspace;
+  for (const item of items) {
+    if (!item.clientMessageId) {
+      continue;
+    }
+    const key =
+      findConversationKey(next, {
+        pendingClientId: item.clientMessageId,
+        sessionId: event.sessionId,
+        threadId: event.threadId
+      }) ?? liveConversationKey(next, event, turnId);
+    next = remapPendingTurnToServerTurn(next, key, item.clientMessageId, turnId);
+    next = updateOutboxEntry(next, item.clientMessageId, (entry) => ({
+      ...entry,
+      ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+      ...(event.threadId ? { threadId: event.threadId } : {}),
+      turnId,
+      status: entry.status === "pending" ? "sent" : entry.status,
+      updatedAt: Date.now()
+    }));
+  }
+  return next;
+}
+
 function syncConversationProjection(
   workspace: DeviceWorkspace,
   key: ConversationKey,
@@ -2145,12 +2493,11 @@ function syncConversationProjection(
     return workspace;
   }
   const projected = projectNormalizedTurnsToChatItems(conversation, input);
-  const projectedIds = new Set(projected.map((item) => item.id));
   return updateConversationItems(workspace, canonicalKey, (items) => [
     ...projected,
     ...items.filter((item) => {
       if (isTurnStoreProjectedItem(item)) {
-        return !projectedIds.has(item.id);
+        return false;
       }
       return shouldPreserveAfterProjection(item, projected, projected, items);
     })
@@ -2185,7 +2532,7 @@ function hasTurnStoreRenderableText(
   return Boolean(
     turn?.itemOrder.some((itemId) => {
       const item = turn.items[itemId];
-      return item?.role === role && item.text.trim().length > 0;
+      return item?.role === role && item.metaKind !== "legacy" && item.text.trim().length > 0;
     })
   );
 }
@@ -2271,43 +2618,43 @@ function readNumber(record: Record<string, unknown>, field: string): number | nu
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function upsertTurnScopedItem(
+function upsertEventScopedTurnItem(
   workspace: DeviceWorkspace,
-  item: ChatItem,
-  options: { latestSeq?: number | null; threadId?: string | undefined } = {}
+  event: LocalEvent,
+  item: {
+    clientMessageId?: string | undefined;
+    id: string;
+    latestSeq?: number | null | undefined;
+    role: ChatItem["role"];
+    status: ChatItem["status"];
+    text: string;
+    type: string;
+  }
 ): DeviceWorkspace {
+  const turnId = event.turnId ?? `event-turn:${event.id}`;
   const key =
-    findConversationKeyForTurn(workspace, item.sessionId, options.threadId, item.turnId) ??
-    conversationKeyFor({ sessionId: item.sessionId, threadId: options.threadId });
-  let next = ensureConversation(workspace, {
-    conversationKey: key,
-    sessionId: item.sessionId,
-    threadId: options.threadId
+    findConversationKeyForTurn(workspace, event.sessionId, event.threadId, turnId) ??
+    conversationKeyFor({ sessionId: event.sessionId, threadId: event.threadId });
+  return upsertLocalTurnItems(workspace, {
+    key,
+    sessionId: event.sessionId,
+    threadId: event.threadId,
+    turnId,
+    items: [{
+      id: item.id,
+      type: item.type,
+      kind: codexThreadItemRenderKind({ type: item.type }),
+      role: item.role,
+      text: item.text,
+      ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
+      status: item.status,
+      metaKind: "legacy",
+      createdAt: event.ts,
+      updatedAt: Date.now()
+    }],
+    latestSeq: item.latestSeq,
+    turnStatus: item.status === "failed" ? "failed" : "inProgress"
   });
-  const canonicalKey = canonicalConversationKey(next, key);
-  next = updateConversationItems(next, canonicalKey, (items) => {
-    const existingIndex = [...items]
-      .reverse()
-      .findIndex(
-        (current) =>
-          current.role === item.role &&
-          current.turnId === item.turnId &&
-          current.sessionId === item.sessionId
-      );
-    if (existingIndex < 0) {
-      return [...items, item];
-    }
-    const index = items.length - 1 - existingIndex;
-    return items.map((current, currentIndex) =>
-      currentIndex === index
-        ? {
-            ...current,
-            ...item
-          }
-        : current
-    );
-  });
-  return setConversationLatestSeq(next, canonicalKey, options.latestSeq ?? null);
 }
 
 function markTurnItemsComplete(
@@ -2317,34 +2664,66 @@ function markTurnItemsComplete(
   if (!turnId) {
     return workspace;
   }
-  let next = removeThinkingForTurn(workspace, undefined, undefined, turnId);
-  next = materializeWorkspace({
-    ...next,
+  const now = Date.now();
+  const next = {
+    ...workspace,
     conversations: Object.fromEntries(
-      Object.entries(next.conversations).map(([key, conversation]) => [
-        key,
-        {
-          ...conversation,
-          items: conversation.items.map((item) =>
-            item.turnId === turnId &&
-            (
-              item.status === "pending" ||
-              item.status === "streaming" ||
-              item.status === "sent" ||
-              item.status === "sending"
-            )
-              ? { ...item, status: "complete" }
-              : item
-          ),
-          updatedAt: conversation.items.some((item) => item.turnId === turnId)
-            ? Date.now()
-            : conversation.updatedAt
+      Object.entries(workspace.conversations).map(([key, conversation]) => {
+        const turn = conversation.turns[turnId];
+        if (!turn) {
+          return [key, conversation] as const;
         }
-      ])
+        const completedTurn: NormalizedConversationTurn = {
+          ...turn,
+          status: "completed",
+          completedAt: turn.completedAt ?? now / 1000,
+          durationMs:
+            turn.durationMs ??
+            (turn.startedAt ? Math.max(0, now - timestampSecondsToMs(turn.startedAt)!) : null),
+          items: Object.fromEntries(
+            Object.entries(turn.items)
+              .filter(([, item]) => item.metaKind !== "thinking")
+              .map(([itemId, item]) => [
+                itemId,
+                {
+                  ...item,
+                  status:
+                    item.status === "failed"
+                      ? "failed"
+                      : normalizeChatStatus(item.status)
+                        ? "complete"
+                        : item.status,
+                  updatedAt: now
+                }
+              ])
+          ),
+          itemOrder: turn.itemOrder.filter(
+            (itemId) => turn.items[itemId]?.metaKind !== "thinking"
+          )
+        };
+        const updatedConversation: ConversationRecord = {
+          ...conversation,
+          turns: {
+            ...conversation.turns,
+            [turnId]: completedTurn
+          },
+          updatedAt: now
+        };
+        return [
+          key,
+          {
+            ...updatedConversation,
+            items: projectNormalizedTurnsToChatItems(updatedConversation, {
+              sessionId: updatedConversation.sessionIds[0],
+              threadId: updatedConversation.threadId
+            })
+          }
+        ] as const;
+      })
     ),
-    outbox: updateOutboxStatusByTurn(next.outbox, turnId, "complete")
-  });
-  return next;
+    outbox: updateOutboxStatusByTurn(workspace.outbox, turnId, "complete")
+  };
+  return materializeWorkspace(next);
 }
 
 export function upsertSessionInWorkspace(
@@ -2364,25 +2743,6 @@ export function upsertSessionInWorkspace(
   });
 }
 
-function addChatItemToWorkspace(
-  workspace: DeviceWorkspace,
-  item: ChatItem,
-  options: { latestSeq?: number | null; threadId?: string | undefined } = {}
-): DeviceWorkspace {
-  const key =
-    findConversationKeyForTurn(workspace, item.sessionId, options.threadId, item.turnId) ??
-    conversationKeyFor({ sessionId: item.sessionId, threadId: options.threadId });
-  let next = ensureConversation(workspace, {
-    conversationKey: key,
-    sessionId: item.sessionId,
-    threadId: options.threadId
-  });
-  next = upsertConversationItems(next, canonicalConversationKey(next, key), [item], {
-    latestSeq: options.latestSeq ?? null
-  });
-  return materializeWorkspace(next);
-}
-
 function reassignHistoryPageState(
   pages: Record<string, SessionHistoryPageState>,
   fromSessionId: string,
@@ -2395,6 +2755,61 @@ function reassignHistoryPageState(
   next[toSessionId] = pages[fromSessionId]!;
   delete next[fromSessionId];
   return next;
+}
+
+function removeHistoryConfirmedLocalTurns(
+  workspace: DeviceWorkspace,
+  key: ConversationKey,
+  historyItems: ChatItem[]
+): DeviceWorkspace {
+  const canonicalKey = canonicalConversationKey(workspace, key);
+  const conversation = workspace.conversations[canonicalKey];
+  if (!conversation) {
+    return workspace;
+  }
+  const turns = { ...conversation.turns };
+  let removed = false;
+  for (const turnId of conversation.turnOrder) {
+    if (!turnId.startsWith("local-turn:")) {
+      continue;
+    }
+    const turn = turns[turnId];
+    const userItem = turn
+      ? projectNormalizedTurnsToChatItems(
+          {
+            turnOrder: [turnId],
+            turns: { [turnId]: turn }
+          },
+          { sessionId: conversation.sessionIds[0], threadId: conversation.threadId }
+        ).find((item) => item.role === "user")
+      : null;
+    if (historyConfirmsUserTurn(userItem, historyItems)) {
+      delete turns[turnId];
+      removed = true;
+    }
+  }
+  if (!removed) {
+    return workspace;
+  }
+  const nextConversation: ConversationRecord = {
+    ...conversation,
+    turnOrder: conversation.turnOrder.filter((turnId) => turns[turnId]),
+    turns,
+    updatedAt: Date.now()
+  };
+  return materializeWorkspace({
+    ...workspace,
+    conversations: {
+      ...workspace.conversations,
+      [canonicalKey]: {
+        ...nextConversation,
+        items: projectNormalizedTurnsToChatItems(nextConversation, {
+          sessionId: nextConversation.sessionIds[0],
+          threadId: nextConversation.threadId
+        })
+      }
+    }
+  });
 }
 
 function findHistoryOverlap(historyItems: ChatItem[], preservedItems: ChatItem[]): number {
@@ -2542,94 +2957,38 @@ function appendStreamingItemToWorkspace(
   if (!text) {
     return workspace;
   }
-  let next = removeThinkingForTurn(workspace, sessionId, threadId, turnId);
+  const resolvedTurnId = turnId ?? `event-turn:${fallbackId}`;
   const key =
-    findConversationKeyForTurn(next, sessionId, threadId, turnId) ??
+    findConversationKeyForTurn(workspace, sessionId, threadId, resolvedTurnId) ??
     conversationKeyFor({ sessionId, threadId });
-  next = ensureConversation(next, {
-    conversationKey: key,
-    sessionId,
-    threadId
-  });
-  const canonicalKey = canonicalConversationKey(next, key);
-  next = updateConversationItems(next, canonicalKey, (items) => {
-    const lastIndex = [...items]
-      .reverse()
-      .findIndex(
-        (item) =>
-          item.role === role &&
-          item.turnId === turnId &&
-          item.sessionId === sessionId &&
-          item.status !== "failed"
-      );
-    if (lastIndex >= 0) {
-      const index = items.length - 1 - lastIndex;
-      return items.map((item, itemIndex) =>
-        itemIndex === index
-          ? {
-              ...item,
-              text: `${item.text}${text}`,
-              status: "streaming"
-            }
-          : item
-      );
-    }
-    return [
-      ...items,
-      {
-        id: fallbackId,
-        role,
-        text,
-        ...(sessionId ? { sessionId } : {}),
-        ...(turnId ? { turnId } : {}),
-        status: "streaming",
-        createdAt: Date.now()
-      }
-    ];
+  const event: LocalEvent = {
+    id: fallbackId,
+    seq: latestSeq ?? 0,
+    ts: Date.now(),
+    type: role === "assistant" ? "chat.assistant.delta" : "command.output.delta",
+    ...(sessionId ? { sessionId } : {}),
+    ...(threadId ? { threadId } : {}),
+    turnId: resolvedTurnId,
+    payload: { text }
+  };
+  const itemId = `legacy-${role}:${resolvedTurnId}`;
+  const existingText = readTurnItemText(workspace, key, resolvedTurnId, itemId);
+  let next = upsertEventScopedTurnItem(workspace, event, {
+    id: itemId,
+    type:
+      role === "assistant"
+        ? CodexThreadItemType.AgentMessage
+        : CodexThreadItemType.CommandExecution,
+    role,
+    text: `${existingText}${text}`,
+    status: "streaming",
+    latestSeq
   });
   next = {
     ...next,
-    outbox: updateOutboxStatusByTurn(next.outbox, turnId, "streaming")
+    outbox: updateOutboxStatusByTurn(next.outbox, resolvedTurnId, "streaming")
   };
-  return setConversationLatestSeq(next, canonicalKey, latestSeq);
-}
-
-function removeThinkingForTurn(
-  workspace: DeviceWorkspace,
-  sessionId: string | undefined,
-  threadId: string | undefined,
-  turnId: string | undefined
-): DeviceWorkspace {
-  const key = findConversationKeyForTurn(workspace, sessionId, threadId, turnId);
-  if (key) {
-    return updateConversationItems(workspace, key, (items) =>
-      items.filter(
-        (item) =>
-          !(
-            isOptimisticThinkingItem(item) &&
-            feedbackMatchesTurn(item, sessionId, turnId)
-          )
-      )
-    );
-  }
-  return materializeWorkspace({
-    ...workspace,
-    conversations: Object.fromEntries(
-      Object.entries(workspace.conversations).map(([conversationKey, conversation]) => [
-        conversationKey,
-        {
-          ...conversation,
-          items: conversation.items.filter(
-            (item) =>
-              !(
-                isOptimisticThinkingItem(item) &&
-                feedbackMatchesTurn(item, sessionId, turnId)
-              )
-          )
-        }
-      ])
-    )
-  });
+  return next;
 }
 
 function isOptimisticFeedbackItem(
@@ -2647,20 +3006,6 @@ function isOptimisticFeedbackItem(
 
 function isOptimisticThinkingItem(item: ChatItem): boolean {
   return item.role === "system" && item.meta?.kind === "thinking";
-}
-
-function feedbackMatchesTurn(
-  item: ChatItem,
-  sessionId: string | undefined,
-  turnId: string | undefined
-): boolean {
-  if (turnId && item.turnId === turnId) {
-    return true;
-  }
-  if (sessionId && item.sessionId === sessionId && !item.turnId) {
-    return true;
-  }
-  return !sessionId && !item.sessionId && Boolean(turnId);
 }
 
 function isSessionSummary(value: unknown): value is LocalSessionSummary {
