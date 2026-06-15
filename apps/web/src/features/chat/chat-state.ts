@@ -339,6 +339,34 @@ export function selectSessionHistoryHydrated(
   return Boolean(workspace.historyPages[sessionId]?.sourceKey);
 }
 
+export function selectTurnHasCompletionEvidence(
+  workspace: DeviceWorkspace | null,
+  input: {
+    sessionId?: string | undefined;
+    threadId?: string | undefined;
+    turnId: string;
+  }
+): boolean {
+  if (!workspace) {
+    return false;
+  }
+  const key = findConversationKey(workspace, input);
+  const conversation = key
+    ? workspace.conversations[canonicalConversationKey(workspace, key)]
+    : Object.values(workspace.conversations).find((item) => item.turns[input.turnId]);
+  const turn = conversation?.turns[input.turnId];
+  if (!turn) {
+    return false;
+  }
+  return turn.itemOrder.some((itemId) => {
+    const item = turn.items[itemId];
+    if (!item || (item.role !== "assistant" && item.role !== "command")) {
+      return false;
+    }
+    return item.status === "complete" || item.status === "completed";
+  });
+}
+
 export function restoreOutboxEntries(
   workspace: DeviceWorkspace,
   entries: OutboxEntry[]

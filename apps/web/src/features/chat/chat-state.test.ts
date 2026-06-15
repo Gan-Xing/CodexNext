@@ -13,6 +13,7 @@ import {
   reassignSessionChatItems,
   restoreConversationCacheEntries,
   selectSessionHistoryHydrated,
+  selectTurnHasCompletionEvidence,
   setSessionHistoryPageState,
   upsertSessionInWorkspace,
   selectConversationChatItems,
@@ -160,6 +161,34 @@ describe("chat state", () => {
       sourceKey: "thread_1::/tmp/codexnext"
     });
     expect(selectSessionHistoryHydrated(hydrated, "session_1")).toBe(true);
+  });
+
+  it("detects turn completion evidence from normalized turn items", () => {
+    const workspace = hydrateSessionFromTurns(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      "session_1",
+      makeHistoryTurns([
+        {
+          id: "assistant_1",
+          role: "assistant",
+          text: "done",
+          ts: "2026-06-15T00:00:00.000Z"
+        }
+      ])
+    );
+
+    expect(
+      selectTurnHasCompletionEvidence(workspace, {
+        sessionId: "session_1",
+        turnId: "history-assistant_1"
+      })
+    ).toBe(true);
+    expect(
+      selectTurnHasCompletionEvidence(workspace, {
+        sessionId: "session_1",
+        turnId: "missing"
+      })
+    ).toBe(false);
   });
 
   it("adds optimistic user messages and thinking feedback immediately", () => {

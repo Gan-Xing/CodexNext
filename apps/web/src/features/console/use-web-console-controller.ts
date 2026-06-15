@@ -64,6 +64,7 @@ import {
   selectConversationRenderSnapshot,
   selectConversationTurnGroups,
   selectSessionHistoryHydrated,
+  selectTurnHasCompletionEvidence,
   setLoadedThreadIds,
   setSessionHistoryPageState,
   type AttachmentDraft,
@@ -624,7 +625,7 @@ export function useWebConsoleController() {
   const currentResumeState = currentSession ? resumeStates[currentSession.sessionId] ?? null : null;
   const initialHistoryLoading = Boolean(
     currentSession &&
-      visibleChatItems.length === 0 &&
+      selectedConversationRenderSnapshot.messageCount === 0 &&
       currentResumeState !== "missing" &&
       currentResumeState !== "failed" &&
       (historyLoadingKey === selectedHistoryKey ||
@@ -1012,12 +1013,8 @@ export function useWebConsoleController() {
       return;
     }
     selectedConversationRenderTraceRef.current = signature;
-    const statusCounts = visibleChatItems.reduce<Record<string, number>>((counts, item) => {
-      const key = `${item.role}:${item.status ?? "unset"}`;
-      counts[key] = (counts[key] ?? 0) + 1;
-      return counts;
-    }, {});
-    const latestItem = visibleChatItems.at(-1) ?? null;
+    const statusCounts = summarizeTurnGroupStatusCounts(visibleTurnGroups);
+    const latestItem = latestTurnGroupItemSummary(visibleTurnGroups);
     webDevTrace("console.render.selected_conversation", {
       deviceId: selectedDeviceId,
       selectedHistoryKey,
@@ -1027,16 +1024,7 @@ export function useWebConsoleController() {
       latestSeq: selectedConversationRenderSnapshot.latestSeq,
       messageCount: selectedConversationRenderSnapshot.messageCount,
       statusCounts,
-      latestItem: latestItem
-        ? {
-            id: latestItem.id,
-            role: latestItem.role,
-            status: latestItem.status ?? null,
-            turnId: latestItem.turnId ?? null,
-            clientMessageId: latestItem.clientMessageId ?? null,
-            textLength: latestItem.text.length
-          }
-        : null
+      latestItem
     });
   }, [
     currentSession?.sessionId,
@@ -1047,7 +1035,7 @@ export function useWebConsoleController() {
     selectedConversationRenderSnapshot.statusSignature,
     selectedDeviceId,
     selectedHistoryKey,
-    visibleChatItems
+    visibleTurnGroups
   ]);
 
   useEffect(() => {
@@ -4309,7 +4297,6 @@ export function useWebConsoleController() {
     activeSheet,
     activeTurn,
     attachments,
-    chatItems,
     clearThreadHoverPreview,
     closeActiveSheet,
     connection,
@@ -4455,20 +4442,57 @@ function hasLiveCompletionEvidence(
 ): boolean {
   return Boolean(
     request.turnId &&
-      workspace.chatItems.some(
-        (item) =>
-          item.turnId === request.turnId &&
-          (item.role === "assistant" || item.role === "command") &&
-          item.status === "complete"
-      )
+      selectTurnHasCompletionEvidence(workspace, {
+        sessionId: request.sessionId,
+        turnId: request.turnId
+      })
   );
+}
+
+function summarizeTurnGroupStatusCounts(turnGroups: TurnGroup[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const group of turnGroups) {
+    const turnKey = `turn:${group.status}`;
+    counts[turnKey] = (counts[turnKey] ?? 0) + 1;
+    for (const item of group.items) {
+      const itemKey = `${item.kind}:${item.status ?? "unset"}`;
+      counts[itemKey] = (counts[itemKey] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+
+function latestTurnGroupItemSummary(turnGroups: TurnGroup[]): Record<string, unknown> | null {
+  for (let groupIndex = turnGroups.length - 1; groupIndex >= 0; groupIndex -= 1) {
+    const group = turnGroups[groupIndex];
+    if (!group) {
+      continue;
+    }
+    const item = group.items.at(-1);
+    if (!item) {
+      continue;
+    }
+    return {
+      id: item.id,
+      kind: item.kind,
+      role: item.role,
+      status: item.status ?? null,
+      turnId: group.id,
+      clientMessageId: item.clientMessageId ?? null,
+      textLength: item.text.length
+    };
+  }
+  return null;
 }
 
 function summarizeReducerWorkspaceState(workspace: DeviceWorkspace): Record<string, unknown> {
   return {
     currentSessionId: workspace.currentSessionId,
     selectedHistoryKey: workspace.selectedHistoryKey,
-    chatItemCount: workspace.chatItems.length,
+    conversationItemCount: Object.values(workspace.conversations).reduce(
+      (total, conversation) => total + conversation.items.length,
+      0
+    ),
     conversationCount: Object.keys(workspace.conversations).length,
     latestSeq: workspace.events.at(-1)?.seq ?? null,
     outbox: summarizeOutboxStatuses(workspace.outbox)

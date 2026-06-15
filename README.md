@@ -98,6 +98,9 @@ boundary.
   selected conversation's `TurnGroup` projection first. `ChatItem[]` may only be
   used as a boundary fallback, not as a global flat state source for those UI
   features.
+- [x] Status: completed - Development render traces and turn completion checks
+  read `TurnGroup` / normalized turn selectors. They must stay summary-only and
+  must not scan global `workspace.chatItems`.
 - [x] Status: completed - Completed turns with process items render a
   turn-level process summary such as `已处理 5m 58s`; running or failed turns keep
   process, approval, and error rows visible. Assistant answer items remain
