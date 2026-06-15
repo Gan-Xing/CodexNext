@@ -83,6 +83,10 @@ boundary.
 - [x] Status: completed - The chat canvas receives `TurnGroup` projections as
   the primary render input. Legacy `ChatItem[]` is only a projection fallback at
   the renderer boundary and must not become a second live source of truth.
+- [x] Status: completed - Completed turns with process items render a
+  turn-level process summary such as `已处理 5m 58s`; running or failed turns keep
+  process, approval, and error rows visible. Assistant answer items remain
+  expanded and are not hidden inside the process summary.
 - [x] Status: completed - Model selection remains part of the start/resume/turn
   path. Schema or adapter work must not drop the selected model when switching
   or sending.

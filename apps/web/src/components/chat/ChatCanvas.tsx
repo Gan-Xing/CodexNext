@@ -11,8 +11,12 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { TurnGroup } from "../../features/chat/chat-state";
+import {
+  deriveChatRenderRows,
+  renderRowTailSignature,
+  type ChatRenderRow
+} from "../../features/chat/turn-rendering";
 import type { ChatItem, LocalSessionSummary } from "../../lib/types";
-import { buildChatTailSignature } from "../../lib/format/text";
 import { CommandOutputBlock } from "./CommandOutputBlock";
 import { DiffBlock } from "./DiffBlock";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -24,20 +28,6 @@ import { ThinkingRow } from "./ThinkingRow";
 const VIRTUAL_OVERSCAN_ITEMS = 10;
 const VIRTUAL_ROW_GAP = 16;
 const BOTTOM_STICK_WINDOW_MS = 1_000;
-
-function flattenTurnGroupsForRendering(
-  turnGroups: TurnGroup[] | undefined,
-  fallbackItems: ChatItem[]
-): ChatItem[] {
-  if (!turnGroups || turnGroups.length === 0) {
-    return fallbackItems;
-  }
-  return turnGroups.flatMap((group) =>
-    group.items
-      .map((item) => item.chatItem)
-      .filter((item): item is ChatItem => Boolean(item))
-  );
-}
 
 export function ChatCanvas(props: {
   active: boolean;
@@ -67,17 +57,25 @@ export function ChatCanvas(props: {
   const bottomStickUntilRef = useRef(0);
   const bottomStickFrameRef = useRef<number | null>(null);
   const [showJumpButton, setShowJumpButton] = useState(false);
-
-  const visibleItems = useMemo(
-    () => flattenTurnGroupsForRendering(props.turnGroups, props.items),
-    [props.items, props.turnGroups]
+  const [expandedProcessTurnIds, setExpandedProcessTurnIds] = useState<Set<string>>(
+    () => new Set()
   );
-  const tailSignature = buildChatTailSignature(visibleItems.at(-1));
+
+  const visibleRows = useMemo(
+    () =>
+      deriveChatRenderRows({
+        expandedProcessTurnIds,
+        fallbackItems: props.items,
+        turnGroups: props.turnGroups
+      }),
+    [expandedProcessTurnIds, props.items, props.turnGroups]
+  );
+  const tailSignature = renderRowTailSignature(visibleRows.at(-1));
   const rowVirtualizer = useVirtualizer({
-    count: visibleItems.length,
-    estimateSize: (index) => estimateItemHeight(visibleItems[index] ?? null),
+    count: visibleRows.length,
+    estimateSize: (index) => estimateRenderRowHeight(visibleRows[index] ?? null),
     gap: VIRTUAL_ROW_GAP,
-    getItemKey: (index) => visibleItems[index]?.id ?? index,
+    getItemKey: (index) => visibleRows[index]?.id ?? index,
     getScrollElement: () => viewportRef.current,
     overscan: VIRTUAL_OVERSCAN_ITEMS
   });
@@ -89,8 +87,8 @@ export function ChatCanvas(props: {
     if (!viewport) {
       return;
     }
-    if (visibleItems.length > 0) {
-      rowVirtualizer.scrollToIndex(visibleItems.length - 1, {
+    if (visibleRows.length > 0) {
+      rowVirtualizer.scrollToIndex(visibleRows.length - 1, {
         align: "end"
       });
     } else {
@@ -99,7 +97,7 @@ export function ChatCanvas(props: {
     pinnedRef.current = true;
     setShowJumpButton(false);
     previousHeightRef.current = viewport.scrollHeight;
-  }, [rowVirtualizer, visibleItems.length]);
+  }, [rowVirtualizer, visibleRows.length]);
 
   const scheduleBottomStick = useCallback(() => {
     const run = () => {
@@ -178,7 +176,7 @@ export function ChatCanvas(props: {
 
     if (sessionChanged || (tailChanged && pinnedRef.current)) {
       beginBottomStick();
-    } else if (!tailChanged && visibleItems.length > previousLengthRef.current) {
+    } else if (!tailChanged && visibleRows.length > previousLengthRef.current) {
       const delta = viewport.scrollHeight - previousHeightRef.current;
       if (delta > 0) {
         viewport.scrollTop += delta;
@@ -190,8 +188,8 @@ export function ChatCanvas(props: {
     previousSessionRef.current = props.session.sessionId;
     previousTailRef.current = tailSignature;
     previousHeightRef.current = viewport.scrollHeight;
-    previousLengthRef.current = visibleItems.length;
-  }, [beginBottomStick, props.session.sessionId, tailSignature, visibleItems.length]);
+    previousLengthRef.current = visibleRows.length;
+  }, [beginBottomStick, props.session.sessionId, tailSignature, visibleRows.length]);
 
   useLayoutEffect(() => {
     if (bottomStickUntilRef.current <= Date.now()) {
@@ -202,8 +200,20 @@ export function ChatCanvas(props: {
     scheduleBottomStick,
     tailSignature,
     virtualTotalSize,
-    visibleItems.length
+    visibleRows.length
   ]);
+
+  const toggleProcessTurn = useCallback((turnId: string) => {
+    setExpandedProcessTurnIds((current) => {
+      const next = new Set(current);
+      if (next.has(turnId)) {
+        next.delete(turnId);
+      } else {
+        next.add(turnId);
+      }
+      return next;
+    });
+  }, []);
 
   return (
     <section className="cn-thread-canvas cn-live-thread" ref={viewportRef}>
@@ -222,7 +232,7 @@ export function ChatCanvas(props: {
         </div>
       ) : null}
 
-      {visibleItems.length > 0 ? (
+      {visibleRows.length > 0 ? (
         <>
           {props.canLoadOlderHistory || props.loadingOlderHistory ? (
             <div className="cn-history-pagination">
@@ -241,8 +251,8 @@ export function ChatCanvas(props: {
             style={{ height: `${virtualTotalSize}px` }}
           >
             {virtualItems.map((virtualItem) => {
-              const item = visibleItems[virtualItem.index];
-              if (!item) {
+              const row = visibleRows[virtualItem.index];
+              if (!row) {
                 return null;
               }
               return (
@@ -253,7 +263,7 @@ export function ChatCanvas(props: {
                   data-index={virtualItem.index}
                   style={{ transform: `translateY(${virtualItem.start}px)` }}
                 >
-                  <ChatMessageRow item={item} />
+                  <ChatRenderRowView row={row} onToggleProcess={toggleProcessTurn} />
                 </div>
               );
             })}
@@ -298,6 +308,47 @@ export function ChatCanvas(props: {
         </div>
       ) : null}
     </section>
+  );
+}
+
+const ChatRenderRowView = memo(function ChatRenderRowView(props: {
+  onToggleProcess: (turnId: string) => void;
+  row: ChatRenderRow;
+}) {
+  const { row } = props;
+  if (row.kind === "processSummary") {
+    return (
+      <ProcessSummaryRow
+        row={row}
+        onToggle={() => props.onToggleProcess(row.turnId)}
+      />
+    );
+  }
+  return <ChatMessageRow item={row.item} />;
+});
+
+function ProcessSummaryRow(props: {
+  onToggle: () => void;
+  row: Extract<ChatRenderRow, { kind: "processSummary" }>;
+}) {
+  if (!props.row.expandable) {
+    return (
+      <div className="cn-system-status-row muted" title={`${props.row.itemCount} 个过程项`}>
+        {props.row.label}
+      </div>
+    );
+  }
+  return (
+    <button
+      className="cn-system-status-row muted"
+      type="button"
+      aria-expanded={props.row.expanded}
+      title={props.row.expanded ? "收起过程" : "展开过程"}
+      onClick={props.onToggle}
+    >
+      {props.row.label}
+      <span aria-hidden="true">{props.row.expanded ? "⌄" : "›"}</span>
+    </button>
   );
 }
 
@@ -373,6 +424,16 @@ function messageClass(item: ChatItem): string {
     return "user failed";
   }
   return "user";
+}
+
+function estimateRenderRowHeight(row: ChatRenderRow | null | undefined): number {
+  if (!row) {
+    return 120;
+  }
+  if (row.kind === "processSummary") {
+    return 42;
+  }
+  return estimateItemHeight(row.item);
 }
 
 function estimateItemHeight(item: ChatItem | null | undefined): number {
