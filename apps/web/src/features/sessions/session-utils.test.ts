@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ChatItem, LocalCodexHistoryEntry, LocalSessionSummary } from "../../lib/types";
+import type { TurnGroup } from "../chat/chat-state";
 import {
   groupProjectThreads,
   makeHistoryPreviewSession,
-  sessionTitle
+  sessionTitle,
+  sessionTitleFromTurnGroups
 } from "./session-utils";
 
 function makeSession(overrides: Partial<LocalSessionSummary> = {}): LocalSessionSummary {
@@ -38,6 +40,38 @@ function makeHistoryEntry(overrides: Partial<LocalCodexHistoryEntry> = {}): Loca
   };
 }
 
+function makeTurnGroup(userText: string): TurnGroup {
+  return {
+    id: "turn_1",
+    status: "complete",
+    startedAt: 1,
+    completedAt: 2,
+    durationMs: 1000,
+    error: null,
+    userItems: [
+      {
+        id: "user_1",
+        kind: "user",
+        role: "user",
+        status: "sent",
+        text: userText,
+        type: "userMessage",
+        chatItem: {
+          id: "user_1",
+          role: "user",
+          text: userText,
+          sessionId: "session_1",
+          status: "sent"
+        }
+      }
+    ],
+    processItems: [],
+    answerItems: [],
+    metadataItems: [],
+    items: []
+  };
+}
+
 describe("session sidebar titles", () => {
   it("prefers the live session title when present", () => {
     expect(
@@ -63,6 +97,27 @@ describe("session sidebar titles", () => {
     expect(sessionTitle(makeSession({ threadId: "thread_missing" }), items, [])).toBe(
       "请帮我把这个会话标题逻辑改成和原生 Codex 一样"
     );
+  });
+
+  it("uses selected turn groups before the global chat projection fallback", () => {
+    const staleItems: ChatItem[] = [
+      {
+        id: "message_stale",
+        role: "user",
+        text: "这是旧的全局投影标题",
+        sessionId: "session_1",
+        status: "sent"
+      }
+    ];
+
+    expect(
+      sessionTitleFromTurnGroups(
+        makeSession({ threadId: "thread_missing" }),
+        [makeTurnGroup("这是当前 TurnGroup 的标题")],
+        [],
+        staleItems
+      )
+    ).toBe("这是当前 TurnGroup 的标题");
   });
 
   it("hydrates history preview sessions with the history title", () => {

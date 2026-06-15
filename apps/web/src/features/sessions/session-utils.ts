@@ -6,6 +6,7 @@ import type {
 } from "../../lib/types";
 import type { ChatItem } from "../../lib/types";
 import { deriveCodexGeneratedTitle } from "@codexnext/protocol";
+import type { TurnGroup } from "../chat/chat-state";
 import { normalizeAgentUrl } from "../devices/device-utils";
 
 export interface ThreadSidebarPrefs {
@@ -305,6 +306,31 @@ export function sessionTitle(
     return historyTitle;
   }
   const firstUserTitle = deriveSessionChatFallbackTitle(session, chatItems);
+  if (firstUserTitle) {
+    return firstUserTitle;
+  }
+  return shortPath(session.cwd);
+}
+
+export function sessionTitleFromTurnGroups(
+  session: LocalSessionSummary,
+  turnGroups: TurnGroup[],
+  historyEntries: LocalCodexHistoryEntry[] = [],
+  fallbackChatItems: ChatItem[] = []
+): string {
+  const explicitTitle = session.title?.trim();
+  if (explicitTitle) {
+    return explicitTitle;
+  }
+  const historyTitle = historyEntries.find((entry) => entry.id === session.threadId)?.title?.trim();
+  if (historyTitle) {
+    return historyTitle;
+  }
+  const firstTurnGroupTitle = deriveSessionTurnGroupFallbackTitle(turnGroups);
+  if (firstTurnGroupTitle) {
+    return firstTurnGroupTitle;
+  }
+  const firstUserTitle = deriveSessionChatFallbackTitle(session, fallbackChatItems);
   if (firstUserTitle) {
     return firstUserTitle;
   }
@@ -615,6 +641,19 @@ function deriveSessionChatFallbackTitle(
     return null;
   }
   return deriveCodexGeneratedTitle(firstUserMessage.text);
+}
+
+function deriveSessionTurnGroupFallbackTitle(turnGroups: TurnGroup[]): string | null {
+  for (const group of turnGroups) {
+    for (const item of group.userItems) {
+      const text = item.text.trim();
+      if (!text) {
+        continue;
+      }
+      return deriveCodexGeneratedTitle(text);
+    }
+  }
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

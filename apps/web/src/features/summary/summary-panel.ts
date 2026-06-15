@@ -1,6 +1,7 @@
 import type { CodexIconName } from "../../components/DesignLab";
 import type { ChatItem, LocalEvent, PendingApprovalView } from "../../lib/types";
 import { isRecord } from "../../lib/format/text";
+import type { TurnGroup } from "../chat/chat-state";
 
 export interface SummaryOutputItem {
   detail?: string;
@@ -69,6 +70,18 @@ export function buildSummaryPanelData(input: {
     tasks: collectTaskItems(input.chatItems, input.events, input.pendingApprovals),
     sources: collectSourceItems(input.chatItems, input.events)
   };
+}
+
+export function chatItemsFromTurnGroups(turnGroups: TurnGroup[]): ChatItem[] {
+  const items: ChatItem[] = [];
+  for (const group of turnGroups) {
+    for (const item of group.items) {
+      if (item.chatItem) {
+        items.push(item.chatItem);
+      }
+    }
+  }
+  return items;
 }
 
 function collectOutputItems(chatItems: ChatItem[]): SummaryOutputItem[] {

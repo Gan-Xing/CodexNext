@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ChatItem, LocalEvent, PendingApprovalView } from "../../lib/types";
-import { buildSummaryPanelData, summaryVisibleRows } from "./summary-panel";
+import type { TurnGroup } from "../chat/chat-state";
+import {
+  buildSummaryPanelData,
+  chatItemsFromTurnGroups,
+  summaryVisibleRows
+} from "./summary-panel";
 
 function makeChatItem(input: Partial<ChatItem> & Pick<ChatItem, "id" | "role" | "text">): ChatItem {
   return {
@@ -145,5 +150,83 @@ describe("buildSummaryPanelData", () => {
 
   it("uses six rows as the default collapsed summary size", () => {
     expect(summaryVisibleRows()).toBe(6);
+  });
+
+  it("derives summary chat items from turn group projections", () => {
+    const assistantItem = makeChatItem({
+      id: "assistant-3",
+      role: "assistant",
+      text: "[README.md](/Users/demo/repo/README.md:1)"
+    });
+    const turnGroups: TurnGroup[] = [
+      {
+        id: "turn-1",
+        status: "complete",
+        startedAt: 1,
+        completedAt: 2,
+        durationMs: 1000,
+        error: null,
+        userItems: [],
+        processItems: [
+          {
+            id: "process-1",
+            kind: "process",
+            role: "assistant",
+            status: "complete",
+            text: "internal",
+            type: "reasoning",
+            chatItem: null
+          }
+        ],
+        answerItems: [
+          {
+            id: "assistant-3",
+            kind: "answer",
+            role: "assistant",
+            status: "complete",
+            text: assistantItem.text,
+            type: "agentMessage",
+            chatItem: assistantItem
+          }
+        ],
+        metadataItems: [],
+        items: [
+          {
+            id: "process-1",
+            kind: "process",
+            role: "assistant",
+            status: "complete",
+            text: "internal",
+            type: "reasoning",
+            chatItem: null
+          },
+          {
+            id: "assistant-3",
+            kind: "answer",
+            role: "assistant",
+            status: "complete",
+            text: assistantItem.text,
+            type: "agentMessage",
+            chatItem: assistantItem
+          }
+        ]
+      }
+    ];
+
+    const chatItems = chatItemsFromTurnGroups(turnGroups);
+    const summary = buildSummaryPanelData({
+      chatItems,
+      events: [],
+      pendingApprovals: []
+    });
+
+    expect(chatItems).toEqual([assistantItem]);
+    expect(summary.outputs).toEqual([
+      {
+        key: "/Users/demo/repo/README.md",
+        title: "README.md",
+        detail: "/Users/demo/repo/README.md"
+      }
+    ]);
   });
 });

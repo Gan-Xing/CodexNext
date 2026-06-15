@@ -2,7 +2,7 @@
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { sessionTitle } from "../features/sessions/session-utils";
+import { sessionTitleFromTurnGroups } from "../features/sessions/session-utils";
 import type {
   ProjectThreadGroupData,
   ThreadListItem
@@ -98,7 +98,6 @@ export function WebConsole() {
     activeSheet,
     activeTurn,
     attachments,
-    chatItems,
     clearThreadHoverPreview,
     closeActiveSheet,
     connection,
@@ -240,7 +239,12 @@ export function WebConsole() {
   const headerTitle = selectedHistoryEntry
     ? selectedHistoryEntry.title
     : currentSession
-      ? sessionTitle(currentSession, chatItems, codexHistory)
+      ? sessionTitleFromTurnGroups(
+          currentSession,
+          visibleTurnGroups,
+          codexHistory,
+          visibleChatItems
+        )
       : "新会话";
   const missingHistoryCwd =
     currentResumeState === "missing"
@@ -710,6 +714,7 @@ export function WebConsole() {
         {activeSheet === "summary" ? (
           <SummarySheet
             chatItems={visibleChatItems}
+            turnGroups={visibleTurnGroups}
             events={
               currentSession
                 ? events.filter((event) => event.sessionId === currentSession.sessionId)
