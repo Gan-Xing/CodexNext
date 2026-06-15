@@ -1,5 +1,4 @@
 import type {
-  LocalCodexHistoryDetailResponse,
   LocalCodexHistoryEntry,
   LocalPermissionMode,
   LocalReasoningEffort,
@@ -289,20 +288,6 @@ export function makePendingSession(input: {
     goal: null,
     createdAt: now,
     updatedAt: now
-  };
-}
-
-export function historyMessageToChatItem(
-  sessionId: string,
-  message: LocalCodexHistoryDetailResponse["messages"][number]
-): ChatItem {
-  return {
-    id: `history-${sessionId}-${message.id}`,
-    role: message.role,
-    text: message.text,
-    sessionId,
-    status: "complete",
-    createdAt: parseHistoryTimestamp(message.ts)
   };
 }
 

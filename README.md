@@ -72,6 +72,10 @@ boundary.
   before chat rendering. Refresh, cold switching, replay, and live streaming
   must project from that store instead of maintaining separate history/live UI
   paths.
+- [x] Status: completed - Submit reconciliation uses historical
+  `CodexThreadTurn.items` to confirm submitted user input and later assistant or
+  command responses. It must not decide delivery state from legacy flat
+  `LocalCodexHistoryMessage[]` pages.
 - [x] Status: completed - Local submit state, thinking feedback, ack binding,
   agent errors, legacy assistant/command/diff deltas, and outbox recovery are
   represented as turn/items first. `ChatItem` is a projection for the current

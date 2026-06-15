@@ -1,4 +1,9 @@
-import type { LocalCodexHistoryMessage, LocalSessionSummary } from "../../lib/types";
+import {
+  CodexThreadItemType,
+  type CodexThreadItem,
+  type CodexThreadTurn
+} from "@codexnext/protocol";
+import type { LocalSessionSummary } from "../../lib/types";
 
 export interface MessageReconciliationFingerprint {
   messageText: string;
@@ -23,11 +28,11 @@ const TERMINAL_SESSION_STATUSES = new Set<LocalSessionSummary["status"]>([
 ]);
 
 export function decideMessageHistoryReconciliation(input: {
-  messages: LocalCodexHistoryMessage[];
+  turns: CodexThreadTurn[];
   request: MessageReconciliationFingerprint;
   session: LocalSessionSummary;
 }): MessageHistoryReconciliationDecision {
-  const orderedMessages = orderHistoryMessagesByTime(input.messages);
+  const orderedMessages = orderHistoryTurnsByTime(input.turns);
   const submittedMessageIndex = findSubmittedMessageIndex(
     orderedMessages,
     input.request.messageText,
@@ -70,7 +75,7 @@ function sessionBelongsToReconciledTurn(
 }
 
 function findSubmittedMessageIndex(
-  messages: LocalCodexHistoryMessage[],
+  messages: ReconciliationMessage[],
   messageText: string,
   startedAt: number
 ): number {
@@ -84,8 +89,7 @@ function findSubmittedMessageIndex(
     if (normalizeRenderableText(message.text) !== normalizedMessage) {
       continue;
     }
-    const timestamp = Date.parse(message.ts);
-    if (Number.isFinite(timestamp) && timestamp < minMessageTs) {
+    if (message.timestamp !== null && message.timestamp < minMessageTs) {
       continue;
     }
     return index;
@@ -93,28 +97,100 @@ function findSubmittedMessageIndex(
   return -1;
 }
 
-function isRenderableResponseMessage(message: LocalCodexHistoryMessage): boolean {
+function isRenderableResponseMessage(message: ReconciliationMessage): boolean {
   return (
     (message.role === "assistant" || message.role === "command") &&
     normalizeRenderableText(message.text).length > 0
   );
 }
 
-function orderHistoryMessagesByTime(
-  messages: LocalCodexHistoryMessage[]
-): LocalCodexHistoryMessage[] {
-  return messages
-    .map((message, index) => ({
-      index,
-      message,
-      timestamp: Date.parse(message.ts)
-    }))
+interface ReconciliationMessage {
+  role: "user" | "assistant" | "command" | "diff" | "system";
+  text: string;
+  timestamp: number | null;
+}
+
+function orderHistoryTurnsByTime(turns: CodexThreadTurn[]): ReconciliationMessage[] {
+  return turns
+    .flatMap((turn, turnIndex) =>
+      turn.items.flatMap((item, itemIndex) => {
+        const message = turnItemToReconciliationMessage(turn, item);
+        return message
+          ? [{
+              index: turnIndex * 1_000 + itemIndex,
+              message,
+              timestamp: message.timestamp ?? 0
+            }]
+          : [];
+      })
+    )
     .sort((left, right) => {
       const leftTs = Number.isFinite(left.timestamp) ? left.timestamp : 0;
       const rightTs = Number.isFinite(right.timestamp) ? right.timestamp : 0;
       return leftTs === rightTs ? left.index - right.index : leftTs - rightTs;
     })
     .map((entry) => entry.message);
+}
+
+function turnItemToReconciliationMessage(
+  turn: CodexThreadTurn,
+  item: CodexThreadItem
+): ReconciliationMessage | null {
+  const timestamp = turnTimestampMs(turn);
+  switch (item.type) {
+    case CodexThreadItemType.UserMessage:
+      return {
+        role: "user",
+        text: userMessageText(item.content),
+        timestamp
+      };
+    case CodexThreadItemType.AgentMessage:
+      return {
+        role: "assistant",
+        text: typeof item.text === "string" ? item.text : "",
+        timestamp
+      };
+    case CodexThreadItemType.CommandExecution:
+      return {
+        role: "command",
+        text: typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : "",
+        timestamp
+      };
+    case CodexThreadItemType.FileChange:
+      return {
+        role: "diff",
+        text: typeof item.text === "string" ? item.text : "",
+        timestamp
+      };
+    default:
+      return null;
+  }
+}
+
+function turnTimestampMs(turn: CodexThreadTurn): number | null {
+  const timestamp = turn.completedAt ?? turn.startedAt;
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
+    return null;
+  }
+  return timestamp > 10_000_000_000 ? timestamp : timestamp * 1000;
+}
+
+function userMessageText(content: unknown): string {
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((part) =>
+      isRecord(part) && part.type === "text" && typeof part.text === "string"
+        ? part.text
+        : ""
+    )
+    .filter(Boolean)
+    .join("\n");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeRenderableText(value: string): string {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { LocalCodexHistoryMessage, LocalSessionSummary } from "../../lib/types";
+import type { CodexThreadTurn } from "@codexnext/protocol";
+import type { LocalSessionSummary } from "../../lib/types";
 import {
   decideMessageHistoryReconciliation,
   isReconciledTerminalSession
@@ -24,16 +25,74 @@ function makeSession(input: Partial<LocalSessionSummary> = {}): LocalSessionSumm
   };
 }
 
-function makeMessage(
-  input: Pick<LocalCodexHistoryMessage, "id" | "role" | "text"> & {
+function makeTurn(
+  input: {
+    id: string;
+    role: "user" | "assistant" | "command";
+    text: string;
     tsOffsetMs: number;
   }
-): LocalCodexHistoryMessage {
+): CodexThreadTurn {
+  const timestamp = (startedAt + input.tsOffsetMs) / 1000;
   return {
     id: input.id,
-    role: input.role,
-    text: input.text,
-    ts: new Date(startedAt + input.tsOffsetMs).toISOString()
+    items: [
+      input.role === "user"
+        ? {
+            id: `${input.id}_item`,
+            type: "userMessage",
+            content: [{ type: "text", text: input.text, text_elements: [] }]
+          }
+        : input.role === "assistant"
+          ? {
+              id: `${input.id}_item`,
+              type: "agentMessage",
+              text: input.text
+            }
+          : {
+              id: `${input.id}_item`,
+              type: "commandExecution",
+              command: "",
+              aggregatedOutput: input.text
+            }
+    ],
+    itemsView: "full",
+    status: "completed",
+    error: null,
+    startedAt: timestamp,
+    completedAt: timestamp,
+    durationMs: null
+  };
+}
+
+function makeConversationTurn(): CodexThreadTurn {
+  const timestamp = (startedAt + 200) / 1000;
+  return {
+    id: "turn_1",
+    items: [
+      {
+        id: "item_user",
+        type: "userMessage",
+        content: [{ type: "text", text: "你好", text_elements: [] }]
+      },
+      {
+        id: "item_command",
+        type: "commandExecution",
+        command: "echo ok",
+        aggregatedOutput: "ok"
+      },
+      {
+        id: "item_agent",
+        type: "agentMessage",
+        text: "收到"
+      }
+    ],
+    itemsView: "full",
+    status: "completed",
+    error: null,
+    startedAt: timestamp,
+    completedAt: timestamp,
+    durationMs: null
   };
 }
 
@@ -46,8 +105,8 @@ describe("message reconciliation", () => {
         startedAt,
         turnId: "turn_1"
       },
-      messages: [
-        makeMessage({ id: "user_1", role: "user", text: "你好", tsOffsetMs: 100 })
+      turns: [
+        makeTurn({ id: "user_1", role: "user", text: "你好", tsOffsetMs: 100 })
       ]
     });
 
@@ -79,8 +138,8 @@ describe("message reconciliation", () => {
         startedAt,
         turnId: "turn_1"
       },
-      messages: [
-        makeMessage({ id: "old_user", role: "user", text: "旧消息", tsOffsetMs: -1_000 })
+      turns: [
+        makeTurn({ id: "old_user", role: "user", text: "旧消息", tsOffsetMs: -1_000 })
       ]
     });
 
@@ -104,8 +163,8 @@ describe("message reconciliation", () => {
         startedAt,
         turnId: "turn_1"
       },
-      messages: [
-        makeMessage({ id: "user_1", role: "user", text: "你好", tsOffsetMs: 100 })
+      turns: [
+        makeTurn({ id: "user_1", role: "user", text: "你好", tsOffsetMs: 100 })
       ]
     });
 
@@ -126,10 +185,29 @@ describe("message reconciliation", () => {
         startedAt,
         turnId: "turn_1"
       },
-      messages: [
-        makeMessage({ id: "user_1", role: "user", text: "你好", tsOffsetMs: 100 }),
-        makeMessage({ id: "assistant_1", role: "assistant", text: "收到", tsOffsetMs: 200 })
+      turns: [
+        makeTurn({ id: "user_1", role: "user", text: "你好", tsOffsetMs: 100 }),
+        makeTurn({ id: "assistant_1", role: "assistant", text: "收到", tsOffsetMs: 200 })
       ]
+    });
+
+    expect(decision).toMatchObject({
+      hasSubmittedMessage: true,
+      hasResponseAfterMessage: true,
+      shouldApplyHistory: true,
+      shouldStopReconciliation: true
+    });
+  });
+
+  it("applies history when the submitted message and answer are in the same turn", () => {
+    const decision = decideMessageHistoryReconciliation({
+      session: makeSession(),
+      request: {
+        messageText: "你好",
+        startedAt,
+        turnId: "turn_1"
+      },
+      turns: [makeConversationTurn()]
     });
 
     expect(decision).toMatchObject({
@@ -148,9 +226,9 @@ describe("message reconciliation", () => {
         startedAt,
         turnId: "turn_1"
       },
-      messages: [
-        makeMessage({ id: "assistant_1", role: "assistant", text: "收到", tsOffsetMs: 200 }),
-        makeMessage({ id: "user_1", role: "user", text: "CNQA-1", tsOffsetMs: 100 })
+      turns: [
+        makeTurn({ id: "assistant_1", role: "assistant", text: "收到", tsOffsetMs: 200 }),
+        makeTurn({ id: "user_1", role: "user", text: "CNQA-1", tsOffsetMs: 100 })
       ]
     });
 
@@ -166,9 +244,9 @@ describe("message reconciliation", () => {
         startedAt,
         turnId: "turn_1"
       },
-      messages: [
-        makeMessage({ id: "old_user", role: "user", text: "你好", tsOffsetMs: -40_000 }),
-        makeMessage({ id: "old_assistant", role: "assistant", text: "旧回复", tsOffsetMs: -39_000 })
+      turns: [
+        makeTurn({ id: "old_user", role: "user", text: "你好", tsOffsetMs: -40_000 }),
+        makeTurn({ id: "old_assistant", role: "assistant", text: "旧回复", tsOffsetMs: -39_000 })
       ]
     });
 

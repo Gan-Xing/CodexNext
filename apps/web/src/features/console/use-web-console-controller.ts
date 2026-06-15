@@ -2980,10 +2980,14 @@ export function useWebConsoleController() {
         });
         const pageKey = codexHistoryKey(page.entry);
         const historyDecision = decideMessageHistoryReconciliation({
-          messages: page.messages,
           request,
-          session: targetSession
+          session: targetSession,
+          turns: page.turns
         });
+        const historyItemCount = page.turns.reduce(
+          (count, turn) => count + turn.items.length,
+          0
+        );
         webDevTrace("console.reconcile.history.decision", {
           deviceId: request.deviceId,
           sessionId: request.sessionId,
@@ -2992,7 +2996,8 @@ export function useWebConsoleController() {
           clientMessageId: request.clientMessageId,
           submitTraceId: request.submitTraceId,
           attempt: request.attempt,
-          messageCount: page.messages.length,
+          turnCount: page.turns.length,
+          itemCount: historyItemCount,
           shouldApplyHistory: historyDecision.shouldApplyHistory,
           shouldStopReconciliation: historyDecision.shouldStopReconciliation
         });
