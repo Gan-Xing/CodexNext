@@ -14,6 +14,7 @@ import type { TurnGroup } from "../../features/chat/chat-state";
 import {
   deriveChatRenderRows,
   renderRowTailSignature,
+  type ChatRenderItem,
   type ChatRenderRow
 } from "../../features/chat/turn-rendering";
 import type { ChatItem, LocalSessionSummary } from "../../lib/types";
@@ -60,15 +61,19 @@ export function ChatCanvas(props: {
   const [expandedProcessTurnIds, setExpandedProcessTurnIds] = useState<Set<string>>(
     () => new Set()
   );
+  const fallbackRenderItems = useMemo(
+    () => props.items.map(legacyChatItemToRenderItem),
+    [props.items]
+  );
 
   const visibleRows = useMemo(
     () =>
       deriveChatRenderRows({
         expandedProcessTurnIds,
-        fallbackItems: props.items,
+        fallbackItems: fallbackRenderItems,
         turnGroups: props.turnGroups
       }),
-    [expandedProcessTurnIds, props.items, props.turnGroups]
+    [expandedProcessTurnIds, fallbackRenderItems, props.turnGroups]
   );
   const tailSignature = renderRowTailSignature(visibleRows.at(-1));
   const rowVirtualizer = useVirtualizer({
@@ -353,7 +358,7 @@ function ProcessSummaryRow(props: {
 }
 
 const ChatMessageRow = memo(function ChatMessageRow(props: {
-  item: ChatItem;
+  item: ChatRenderItem;
 }) {
   const feedback = optimisticFeedback(props.item);
   if (feedback) {
@@ -385,7 +390,7 @@ const ChatMessageRow = memo(function ChatMessageRow(props: {
   );
 });
 
-function optimisticFeedback(item: ChatItem): {
+function optimisticFeedback(item: ChatRenderItem): {
   text: string;
   tone: "thinking" | "error";
 } | null {
@@ -407,7 +412,7 @@ function optimisticFeedback(item: ChatItem): {
   return null;
 }
 
-function messageClass(item: ChatItem): string {
+function messageClass(item: ChatRenderItem): string {
   if (item.role === "assistant") {
     return "assistant";
   }
@@ -436,7 +441,7 @@ function estimateRenderRowHeight(row: ChatRenderRow | null | undefined): number 
   return estimateItemHeight(row.item);
 }
 
-function estimateItemHeight(item: ChatItem | null | undefined): number {
+function estimateItemHeight(item: ChatRenderItem | null | undefined): number {
   if (!item) {
     return 120;
   }
@@ -447,4 +452,49 @@ function estimateItemHeight(item: ChatItem | null | undefined): number {
       ? 88
       : 0;
   return Math.min(620, base + textLines * 22 + blockBoost);
+}
+
+function legacyChatItemToRenderItem(item: ChatItem): ChatRenderItem {
+  const metaKind = item.meta?.kind;
+  return {
+    id: item.id,
+    itemId: item.id,
+    kind: legacyChatItemKind(item.role),
+    role: item.role,
+    status: item.status ?? "complete",
+    text: item.text,
+    turnId: item.turnId ?? `legacy:${item.id}`,
+    type: typeof item.meta?.appServerItemType === "string" ? item.meta.appServerItemType : "legacy",
+    ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
+    ...(typeof item.createdAt === "number" ? { createdAt: item.createdAt } : {}),
+    ...(item.error ? { error: item.error } : {}),
+    meta: {
+      source: "legacy",
+      ...(typeof item.meta?.appServerItemId === "string"
+        ? { appServerItemId: item.meta.appServerItemId }
+        : {}),
+      ...(typeof item.meta?.appServerItemType === "string"
+        ? { appServerItemType: item.meta.appServerItemType }
+        : {}),
+      ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
+      ...(metaKind === "thinking" || metaKind === "error" || metaKind === "legacy"
+        ? { kind: metaKind }
+        : {}),
+      ...(typeof item.meta?.turnStatus === "string" ? { turnStatus: item.meta.turnStatus } : {}),
+      ...(item.meta?.payload !== undefined ? { payload: item.meta.payload } : {})
+    }
+  };
+}
+
+function legacyChatItemKind(role: ChatItem["role"]): ChatRenderItem["kind"] {
+  if (role === "user") {
+    return "user";
+  }
+  if (role === "assistant") {
+    return "answer";
+  }
+  if (role === "command" || role === "diff" || role === "plan") {
+    return "process";
+  }
+  return "metadata";
 }

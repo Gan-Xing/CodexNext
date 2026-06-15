@@ -89,13 +89,17 @@ export type TurnGroupStatus = "pending" | "sent" | "streaming" | "complete" | "f
 export type TurnGroupItemKind = "user" | "process" | "answer" | "metadata";
 
 export interface TurnGroupItem {
-  chatItem: ChatItem | null;
   clientMessageId?: string | undefined;
+  content?: unknown;
+  createdAt?: number | undefined;
+  error?: string | undefined;
   id: string;
   kind: TurnGroupItemKind;
+  metaKind?: NormalizedConversationTurnItem["metaKind"] | undefined;
   role: ChatItem["role"] | null;
   status: ChatItem["status"];
   text: string;
+  turnStatus: NormalizedConversationTurn["status"];
   type: string;
 }
 
@@ -275,10 +279,7 @@ export function selectConversationTurnGroups(
   if (!conversation) {
     return [];
   }
-  return projectConversationToTurnGroups(conversation, {
-    sessionId: input.sessionId,
-    threadId: input.threadId ?? conversation.threadId
-  });
+  return projectConversationToTurnGroups(conversation);
 }
 
 export function selectConversationRenderSnapshot(
@@ -1050,23 +1051,19 @@ function projectNormalizedTurnsToChatItems(
 }
 
 function projectConversationToTurnGroups(
-  conversation: Pick<ConversationRecord, "threadId" | "turnOrder" | "turns">,
-  input: { sessionId?: string | undefined; threadId?: string | null | undefined }
+  conversation: Pick<ConversationRecord, "turnOrder" | "turns">
 ): TurnGroup[] {
   return conversation.turnOrder
     .map((turnId) => conversation.turns[turnId])
     .filter((turn): turn is NormalizedConversationTurn => Boolean(turn))
-    .map((turn) => projectTurnToTurnGroup(turn, input));
+    .map((turn) => projectTurnToTurnGroup(turn));
 }
 
-function projectTurnToTurnGroup(
-  turn: NormalizedConversationTurn,
-  input: { sessionId?: string | undefined; threadId?: string | null | undefined }
-): TurnGroup {
+function projectTurnToTurnGroup(turn: NormalizedConversationTurn): TurnGroup {
   const items = turn.itemOrder
     .map((itemId) => turn.items[itemId])
     .filter((item): item is NormalizedConversationTurnItem => Boolean(item))
-    .map((item) => normalizedTurnItemToTurnGroupItem(turn, item, input.sessionId));
+    .map((item) => normalizedTurnItemToTurnGroupItem(turn, item));
   return {
     id: turn.id,
     status: turnGroupStatus(turn, items),
@@ -1084,8 +1081,7 @@ function projectTurnToTurnGroup(
 
 function normalizedTurnItemToTurnGroupItem(
   turn: NormalizedConversationTurn,
-  item: NormalizedConversationTurnItem,
-  sessionId: string | undefined
+  item: NormalizedConversationTurnItem
 ): TurnGroupItem {
   return {
     id: item.id,
@@ -1094,10 +1090,16 @@ function normalizedTurnItemToTurnGroupItem(
     role: item.role,
     text: item.text,
     ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
+    ...(item.content !== undefined ? { content: item.content } : {}),
+    ...(item.error ? { error: item.error } : {}),
+    ...(item.metaKind ? { metaKind: item.metaKind } : {}),
+    createdAt:
+      item.createdAt ??
+      timestampSecondsToMs(turn.startedAt) ??
+      timestampSecondsToMs(turn.completedAt) ??
+      Date.now(),
     status: chatStatusForTurnItem(turn, item),
-    chatItem: shouldProjectTurnItem(turn, item)
-      ? normalizedTurnItemToChatItem(turn, item, sessionId)
-      : null
+    turnStatus: turn.status
   };
 }
 

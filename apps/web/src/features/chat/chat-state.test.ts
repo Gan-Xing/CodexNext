@@ -458,7 +458,7 @@ describe("chat state", () => {
       sessionId: "session_1",
       threadId: "thread_1"
     });
-    expect(groups[0]?.processItems[0]?.chatItem).toMatchObject({
+    expect(groups[0]?.processItems[0]).toMatchObject({
       role: "command",
       text: "$ pnpm test\nok"
     });
@@ -892,7 +892,7 @@ describe("chat state", () => {
     ]);
     expect(groups[0]?.answerItems.map((item) => item.text)).toEqual(["测试通过。"]);
     expect(groups[0]?.metadataItems).toEqual([]);
-    expect(groups[0]?.processItems[1]?.chatItem).toMatchObject({
+    expect(groups[0]?.processItems[1]).toMatchObject({
       role: "command",
       text: "$ pnpm test\nok"
     });

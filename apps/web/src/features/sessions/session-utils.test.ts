@@ -54,14 +54,8 @@ function makeTurnGroup(userText: string): TurnGroup {
         role: "user",
         status: "sent",
         text: userText,
-        type: "userMessage",
-        chatItem: {
-          id: "user_1",
-          role: "user",
-          text: userText,
-          sessionId: "session_1",
-          status: "sent"
-        }
+        turnStatus: "completed",
+        type: "userMessage"
       }
     ],
     processItems: [],

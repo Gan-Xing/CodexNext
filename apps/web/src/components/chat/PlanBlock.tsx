@@ -1,7 +1,7 @@
-import type { ChatItem } from "../../lib/types";
+import type { ChatRenderItem } from "../../features/chat/turn-rendering";
 
 export function PlanBlock(props: {
-  item: ChatItem;
+  item: ChatRenderItem;
 }) {
   const payload = props.item.meta?.payload;
   const parsed = parsePlanPayload(payload);

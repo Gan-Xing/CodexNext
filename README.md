@@ -97,6 +97,9 @@ boundary.
 - [x] Status: completed - The chat canvas receives `TurnGroup` projections as
   the primary render input. Legacy `ChatItem[]` is only a projection fallback at
   the renderer boundary and must not become a second live source of truth.
+- [x] Status: completed - Chat rendering uses `ChatRenderItem` as the renderer
+  DTO. `TurnGroupItem` must not carry `chatItem`; render items are derived at
+  the UI boundary and must never be written back to the turn store.
 - [x] Status: completed - Chat header titles and the summary sheet read the
   selected conversation's `TurnGroup` projection. They must not accept
   `ChatItem[]` fallback inputs.

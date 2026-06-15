@@ -1,7 +1,7 @@
 import type { CodexIconName } from "../../components/DesignLab";
-import type { ChatItem, LocalEvent, PendingApprovalView } from "../../lib/types";
+import type { LocalEvent, PendingApprovalView } from "../../lib/types";
 import { isRecord } from "../../lib/format/text";
-import type { TurnGroup } from "../chat/chat-state";
+import type { ChatRenderItem } from "../chat/turn-rendering";
 
 export interface SummaryOutputItem {
   detail?: string;
@@ -60,35 +60,23 @@ export function summaryVisibleRows(): number {
 }
 
 export function buildSummaryPanelData(input: {
-  chatItems: ChatItem[];
+  renderItems: ChatRenderItem[];
   events: LocalEvent[];
   pendingApprovals: PendingApprovalView[];
 }): SummaryPanelData {
   return {
     approvals: input.pendingApprovals,
-    outputs: collectOutputItems(input.chatItems),
-    tasks: collectTaskItems(input.chatItems, input.events, input.pendingApprovals),
-    sources: collectSourceItems(input.chatItems, input.events)
+    outputs: collectOutputItems(input.renderItems),
+    tasks: collectTaskItems(input.renderItems, input.events, input.pendingApprovals),
+    sources: collectSourceItems(input.renderItems, input.events)
   };
 }
 
-export function chatItemsFromTurnGroups(turnGroups: TurnGroup[]): ChatItem[] {
-  const items: ChatItem[] = [];
-  for (const group of turnGroups) {
-    for (const item of group.items) {
-      if (item.chatItem) {
-        items.push(item.chatItem);
-      }
-    }
-  }
-  return items;
-}
-
-function collectOutputItems(chatItems: ChatItem[]): SummaryOutputItem[] {
+function collectOutputItems(renderItems: ChatRenderItem[]): SummaryOutputItem[] {
   const seen = new Set<string>();
   const items: SummaryOutputItem[] = [];
 
-  for (const item of [...chatItems].reverse()) {
+  for (const item of [...renderItems].reverse()) {
     if (item.role === "user") {
       continue;
     }
@@ -107,7 +95,7 @@ function collectOutputItems(chatItems: ChatItem[]): SummaryOutputItem[] {
   return items;
 }
 
-function extractOutputReferences(item: ChatItem): SummaryOutputItem[] {
+function extractOutputReferences(item: ChatRenderItem): SummaryOutputItem[] {
   const references: SummaryOutputItem[] = [];
   const text = item.text;
 
@@ -159,7 +147,7 @@ function extractOutputReferences(item: ChatItem): SummaryOutputItem[] {
 }
 
 function collectTaskItems(
-  chatItems: ChatItem[],
+  renderItems: ChatRenderItem[],
   events: LocalEvent[],
   pendingApprovals: PendingApprovalView[]
 ): SummaryTaskItem[] {
@@ -202,7 +190,7 @@ function collectTaskItems(
     }
   }
 
-  for (const item of [...chatItems].reverse()) {
+  for (const item of [...renderItems].reverse()) {
     if (item.role !== "command") {
       continue;
     }
@@ -226,11 +214,11 @@ function collectTaskItems(
 }
 
 function collectSourceItems(
-  chatItems: ChatItem[],
+  renderItems: ChatRenderItem[],
   events: LocalEvent[]
 ): SummarySourceItem[] {
   const haystacks = [
-    ...chatItems.map((item) => item.text),
+    ...renderItems.map((item) => item.text),
     ...events.map((event) => safeJson(event.payload))
   ];
   const joined = haystacks.join("\n");

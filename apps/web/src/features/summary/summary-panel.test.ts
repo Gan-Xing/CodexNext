@@ -1,20 +1,24 @@
 import { describe, expect, it } from "vitest";
-import type { ChatItem, LocalEvent, PendingApprovalView } from "../../lib/types";
+import type { LocalEvent, PendingApprovalView } from "../../lib/types";
 import type { TurnGroup } from "../chat/chat-state";
+import { chatRenderItemsFromTurnGroups, type ChatRenderItem } from "../chat/turn-rendering";
 import {
   buildSummaryPanelData,
-  chatItemsFromTurnGroups,
   summaryVisibleRows
 } from "./summary-panel";
 
-function makeChatItem(input: Partial<ChatItem> & Pick<ChatItem, "id" | "role" | "text">): ChatItem {
+function makeRenderItem(
+  input: Partial<ChatRenderItem> & Pick<ChatRenderItem, "id" | "role" | "text">
+): ChatRenderItem {
   return {
     id: input.id,
+    itemId: input.itemId ?? input.id,
+    kind: input.kind ?? (input.role === "user" ? "user" : "answer"),
     role: input.role,
+    status: input.status ?? "complete",
     text: input.text,
-    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-    ...(input.turnId ? { turnId: input.turnId } : {}),
-    ...(input.status ? { status: input.status } : {})
+    turnId: input.turnId ?? "turn_1",
+    type: input.type ?? "agentMessage"
   };
 }
 
@@ -46,13 +50,13 @@ function makeApproval(
 describe("buildSummaryPanelData", () => {
   it("extracts referenced local files as outputs from non-user messages", () => {
     const summary = buildSummaryPanelData({
-      chatItems: [
-        makeChatItem({
+      renderItems: [
+        makeRenderItem({
           id: "user-1",
           role: "user",
           text: "请看一下 /Users/demo/repo/PRIVATE_NOTES.md"
         }),
-        makeChatItem({
+        makeRenderItem({
           id: "assistant-1",
           role: "assistant",
           text: [
@@ -82,7 +86,7 @@ describe("buildSummaryPanelData", () => {
 
   it("extracts tasks from command-like event payloads and approvals", () => {
     const summary = buildSummaryPanelData({
-      chatItems: [],
+      renderItems: [],
       events: [
         makeEvent({
           id: "turn-complete-1",
@@ -118,8 +122,8 @@ describe("buildSummaryPanelData", () => {
 
   it("extracts source badges from session evidence", () => {
     const summary = buildSummaryPanelData({
-      chatItems: [
-        makeChatItem({
+      renderItems: [
+        makeRenderItem({
           id: "assistant-2",
           role: "assistant",
           text: "主要来源：Context7、Figma、Playwright 和 https://github.com/openai/codex"
@@ -153,7 +157,7 @@ describe("buildSummaryPanelData", () => {
   });
 
   it("derives summary chat items from turn group projections", () => {
-    const assistantItem = makeChatItem({
+    const assistantItem = makeRenderItem({
       id: "assistant-3",
       role: "assistant",
       text: "[README.md](/Users/demo/repo/README.md:1)"
@@ -171,11 +175,11 @@ describe("buildSummaryPanelData", () => {
           {
             id: "process-1",
             kind: "process",
-            role: "assistant",
+            role: null,
             status: "complete",
             text: "internal",
             type: "reasoning",
-            chatItem: null
+            turnStatus: "completed"
           }
         ],
         answerItems: [
@@ -186,7 +190,7 @@ describe("buildSummaryPanelData", () => {
             status: "complete",
             text: assistantItem.text,
             type: "agentMessage",
-            chatItem: assistantItem
+            turnStatus: "completed"
           }
         ],
         metadataItems: [],
@@ -194,11 +198,11 @@ describe("buildSummaryPanelData", () => {
           {
             id: "process-1",
             kind: "process",
-            role: "assistant",
+            role: null,
             status: "complete",
             text: "internal",
             type: "reasoning",
-            chatItem: null
+            turnStatus: "completed"
           },
           {
             id: "assistant-3",
@@ -207,20 +211,26 @@ describe("buildSummaryPanelData", () => {
             status: "complete",
             text: assistantItem.text,
             type: "agentMessage",
-            chatItem: assistantItem
+            turnStatus: "completed"
           }
         ]
       }
     ];
 
-    const chatItems = chatItemsFromTurnGroups(turnGroups);
+    const renderItems = chatRenderItemsFromTurnGroups(turnGroups);
     const summary = buildSummaryPanelData({
-      chatItems,
+      renderItems,
       events: [],
       pendingApprovals: []
     });
 
-    expect(chatItems).toEqual([assistantItem]);
+    expect(renderItems).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        text: assistantItem.text,
+        itemId: "assistant-3"
+      })
+    ]);
     expect(summary.outputs).toEqual([
       {
         key: "/Users/demo/repo/README.md",

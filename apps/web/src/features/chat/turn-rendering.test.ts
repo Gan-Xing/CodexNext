@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ChatItem } from "../../lib/types";
 import type { TurnGroup, TurnGroupItem } from "./chat-state";
-import { deriveChatRenderRows } from "./turn-rendering";
+import { deriveChatRenderRows, type ChatRenderItem } from "./turn-rendering";
 
 describe("turn rendering", () => {
   it("uses fallback chat items when turn groups are not available", () => {
-    const fallback = [chatItem("msg_1", "assistant", "hello")];
+    const fallback = [renderItem("msg_1", "assistant", "hello")];
 
     expect(
       deriveChatRenderRows({
@@ -26,9 +25,9 @@ describe("turn rendering", () => {
     const group = turnGroup({
       durationMs: 358_000,
       items: [
-        turnItem("user_1", "user", chatItem("user_1", "user", "查一下")),
-        turnItem("cmd_1", "process", chatItem("cmd_1", "command", "$ pnpm test\nok")),
-        turnItem("answer_1", "answer", chatItem("answer_1", "assistant", "测试通过。"))
+        turnItem("user_1", "user", "user", "查一下"),
+        turnItem("cmd_1", "process", "command", "$ pnpm test\nok"),
+        turnItem("answer_1", "answer", "assistant", "测试通过。")
       ],
       status: "complete"
     });
@@ -57,9 +56,9 @@ describe("turn rendering", () => {
   it("expands completed process details only when the turn is opened", () => {
     const group = turnGroup({
       items: [
-        turnItem("user_1", "user", chatItem("user_1", "user", "查一下")),
-        turnItem("cmd_1", "process", chatItem("cmd_1", "command", "$ pnpm test\nok")),
-        turnItem("answer_1", "answer", chatItem("answer_1", "assistant", "测试通过。"))
+        turnItem("user_1", "user", "user", "查一下"),
+        turnItem("cmd_1", "process", "command", "$ pnpm test\nok"),
+        turnItem("answer_1", "answer", "assistant", "测试通过。")
       ],
       status: "complete"
     });
@@ -91,8 +90,8 @@ describe("turn rendering", () => {
   it("keeps running process details visible", () => {
     const group = turnGroup({
       items: [
-        turnItem("user_1", "user", chatItem("user_1", "user", "查一下")),
-        turnItem("cmd_1", "process", chatItem("cmd_1", "command", "$ pnpm test"))
+        turnItem("user_1", "user", "user", "查一下"),
+        turnItem("cmd_1", "process", "command", "$ pnpm test")
       ],
       status: "streaming"
     });
@@ -115,11 +114,14 @@ describe("turn rendering", () => {
     const group = turnGroup({
       error: { message: "failed" },
       items: [
-        turnItem("user_1", "user", chatItem("user_1", "user", "查一下")),
-        turnItem("cmd_1", "process", chatItem("cmd_1", "command", "$ pnpm test"), {
+        turnItem("user_1", "user", "user", "查一下"),
+        turnItem("cmd_1", "process", "command", "$ pnpm test", {
           status: "failed"
         }),
-        turnItem("err_1", "metadata", chatItem("err_1", "system", "执行失败", "failed"))
+        turnItem("err_1", "metadata", "system", "执行失败", {
+          metaKind: "error",
+          status: "failed"
+        })
       ],
       status: "failed"
     });
@@ -163,7 +165,8 @@ function turnGroup(input: {
 function turnItem(
   id: string,
   kind: TurnGroupItem["kind"],
-  item: ChatItem | null,
+  role: TurnGroupItem["role"],
+  text: string,
   input: Partial<TurnGroupItem> = {}
 ): TurnGroupItem {
   return {
@@ -177,24 +180,28 @@ function turnItem(
           : kind === "process"
             ? "commandExecution"
             : "local.error",
-    role: item?.role ?? null,
-    text: item?.text ?? "",
-    status: item?.status ?? "complete",
-    chatItem: item,
+    role,
+    text,
+    status: input.status ?? "complete",
+    turnStatus: input.turnStatus ?? "completed",
     ...input
   };
 }
 
-function chatItem(
+function renderItem(
   id: string,
-  role: ChatItem["role"],
+  role: ChatRenderItem["role"],
   text: string,
-  status: ChatItem["status"] = "complete"
-): ChatItem {
+  status: ChatRenderItem["status"] = "complete"
+): ChatRenderItem {
   return {
     id,
+    itemId: id,
+    kind: role === "user" ? "user" : role === "assistant" ? "answer" : "metadata",
     role,
     text,
-    status
+    status,
+    turnId: "turn_1",
+    type: "legacy"
   };
 }

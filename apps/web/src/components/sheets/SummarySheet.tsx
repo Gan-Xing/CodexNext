@@ -10,11 +10,11 @@ import type { TurnGroup } from "../../features/chat/chat-state";
 import { summarizeApproval } from "../../features/events/approval-utils";
 import {
   buildSummaryPanelData,
-  chatItemsFromTurnGroups,
   summaryVisibleRows,
   type SummaryOutputItem,
   type SummaryTaskItem
 } from "../../features/summary/summary-panel";
+import { chatRenderItemsFromTurnGroups } from "../../features/chat/turn-rendering";
 import { CodexIcon } from "../DesignLab";
 
 export function SummarySheet(props: {
@@ -25,18 +25,18 @@ export function SummarySheet(props: {
   onDecision: (approvalId: string, decision: LocalApprovalDecision) => void;
 }) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
-  const summaryChatItems = useMemo(
-    () => chatItemsFromTurnGroups(props.turnGroups),
+  const summaryRenderItems = useMemo(
+    () => chatRenderItemsFromTurnGroups(props.turnGroups),
     [props.turnGroups]
   );
   const data = useMemo(
     () =>
       buildSummaryPanelData({
-        chatItems: summaryChatItems,
+        renderItems: summaryRenderItems,
         events: props.events,
         pendingApprovals: props.pendingApprovals
       }),
-    [summaryChatItems, props.events, props.pendingApprovals]
+    [summaryRenderItems, props.events, props.pendingApprovals]
   );
 
   const hasContent =

@@ -1,7 +1,7 @@
-import type { ChatItem } from "../../lib/types";
+import type { ChatRenderItem } from "../../features/chat/turn-rendering";
 
 export function SystemStatusRow(props: {
-  item: ChatItem;
+  item: ChatRenderItem;
 }) {
   const tone =
     props.item.meta?.kind === "error"
