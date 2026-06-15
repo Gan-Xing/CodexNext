@@ -8292,6 +8292,40 @@ summary {
     padding: 0.72rem 0.78rem 0.82rem;
   }
 
+  .cn-live-console .cn-thread-empty,
+  .cn-live-console .cn-thread-loading-skeleton {
+    border-radius: 18px;
+    gap: 0.18rem;
+    margin: 0.2rem 0 0;
+    max-width: none;
+    padding: 0.7rem 0.78rem;
+  }
+
+  .cn-live-console .cn-thread-empty strong,
+  .cn-live-console .cn-thread-loading-skeleton strong {
+    font-size: 0.9rem;
+    line-height: 1.22;
+  }
+
+  .cn-live-console .cn-thread-empty span,
+  .cn-live-console .cn-thread-loading-skeleton span {
+    display: -webkit-box;
+    font-size: 0.78rem;
+    line-height: 1.38;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+
+  .cn-live-console .cn-thread-loading-lines {
+    gap: 0.3rem;
+    margin-top: 0.42rem;
+  }
+
+  .cn-live-console .cn-thread-loading-lines span {
+    height: 0.42rem;
+  }
+
   .cn-live-console .cn-live-composer {
     margin: 0 0.5rem max(0.5rem, env(safe-area-inset-bottom));
   }

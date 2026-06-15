@@ -74,6 +74,7 @@ function resolveAllowedDevOrigins() {
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   allowedDevOrigins: resolveAllowedDevOrigins(),
+  devIndicators: false,
   outputFileTracingRoot: workspaceRoot,
   reactStrictMode: true,
   turbopack: {
