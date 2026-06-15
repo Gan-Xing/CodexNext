@@ -3676,18 +3676,14 @@ summary {
     padding: 0;
   }
 
-  .cn-live-console .cn-message.user {
-    max-width: 82%;
-  }
-
   .cn-live-console .cn-message-user-bubble {
     border-radius: 18px;
     padding: 0.72rem 0.92rem;
   }
 
   .cn-live-console .cn-message-copy-button {
-    bottom: -0.42rem;
-    right: -0.42rem;
+    bottom: 0.18rem;
+    right: 0.18rem;
     top: auto;
   }
 
@@ -5882,7 +5878,8 @@ summary {
 .cn-message {
   font-size: 0.96rem;
   line-height: 1.6;
-  max-width: 760px;
+  max-width: min(760px, 100%);
+  min-width: 0;
   padding: 0;
 }
 
@@ -5960,13 +5957,13 @@ summary {
   align-self: flex-end;
   background: var(--cn-soft);
   border-radius: 18px;
-  max-width: min(460px, 78%);
+  max-width: var(--cn-user-bubble-max, min(72ch, 78%));
   padding: 0.8rem 1rem;
 }
 
 .cn-message.assistant {
   background: transparent;
-  max-width: 760px;
+  max-width: min(760px, 100%);
 }
 
 .cn-message.command {
@@ -5975,7 +5972,7 @@ summary {
   border-radius: 18px;
   color: var(--cn-ink);
   font-family: var(--mono);
-  max-width: 720px;
+  max-width: min(720px, 100%);
   padding: 0.9rem 1rem;
 }
 
@@ -5988,7 +5985,7 @@ summary {
 
 .cn-message.diff {
   color: var(--cn-ink);
-  max-width: 720px;
+  max-width: min(720px, 100%);
 }
 
 .cn-message.command .cn-message-label,
@@ -6870,12 +6867,27 @@ summary {
   opacity: 0.68;
 }
 
+.cn-live-console {
+  --cn-rich-message-max: 100%;
+  --cn-user-bubble-max: min(72ch, 78%);
+}
+
 .cn-live-console .cn-message.user {
   align-self: flex-end;
   background: transparent;
   border: 0;
-  max-width: min(460px, 78%);
+  max-width: var(--cn-user-bubble-max, min(72ch, 78%));
   padding: 0;
+}
+
+.cn-live-console .cn-message:has(.cn-code-block, .cn-markdown-message table, .cn-diff-lines) {
+  align-self: stretch;
+  max-width: var(--cn-rich-message-max, 100%);
+}
+
+.cn-live-console .cn-message.user:has(.cn-code-block, .cn-markdown-message table, .cn-diff-lines) .cn-message-user-shell,
+.cn-live-console .cn-message.user:has(.cn-code-block, .cn-markdown-message table, .cn-diff-lines) .cn-message-user-bubble {
+  width: 100%;
 }
 
 .cn-live-console .cn-message.user.failed {
@@ -6885,12 +6897,17 @@ summary {
 .cn-live-console .cn-message-user-shell {
   display: grid;
   justify-items: end;
+  max-width: 100%;
+  min-width: 0;
   position: relative;
 }
 
 .cn-live-console .cn-message-user-bubble {
   background: var(--cn-soft);
   border-radius: 18px;
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 0.8rem 1rem;
   position: relative;
   width: 100%;
@@ -6914,8 +6931,8 @@ summary {
   opacity: 0.08;
   padding: 0;
   position: absolute;
-  bottom: -0.42rem;
-  right: -0.42rem;
+  bottom: 0.18rem;
+  right: 0.18rem;
   top: auto;
   transform: translateY(2px);
   transition:
@@ -7022,7 +7039,9 @@ summary {
 }
 
 .cn-markdown-message {
+  max-width: 100%;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .cn-markdown-message p,
@@ -7108,6 +7127,7 @@ summary {
   border-collapse: collapse;
   display: block;
   max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   white-space: nowrap;
 }
@@ -7186,6 +7206,8 @@ summary {
   background: #f6f8fb;
   border: 1px solid #dfe6ef;
   border-radius: 16px;
+  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -7205,6 +7227,8 @@ summary {
   font-size: 0.83rem;
   margin: 0;
   max-height: none;
+  max-width: 100%;
+  min-width: 0;
   overflow: auto;
   padding: 0.85rem 0.95rem;
   white-space: pre;
@@ -7405,6 +7429,10 @@ summary {
 }
 
 @media (max-width: 900px) {
+  .cn-live-console {
+    --cn-user-bubble-max: 86%;
+  }
+
   .cn-markdown-message table,
   .cn-diff-lines,
   .cn-code-pre,
@@ -7425,6 +7453,12 @@ summary {
 
   .cn-semantic-block {
     padding: 0.82rem 0.88rem;
+  }
+}
+
+@media (max-width: 520px) {
+  .cn-live-console {
+    --cn-user-bubble-max: 92%;
   }
 }
 
@@ -7592,8 +7626,9 @@ summary {
     padding-bottom: 0.68rem;
   }
 
-  .cn-message.user {
-    max-width: min(72%, 640px);
+  .cn-live-console {
+    --cn-rich-message-max: 100%;
+    --cn-user-bubble-max: 86%;
   }
 
   .cn-live-console .cn-message-user-bubble {
@@ -7909,8 +7944,8 @@ summary {
 
   .cn-live-console .cn-message-copy-button {
     opacity: 0.54;
-    bottom: -0.42rem;
-    right: -0.42rem;
+    bottom: 0.18rem;
+    right: 0.18rem;
     top: auto;
   }
 
