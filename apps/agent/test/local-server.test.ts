@@ -937,14 +937,20 @@ describe("local HTTP server guards", () => {
       expect(turns.status).toBe(200);
       expect(fake.threadReadParams[1]).toEqual({
         threadId: "thread_1",
-        includeTurns: true
+        includeTurns: false
       });
-      expect(fake.threadTurnsListParams).toHaveLength(0);
+      expect(fake.threadTurnsListParams[0]).toEqual({
+        threadId: "thread_1",
+        cursor: null,
+        limit: 20,
+        sortDirection: "desc",
+        itemsView: "summary"
+      });
       expect(turnsBody.messages).toMatchObject([
         { role: "user", text: "继续这个项目" },
         { role: "assistant", text: "我会先查看文件结构。" }
       ]);
-      expect(turnsBody.nextCursor).toBeNull();
+      expect(turnsBody.nextCursor).toBe("cursor_older");
 
       const pagedTurns = await fetch(
         `${base}/api/codex-history/turns?token=secret&id=thread_1&cursor=older&limit=20&sortDirection=desc&itemsView=summary`
@@ -954,7 +960,7 @@ describe("local HTTP server guards", () => {
         nextCursor: string | null;
       };
       expect(pagedTurns.status).toBe(200);
-      expect(fake.threadTurnsListParams[0]).toEqual({
+      expect(fake.threadTurnsListParams[1]).toEqual({
         threadId: "thread_1",
         cursor: "older",
         limit: 20,
