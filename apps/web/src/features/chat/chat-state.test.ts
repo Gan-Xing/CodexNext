@@ -14,7 +14,8 @@ import {
   reassignSessionChatItems,
   restoreConversationCacheEntries,
   upsertSessionInWorkspace,
-  selectConversationChatItems
+  selectConversationChatItems,
+  selectConversationTurnGroups
 } from "./chat-state";
 
 function makeWorkspace() {
@@ -643,6 +644,76 @@ describe("chat state", () => {
       "turn-store",
       "turn-store"
     ]);
+  });
+
+  it("derives read-only turn groups from normalized turn items", () => {
+    const turn: CodexThreadTurn = {
+      id: "turn_1",
+      items: [
+        {
+          id: "item_user",
+          type: "userMessage",
+          content: [{ type: "text", text: "检查日志", text_elements: [] }]
+        },
+        {
+          id: "item_reasoning",
+          type: "reasoning",
+          summary: ["read logs"]
+        },
+        {
+          id: "item_command",
+          type: "commandExecution",
+          command: "pnpm test",
+          aggregatedOutput: "ok"
+        },
+        {
+          id: "item_agent",
+          type: "agentMessage",
+          text: "测试通过。"
+        },
+        {
+          id: "item_meta",
+          type: "contextCompaction"
+        }
+      ],
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: 10,
+      completedAt: 13,
+      durationMs: 3_000
+    };
+    const workspace = hydrateSessionFromTurns(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      "session_1",
+      [turn]
+    );
+
+    const groups = selectConversationTurnGroups(workspace, {
+      sessionId: "session_1",
+      threadId: "thread_1"
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({
+      id: "turn_1",
+      status: "complete",
+      startedAt: 10_000,
+      completedAt: 13_000,
+      durationMs: 3_000
+    });
+    expect(groups[0]?.userItems.map((item) => item.text)).toEqual(["检查日志"]);
+    expect(groups[0]?.processItems.map((item) => item.type)).toEqual([
+      "reasoning",
+      "commandExecution",
+      "contextCompaction"
+    ]);
+    expect(groups[0]?.answerItems.map((item) => item.text)).toEqual(["测试通过。"]);
+    expect(groups[0]?.metadataItems).toEqual([]);
+    expect(groups[0]?.processItems[1]?.chatItem).toMatchObject({
+      role: "command",
+      text: "$ pnpm test\nok"
+    });
   });
 
   it("does not let stale history overwrite a live turn-store stream", () => {

@@ -86,6 +86,34 @@ export interface NormalizedConversationTurnItem {
   updatedAt: number;
 }
 
+export type TurnGroupStatus = "pending" | "sent" | "streaming" | "complete" | "failed";
+export type TurnGroupItemKind = "user" | "process" | "answer" | "metadata";
+
+export interface TurnGroupItem {
+  chatItem: ChatItem | null;
+  clientMessageId?: string | undefined;
+  id: string;
+  kind: TurnGroupItemKind;
+  role: ChatItem["role"] | null;
+  status: ChatItem["status"];
+  text: string;
+  type: string;
+}
+
+export interface TurnGroup {
+  answerItems: TurnGroupItem[];
+  completedAt: number | null;
+  durationMs: number | null;
+  error: unknown | null;
+  id: string;
+  items: TurnGroupItem[];
+  metadataItems: TurnGroupItem[];
+  processItems: TurnGroupItem[];
+  startedAt: number | null;
+  status: TurnGroupStatus;
+  userItems: TurnGroupItem[];
+}
+
 export interface OutboxEntry {
   clientMessageId: string;
   conversationKey: ConversationKey;
@@ -225,6 +253,32 @@ export function selectConversationChatItems(
     return [];
   }
   return workspace.conversations[canonicalConversationKey(workspace, key)]?.items ?? [];
+}
+
+export function selectConversationTurnGroups(
+  workspace: DeviceWorkspace | null,
+  input: {
+    pendingClientId?: string | undefined;
+    sessionId?: string | undefined;
+    threadId?: string | undefined;
+  } | null
+): TurnGroup[] {
+  if (!workspace || !input) {
+    return [];
+  }
+  const key = findConversationKey(workspace, input);
+  if (!key) {
+    return [];
+  }
+  const canonicalKey = canonicalConversationKey(workspace, key);
+  const conversation = workspace.conversations[canonicalKey];
+  if (!conversation) {
+    return [];
+  }
+  return projectConversationToTurnGroups(conversation, {
+    sessionId: input.sessionId,
+    threadId: input.threadId ?? conversation.threadId
+  });
 }
 
 export function selectConversationRenderSnapshot(
@@ -949,6 +1003,90 @@ function projectNormalizedTurnsToChatItems(
         .map((item) => normalizedTurnItemToChatItem(turn, item, input.sessionId))
         .filter((item): item is ChatItem => Boolean(item))
     );
+}
+
+function projectConversationToTurnGroups(
+  conversation: Pick<ConversationRecord, "threadId" | "turnOrder" | "turns">,
+  input: { sessionId?: string | undefined; threadId?: string | null | undefined }
+): TurnGroup[] {
+  return conversation.turnOrder
+    .map((turnId) => conversation.turns[turnId])
+    .filter((turn): turn is NormalizedConversationTurn => Boolean(turn))
+    .map((turn) => projectTurnToTurnGroup(turn, input));
+}
+
+function projectTurnToTurnGroup(
+  turn: NormalizedConversationTurn,
+  input: { sessionId?: string | undefined; threadId?: string | null | undefined }
+): TurnGroup {
+  const items = turn.itemOrder
+    .map((itemId) => turn.items[itemId])
+    .filter((item): item is NormalizedConversationTurnItem => Boolean(item))
+    .map((item) => normalizedTurnItemToTurnGroupItem(turn, item, input.sessionId));
+  return {
+    id: turn.id,
+    status: turnGroupStatus(turn, items),
+    startedAt: timestampSecondsToMs(turn.startedAt) ?? null,
+    completedAt: timestampSecondsToMs(turn.completedAt) ?? null,
+    durationMs: turn.durationMs,
+    error: turn.error,
+    items,
+    userItems: items.filter((item) => item.kind === "user"),
+    processItems: items.filter((item) => item.kind === "process"),
+    answerItems: items.filter((item) => item.kind === "answer"),
+    metadataItems: items.filter((item) => item.kind === "metadata")
+  };
+}
+
+function normalizedTurnItemToTurnGroupItem(
+  turn: NormalizedConversationTurn,
+  item: NormalizedConversationTurnItem,
+  sessionId: string | undefined
+): TurnGroupItem {
+  return {
+    id: item.id,
+    type: item.type,
+    kind: turnGroupItemKind(item),
+    role: item.role,
+    text: item.text,
+    ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
+    status: chatStatusForTurnItem(turn, item),
+    chatItem: shouldProjectTurnItem(turn, item)
+      ? normalizedTurnItemToChatItem(turn, item, sessionId)
+      : null
+  };
+}
+
+function turnGroupItemKind(item: NormalizedConversationTurnItem): TurnGroupItemKind {
+  if (item.kind === "user") {
+    return "user";
+  }
+  if (item.kind === "assistant") {
+    return "answer";
+  }
+  if (item.kind === "process") {
+    return "process";
+  }
+  return "metadata";
+}
+
+function turnGroupStatus(
+  turn: NormalizedConversationTurn,
+  items: TurnGroupItem[]
+): TurnGroupStatus {
+  if (turn.status === "failed" || items.some((item) => item.status === "failed")) {
+    return "failed";
+  }
+  if (turn.status === "completed") {
+    return "complete";
+  }
+  if (items.some((item) => item.status === "streaming")) {
+    return "streaming";
+  }
+  if (items.some((item) => item.status === "sent")) {
+    return "sent";
+  }
+  return "pending";
 }
 
 function normalizedTurnItemToChatItem(

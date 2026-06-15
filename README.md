@@ -76,6 +76,10 @@ boundary.
   agent errors, legacy assistant/command/diff deltas, and outbox recovery are
   represented as turn/items first. `ChatItem` is a projection for the current
   renderer, not a business-state write target for those flows.
+- [x] Status: completed - `TurnGroup` is a read-only projection derived from
+  normalized turns. It classifies `userMessage` as user input, process item
+  types as process, `agentMessage` as answer, and carries status/timing without
+  writing back to the store.
 - [x] Status: completed - Model selection remains part of the start/resume/turn
   path. Schema or adapter work must not drop the selected model when switching
   or sending.
