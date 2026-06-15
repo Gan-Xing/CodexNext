@@ -7,7 +7,8 @@ import type {
   CodexThreadTurn,
   LocalCodexHistoryDetailResponse,
   LocalCodexHistoryEntry,
-  LocalCodexHistoryMessage
+  LocalCodexHistoryMessage,
+  LocalCodexHistoryPageResponse
 } from "@codexnext/protocol";
 
 interface CodexHistoryStoreOptions {
@@ -36,6 +37,8 @@ interface HistoryRowDisplayInfo {
   presence: HistoryMessagePresence;
   title: string | null;
 }
+
+type HistoryPageSortDirection = "asc" | "desc";
 
 export class CodexHistoryStore {
   private database: DatabaseSync | null = null;
@@ -192,6 +195,72 @@ export class CodexHistoryStore {
       entry,
       messages: display.messages ?? [],
       turns: historyMessagesToSyntheticTurns(row.id, display.messages ?? [])
+    };
+  }
+
+  public async readPage(input: {
+    threadId: string;
+    cursor?: string | null;
+    limit: number;
+    loadedThreadIds?: Set<string>;
+    sortDirection?: HistoryPageSortDirection;
+  }): Promise<LocalCodexHistoryPageResponse | null> {
+    const database = await this.getDatabase();
+    if (!database) {
+      return null;
+    }
+    const row = database
+      .prepare(
+        `
+          SELECT
+            id,
+            rollout_path AS rolloutPath,
+            cwd,
+            title,
+            source,
+            first_user_message AS firstUserMessage,
+            preview,
+            created_at AS createdAt,
+            updated_at AS updatedAt,
+            created_at_ms AS createdAtMs,
+            updated_at_ms AS updatedAtMs
+          FROM threads
+          WHERE id = ?
+          LIMIT 1
+        `
+      )
+      .get(input.threadId) as HistoryThreadRow | undefined;
+    if (!row) {
+      return null;
+    }
+
+    const display = await this.inspectRowDisplay(row, {
+      includeRolloutMessages: true
+    });
+    if (display.presence === "unknown") {
+      return null;
+    }
+
+    const entry = await rowToHistoryEntry(
+      row,
+      input.loadedThreadIds,
+      undefined,
+      display.title
+    );
+    const messages = display.messages ?? [];
+    const page = sliceHistoryMessagesPage(messages, {
+      cursor: input.cursor ?? null,
+      limit: input.limit,
+      sortDirection: input.sortDirection ?? "desc",
+      threadId: row.id
+    });
+
+    return {
+      entry,
+      messages: page.messages,
+      turns: historyMessagesToSyntheticTurns(row.id, page.messages),
+      nextCursor: page.nextCursor,
+      backwardsCursor: page.backwardsCursor
     };
   }
 
@@ -468,6 +537,74 @@ function makeHistoryMessage(
     text: trimmed.slice(0, 16_000),
     ts
   };
+}
+
+function sliceHistoryMessagesPage(
+  messages: LocalCodexHistoryMessage[],
+  input: {
+    cursor?: string | null;
+    limit: number;
+    sortDirection: HistoryPageSortDirection;
+    threadId: string;
+  }
+): {
+  messages: LocalCodexHistoryMessage[];
+  nextCursor: string | null;
+  backwardsCursor: string | null;
+} {
+  const normalizedLimit = Math.max(1, Math.min(100, Math.floor(input.limit)));
+  if (messages.length === 0) {
+    return {
+      messages: [],
+      nextCursor: null,
+      backwardsCursor: null
+    };
+  }
+
+  if (input.sortDirection === "asc") {
+    const start = parseHistoryCursor(input.cursor, input.threadId) ?? 0;
+    const safeStart = Math.max(0, Math.min(messages.length, start));
+    const end = Math.min(messages.length, safeStart + normalizedLimit);
+    return {
+      messages: messages.slice(safeStart, end),
+      nextCursor:
+        end < messages.length ? formatHistoryCursor(input.threadId, end) : null,
+      backwardsCursor:
+        safeStart > 0 ? formatHistoryCursor(input.threadId, Math.max(0, safeStart - normalizedLimit)) : null
+    };
+  }
+
+  const cursorEnd = parseHistoryCursor(input.cursor, input.threadId);
+  const end =
+    cursorEnd === null
+      ? messages.length
+      : Math.max(0, Math.min(messages.length, cursorEnd));
+  const start = Math.max(0, end - normalizedLimit);
+  return {
+    messages: messages.slice(start, end),
+    nextCursor: start > 0 ? formatHistoryCursor(input.threadId, start) : null,
+    backwardsCursor:
+      end < messages.length ? formatHistoryCursor(input.threadId, end) : null
+  };
+}
+
+function parseHistoryCursor(
+  cursor: string | null | undefined,
+  threadId: string
+): number | null {
+  if (typeof cursor !== "string" || !cursor.trim()) {
+    return null;
+  }
+  const parts = cursor.split(":");
+  if (parts.length !== 3 || parts[0] !== "state-page" || parts[1] !== threadId) {
+    return null;
+  }
+  const offset = Number(parts[2]);
+  return Number.isInteger(offset) && offset >= 0 ? offset : null;
+}
+
+function formatHistoryCursor(threadId: string, offset: number): string {
+  return `state-page:${threadId}:${Math.max(0, Math.floor(offset))}`;
 }
 
 function historyMessagesToSyntheticTurns(

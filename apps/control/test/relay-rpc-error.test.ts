@@ -14,6 +14,11 @@ describe("classifyRelayRpcError", () => {
       reason: "relay_rpc_timeout",
       statusCode: 504
     });
+    expect(classifyRelayRpcError(new Error("payload_too_large: history page"))).toEqual({
+      message: "payload_too_large: history page",
+      reason: "payload_too_large",
+      statusCode: 413
+    });
     expect(classifyRelayRpcError(new Error("Device offline: device_1"))).toEqual({
       message: "Device offline: device_1",
       reason: "device_offline",

@@ -11,11 +11,12 @@ export interface RelayRpcErrorClassification {
   message: string;
   reason:
     | "relay_rpc_timeout"
+    | "payload_too_large"
     | "device_offline"
     | "not_found"
     | "relay_rpc_protocol_error"
     | "relay_rpc_error";
-  statusCode: 400 | 404 | 502 | 503 | 504;
+  statusCode: 400 | 404 | 413 | 502 | 503 | 504;
 }
 
 export function validateRelayRpcResult(
@@ -48,6 +49,9 @@ export function routeRpcTimeout(
 export function classifyRelayRpcError(error: unknown): RelayRpcErrorClassification {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
+  if (normalized.includes("payload_too_large")) {
+    return { message, reason: "payload_too_large", statusCode: 413 };
+  }
   if (normalized.includes("timeout")) {
     return { message, reason: "relay_rpc_timeout", statusCode: 504 };
   }

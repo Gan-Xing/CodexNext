@@ -782,6 +782,33 @@ describe("local HTTP server guards", () => {
       ]);
       expect(turnsBody.nextCursor).toBeNull();
 
+      const firstPage = await fetch(
+        `${base}/api/codex-history/turns?token=secret&id=thread_local&limit=2&sortDirection=desc&itemsView=summary`
+      );
+      const firstPageBody = await firstPage.json() as {
+        messages: Array<{ role: string; text: string }>;
+        nextCursor: string | null;
+      };
+      expect(firstPage.status).toBe(200);
+      expect(firstPageBody.messages).toMatchObject([
+        { role: "assistant", text: "我会先查看文件结构。" },
+        { role: "diff", text: expect.stringContaining("/repo/src/app.ts") }
+      ]);
+      expect(firstPageBody.nextCursor).toBeTruthy();
+
+      const secondPage = await fetch(
+        `${base}/api/codex-history/turns?token=secret&id=thread_local&cursor=${encodeURIComponent(firstPageBody.nextCursor ?? "")}&limit=2&sortDirection=desc&itemsView=summary`
+      );
+      const secondPageBody = await secondPage.json() as {
+        messages: Array<{ role: string; text: string }>;
+        nextCursor: string | null;
+      };
+      expect(secondPage.status).toBe(200);
+      expect(secondPageBody.messages).toMatchObject([
+        { role: "user", text: "继续这个项目" }
+      ]);
+      expect(secondPageBody.nextCursor).toBeNull();
+
       await handle.sessionManager.startSession({
         cwd: process.cwd(),
         permissionMode: "request-approval",

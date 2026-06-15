@@ -219,6 +219,7 @@ const DEFAULT_SIDEBAR_WIDTH = 292;
 const MIN_SIDEBAR_WIDTH = 272;
 const MAX_SIDEBAR_WIDTH = 620;
 const HISTORY_PAGE_CACHE_TTL_MS = 15_000;
+const HISTORY_PREFETCH_CONCURRENCY = 1;
 const MESSAGE_RECONCILE_INITIAL_DELAY_MS = 1_200;
 const MESSAGE_RECONCILE_INTERVAL_MS = 2_500;
 const MESSAGE_RECONCILE_MAX_ATTEMPTS = 720;
@@ -229,6 +230,12 @@ const RELAY_FULL_ACCESS_ENABLED =
 interface RelayBootstrapConfig {
   sessionToken: string;
   relayUrl: string;
+}
+
+interface HistoryPrefetchTask {
+  connection: AgentConnection;
+  entry: LocalCodexHistoryEntry;
+  key: string;
 }
 
 interface MessageReconciliationRequest {
@@ -546,6 +553,9 @@ export function useWebConsoleController() {
   const historyPageCacheRef = useRef(
     new Map<string, { fetchedAt: number; page: LocalCodexHistoryPageResponse }>()
   );
+  const activeHistoryLoadKeyRef = useRef<string | null>(null);
+  const historyPrefetchQueueRef = useRef<HistoryPrefetchTask[]>([]);
+  const activeHistoryPrefetchCountRef = useRef(0);
   const prefetchingHistoryKeysRef = useRef(new Set<string>());
   const refreshingHistoryKeysRef = useRef(new Set<string>());
   const deviceHydrationVersionsRef = useRef(new Map<string, number>());
@@ -2573,6 +2583,8 @@ export function useWebConsoleController() {
       return;
     }
     const key = codexHistoryKey(entry);
+    activeHistoryLoadKeyRef.current = key;
+    historyPrefetchQueueRef.current = [];
     const previewSession = makeHistoryPreviewSession(entry);
     const workspace = deviceWorkspaces[deviceId];
     const threadIsLoaded = entry.loaded || workspace?.loadedThreadIds.includes(entry.id) || false;
@@ -2762,6 +2774,10 @@ export function useWebConsoleController() {
       if (startedRefresh) {
         refreshingHistoryKeysRef.current.delete(key);
       }
+      if (activeHistoryLoadKeyRef.current === key) {
+        activeHistoryLoadKeyRef.current = null;
+      }
+      pumpHistoryPrefetchQueue();
     }
   }
 
@@ -2780,13 +2796,46 @@ export function useWebConsoleController() {
     if (prefetchingHistoryKeysRef.current.has(key)) {
       return;
     }
+    if (historyPrefetchQueueRef.current.some((task) => task.key === key)) {
+      return;
+    }
+    historyPrefetchQueueRef.current.push({
+      connection: deviceConnection,
+      entry,
+      key
+    });
+    pumpHistoryPrefetchQueue();
+  }
+
+  function pumpHistoryPrefetchQueue() {
+    if (activeHistoryLoadKeyRef.current) {
+      return;
+    }
+    while (
+      activeHistoryPrefetchCountRef.current < HISTORY_PREFETCH_CONCURRENCY &&
+      historyPrefetchQueueRef.current.length > 0
+    ) {
+      const task = historyPrefetchQueueRef.current.shift();
+      if (!task) {
+        return;
+      }
+      if (prefetchingHistoryKeysRef.current.has(task.key)) {
+        continue;
+      }
+      runHistoryPrefetch(task);
+    }
+  }
+
+  function runHistoryPrefetch(task: HistoryPrefetchTask) {
+    const { connection: taskConnection, entry, key } = task;
     prefetchingHistoryKeysRef.current.add(key);
+    activeHistoryPrefetchCountRef.current += 1;
     webDevTrace("console.history.prefetch.begin", {
       historyKey: key,
       threadId: entry.id,
       cwd: entry.cwd
     });
-    void getCodexHistoryTurns(deviceConnection, {
+    void getCodexHistoryTurns(taskConnection, {
       id: entry.id,
       cwd: entry.cwd,
       limit: 40
@@ -2813,6 +2862,11 @@ export function useWebConsoleController() {
       })
       .finally(() => {
         prefetchingHistoryKeysRef.current.delete(key);
+        activeHistoryPrefetchCountRef.current = Math.max(
+          0,
+          activeHistoryPrefetchCountRef.current - 1
+        );
+        pumpHistoryPrefetchQueue();
       });
   }
 

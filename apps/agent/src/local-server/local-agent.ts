@@ -373,17 +373,17 @@ async function listCodexHistoryTurns(
   const sortDirection = params.sortDirection === "asc" ? "asc" : "desc";
   const itemsView = params.itemsView === "full" ? "full" : "summary";
 
-  // Initial history open does not need a paged turns lookup. `thread/read`
-  // already returns the full thread faster than `thread/read + thread/turns/list`.
-  if (!(typeof params.cursor === "string" && params.cursor.trim())) {
-    const detail = await readCodexHistoryDetailById(params.id, sessionManager, historyStore);
-    return historyPageWithGuaranteedTurns(params.id, {
-      entry: detail.entry,
-      messages: detail.messages,
-      turns: detail.turns,
-      nextCursor: null,
-      backwardsCursor: null
-    }, "initial-detail");
+  if (historyStore) {
+    const page = await historyStore.readPage({
+      threadId: params.id,
+      cursor: typeof params.cursor === "string" && params.cursor.trim() ? params.cursor : null,
+      limit,
+      loadedThreadIds: loadedHistoryThreadIds(sessionManager),
+      sortDirection
+    });
+    if (page) {
+      return historyPageWithGuaranteedTurns(params.id, page, "state-db-page");
+    }
   }
 
   const entry = await readCodexHistoryEntryById(params.id, sessionManager, historyStore);
@@ -555,7 +555,7 @@ function historyDetailWithGuaranteedTurns(
   const turns = guaranteeHistoryTurns(threadId, detail.messages, detail.turns);
   devTrace("agent.history.detail.counts", {
     threadId,
-    source,
+    historySource: source,
     messageCount: detail.messages.length,
     originalTurnCount: detail.turns.length,
     turnCount: turns.length,
@@ -575,10 +575,11 @@ function historyPageWithGuaranteedTurns(
   const turns = guaranteeHistoryTurns(threadId, page.messages, page.turns);
   devTrace("agent.history.turns.counts", {
     threadId,
-    source,
+    historySource: source,
     messageCount: page.messages.length,
     originalTurnCount: page.turns.length,
     turnCount: turns.length,
+    responseBytes: jsonByteLength({ ...page, turns }),
     syntheticTurnCount: Math.max(0, turns.length - page.turns.length),
     hasNextCursor: Boolean(page.nextCursor),
     hasBackwardsCursor: Boolean(page.backwardsCursor)
@@ -587,6 +588,10 @@ function historyPageWithGuaranteedTurns(
     ...page,
     turns
   };
+}
+
+function jsonByteLength(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value));
 }
 
 function guaranteeHistoryTurns(

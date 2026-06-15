@@ -23,6 +23,8 @@ import {
 import { readOrCreateDeviceIdentity } from "../relay/device-identity.js";
 import { devTrace, durationMs, errorSummary, payloadSummary } from "../dev-trace.js";
 
+const DEFAULT_RPC_RESPONSE_MAX_BYTES = 6 * 1024 * 1024;
+
 export interface ConnectOptions {
   relay: string;
   ownerToken?: string;
@@ -293,6 +295,7 @@ export async function startConnectAgent(
       });
       try {
         const result = await runtime.invoke(request.method, request.params);
+        assertRpcResponseFitsBudget(request, result);
         devTrace("relay.rpc.ack_success", {
           requestId: request.requestId,
           method: request.method,
@@ -325,6 +328,35 @@ export async function startConnectAgent(
     runtime,
     socket
   };
+}
+
+function assertRpcResponseFitsBudget(
+  request: RelayRpcRequest,
+  result: unknown
+): void {
+  const maxBytes = rpcResponseMaxBytes();
+  const responseBytes = Buffer.byteLength(JSON.stringify(result));
+  if (responseBytes <= maxBytes) {
+    return;
+  }
+  devTrace("relay.rpc.payload_too_large", {
+    requestId: request.requestId,
+    method: request.method,
+    responseBytes,
+    maxBytes
+  });
+  throw new Error(
+    `payload_too_large: ${request.method} response was ${responseBytes} bytes; max is ${maxBytes} bytes`
+  );
+}
+
+function rpcResponseMaxBytes(): number {
+  const raw = process.env.CODEXNEXT_RPC_RESPONSE_MAX_BYTES;
+  const parsed = raw ? Number(raw) : NaN;
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.floor(parsed);
+  }
+  return DEFAULT_RPC_RESPONSE_MAX_BYTES;
 }
 
 export async function runConnect(options: ConnectOptions): Promise<void> {

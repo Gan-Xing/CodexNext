@@ -41,6 +41,8 @@ import {
 } from "./relay-rpc.js";
 import { devTrace, durationMs, errorSummary, payloadSummary } from "./dev-trace.js";
 
+const DEFAULT_RELAY_RPC_RESULT_MAX_BYTES = 6 * 1024 * 1024;
+
 export interface RelayRouteDependencies {
   allowRelayFullAccess: boolean;
   app: FastifyInstance;
@@ -294,6 +296,13 @@ export function registerRelayRoutes(input: RelayRouteDependencies): void {
           method: RelayMethodValue.CodexHistoryTurns,
           ...payloadSummary(params)
         });
+        devTrace("relay.history.turns.response_counts", {
+          deviceId,
+          method: RelayMethodValue.CodexHistoryTurns,
+          historySource: "cache",
+          ...payloadSummary(params),
+          ...summarizeHistoryPageCounts(cached.page)
+        });
         input.audit.write({
           action: "relay.rpc.cache_hit",
           at: Date.now(),
@@ -322,6 +331,13 @@ export function registerRelayRoutes(input: RelayRouteDependencies): void {
         rawResult,
         RelayMethodValue.CodexHistoryTurns
       ) as LocalCodexHistoryPageResponse;
+      devTrace("relay.history.turns.response_counts", {
+        deviceId,
+        method: RelayMethodValue.CodexHistoryTurns,
+        historySource: "rpc",
+        ...payloadSummary(params),
+        ...summarizeHistoryPageCounts(result)
+      });
       input.writeCachedHistoryPage(input.devices.get(deviceId) ?? null, params, result);
       input.audit.write({
         action: "relay.rpc",
@@ -552,12 +568,18 @@ async function invokeMachineRpc(
     ...payloadSummary(params)
   });
 
+  const currentSocket = device.socket;
   let response: RelayRpcResponse;
   try {
     response = await new Promise<RelayRpcResponse>((resolve, reject) => {
-      device.socket
-        ?.timeout(timeoutMs)
+      const onDisconnect = () => {
+        reject(new Error(`Device disconnected during RPC: ${deviceId}`));
+      };
+      currentSocket.once("disconnect", onDisconnect);
+      currentSocket
+        .timeout(timeoutMs)
         .emit("rpc:request", request, (error: Error | null, payload: RelayRpcResponse) => {
+          currentSocket.off("disconnect", onDisconnect);
           if (error) {
             reject(error);
             return;
@@ -588,6 +610,7 @@ async function invokeMachineRpc(
     });
     throw new Error(response.error.message);
   }
+  ensureRelayRpcResultFitsBudget(method, response.result);
   devTrace("relay.rpc.response", {
     requestId: request.requestId,
     deviceId,
@@ -595,6 +618,42 @@ async function invokeMachineRpc(
     durationMs: durationMs(startedAt)
   });
   return response.result;
+}
+
+function ensureRelayRpcResultFitsBudget(method: RelayMethod, result: unknown): void {
+  const maxBytes = relayRpcResultMaxBytes();
+  const responseBytes = Buffer.byteLength(JSON.stringify(result));
+  if (responseBytes <= maxBytes) {
+    return;
+  }
+  devTrace("relay.rpc.payload_too_large", {
+    method,
+    responseBytes,
+    maxBytes
+  });
+  throw new Error(
+    `payload_too_large: ${method} response was ${responseBytes} bytes; max is ${maxBytes} bytes`
+  );
+}
+
+function relayRpcResultMaxBytes(): number {
+  const raw = process.env.CODEXNEXT_RPC_RESPONSE_MAX_BYTES;
+  const parsed = raw ? Number(raw) : NaN;
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.floor(parsed);
+  }
+  return DEFAULT_RELAY_RPC_RESULT_MAX_BYTES;
+}
+
+function summarizeHistoryPageCounts(page: LocalCodexHistoryPageResponse): Record<string, unknown> {
+  return {
+    messageCount: page.messages.length,
+    turnCount: page.turns.length,
+    turnItemCount: page.turns.reduce((total, turn) => total + turn.items.length, 0),
+    responseBytes: Buffer.byteLength(JSON.stringify(page)),
+    hasNextCursor: Boolean(page.nextCursor),
+    hasBackwardsCursor: Boolean(page.backwardsCursor)
+  };
 }
 
 function requestsRelayFullAccess(method: RelayMethod, params: unknown): boolean {
