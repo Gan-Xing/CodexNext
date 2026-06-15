@@ -80,6 +80,9 @@ boundary.
   hydration helpers. History hydration and older-page prepending must use
   `hydrateSessionFromTurns` / `prependSessionHistoryTurns` with app-server turn
   data.
+- [x] Status: completed - History hydration guards read normalized page state
+  (`historyPages[sourceKey]`) through chat-state selectors. They must not scan
+  `ChatItem` projection ids such as `history-${sessionId}-...`.
 - [x] Status: completed - Local submit state, thinking feedback, ack binding,
   agent errors, legacy assistant/command/diff deltas, and outbox recovery are
   represented as turn/items first. `ChatItem` is a projection for the current

@@ -329,6 +329,16 @@ export function selectConversationRenderSnapshot(
   };
 }
 
+export function selectSessionHistoryHydrated(
+  workspace: DeviceWorkspace | null,
+  sessionId: string | null | undefined
+): boolean {
+  if (!workspace || !sessionId) {
+    return false;
+  }
+  return Boolean(workspace.historyPages[sessionId]?.sourceKey);
+}
+
 export function restoreOutboxEntries(
   workspace: DeviceWorkspace,
   entries: OutboxEntry[]

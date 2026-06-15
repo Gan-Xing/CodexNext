@@ -12,6 +12,8 @@ import {
   mergeLocalEvents,
   reassignSessionChatItems,
   restoreConversationCacheEntries,
+  selectSessionHistoryHydrated,
+  setSessionHistoryPageState,
   upsertSessionInWorkspace,
   selectConversationChatItems,
   selectConversationTurnGroups
@@ -139,6 +141,25 @@ describe("chat state", () => {
 
     expect(merged.map((event) => event.seq)).toEqual([1, 2]);
     expect(merged[1]?.id).toBe("replacement");
+  });
+
+  it("tracks hydrated session history from page state instead of chat item ids", () => {
+    const workspace = makeWorkspace();
+    expect(selectSessionHistoryHydrated(workspace, "session_1")).toBe(false);
+
+    const loading = setSessionHistoryPageState(workspace, "session_1", {
+      loadingOlder: true,
+      olderCursor: null,
+      sourceKey: null
+    });
+    expect(selectSessionHistoryHydrated(loading, "session_1")).toBe(false);
+
+    const hydrated = setSessionHistoryPageState(loading, "session_1", {
+      loadingOlder: false,
+      olderCursor: "cursor_2",
+      sourceKey: "thread_1::/tmp/codexnext"
+    });
+    expect(selectSessionHistoryHydrated(hydrated, "session_1")).toBe(true);
   });
 
   it("adds optimistic user messages and thinking feedback immediately", () => {

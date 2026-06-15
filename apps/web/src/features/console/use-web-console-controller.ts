@@ -63,6 +63,7 @@ import {
   selectConversationChatItems,
   selectConversationRenderSnapshot,
   selectConversationTurnGroups,
+  selectSessionHistoryHydrated,
   setLoadedThreadIds,
   setSessionHistoryPageState,
   type AttachmentDraft,
@@ -928,11 +929,7 @@ export function useWebConsoleController() {
         });
         return;
       }
-      const alreadyHydrated = workspace.chatItems.some(
-        (item) =>
-          item.sessionId === sessionId &&
-          item.id.startsWith(`history-${sessionId}-`)
-      );
+      const alreadyHydrated = selectSessionHistoryHydrated(workspace, sessionId);
       if (alreadyHydrated) {
         return;
       }
@@ -963,11 +960,7 @@ export function useWebConsoleController() {
           page
         });
         patchDeviceWorkspace(deviceId, (currentWorkspace) => {
-          const hasHistory = currentWorkspace.chatItems.some(
-            (item) =>
-              item.sessionId === sessionId &&
-              item.id.startsWith(`history-${sessionId}-`)
-          );
+          const hasHistory = selectSessionHistoryHydrated(currentWorkspace, sessionId);
           if (hasHistory) {
             return currentWorkspace;
           }
