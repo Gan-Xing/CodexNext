@@ -161,6 +161,7 @@ type LocalCodexHistoryEntryLike = LocalCodexHistoryDetailResponse["entry"];
 const THINKING_TEXT = "正在思考";
 const CONVERSATION_CACHE_THREAD_LIMIT = 120;
 const CONVERSATION_CACHE_MESSAGE_LIMIT = 100;
+const CONVERSATION_CACHE_TURN_LIMIT = 80;
 const LOCAL_THREAD_ITEM_TYPE = {
   Thinking: "local.thinking",
   Error: "local.error"
@@ -426,7 +427,13 @@ export function buildConversationCacheEntries(
     const items = conversation.items
       .filter(shouldPersistChatItem)
       .slice(-CONVERSATION_CACHE_MESSAGE_LIMIT);
-    if (items.length === 0) {
+    const turnOrder = conversation.turnOrder
+      .filter((turnId) => shouldPersistTurn(conversation.turns[turnId]))
+      .slice(-CONVERSATION_CACHE_TURN_LIMIT);
+    const turns = Object.fromEntries(
+      turnOrder.map((turnId) => [turnId, conversation.turns[turnId]!])
+    );
+    if (items.length === 0 && turnOrder.length === 0) {
       continue;
     }
     entries.push({
@@ -435,8 +442,8 @@ export function buildConversationCacheEntries(
       latestSeq: conversation.latestSeq,
       sessionIds: conversation.sessionIds,
       threadId: conversation.threadId,
-      turnOrder: conversation.turnOrder,
-      turns: conversation.turns,
+      turnOrder,
+      turns,
       updatedAt: conversation.updatedAt
     });
   }
@@ -1369,6 +1376,21 @@ function shouldPersistChatItem(item: ChatItem): boolean {
     return false;
   }
   return true;
+}
+
+function shouldPersistTurn(turn: NormalizedConversationTurn | undefined): boolean {
+  if (!turn || turn.status === "inProgress") {
+    return false;
+  }
+  return turn.itemOrder.some((itemId) => shouldPersistTurnItem(turn.items[itemId]));
+}
+
+function shouldPersistTurnItem(item: NormalizedConversationTurnItem | undefined): boolean {
+  if (!item || item.metaKind === "thinking") {
+    return false;
+  }
+  const status = normalizeChatStatus(item.status);
+  return status !== "pending" && status !== "sending" && status !== "streaming";
 }
 
 function buildConversationStatusSignature(conversation: ConversationRecord): string {

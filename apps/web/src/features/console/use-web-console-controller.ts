@@ -4495,12 +4495,18 @@ function conversationCacheSignature(
         deviceId,
         entries.map((entry) => {
           const latestItem = entry.items.at(-1) ?? null;
+          const latestTurnId = entry.turnOrder?.at(-1) ?? null;
+          const latestTurn = latestTurnId ? entry.turns?.[latestTurnId] ?? null : null;
+          const latestTurnItemId = latestTurn?.itemOrder.at(-1) ?? null;
+          const latestTurnItem =
+            latestTurn && latestTurnItemId ? latestTurn.items[latestTurnItemId] ?? null : null;
           return {
             key: entry.conversationKey,
             latestSeq: entry.latestSeq,
             messageCount: entry.items.length,
             sessionIds: entry.sessionIds,
             threadId: entry.threadId,
+            turnCount: entry.turnOrder?.length ?? 0,
             updatedAt: entry.updatedAt,
             latestItem: latestItem
               ? {
@@ -4509,6 +4515,21 @@ function conversationCacheSignature(
                   status: latestItem.status ?? null,
                   textLength: latestItem.text.length,
                   createdAt: latestItem.createdAt ?? null
+                }
+              : null,
+            latestTurn: latestTurn
+              ? {
+                  id: latestTurn.id,
+                  status: latestTurn.status,
+                  itemCount: latestTurn.itemOrder.length,
+                  latestItem: latestTurnItem
+                    ? {
+                        id: latestTurnItem.id,
+                        status: latestTurnItem.status ?? null,
+                        textLength: latestTurnItem.text.length,
+                        updatedAt: latestTurnItem.updatedAt
+                      }
+                    : null
                 }
               : null
           };

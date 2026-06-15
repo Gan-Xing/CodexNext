@@ -108,9 +108,9 @@ network history refresh run in the background.
 - Show the best local state first: in-memory conversation, persisted
   conversation cache, or a lightweight thread skeleton using sidebar title and
   preview metadata. Avoid empty waits for unopened conversations.
-- Persist a bounded recent message cache per conversation in IndexedDB,
-  separate from the outbox. The outbox is for unsent/in-flight recovery; it is
-  not enough for fast cold thread switching.
+- Persist a bounded recent normalized turn cache per conversation in IndexedDB,
+  separate from the outbox and legacy `ChatItem` projections. The outbox is for
+  unsent/in-flight recovery; it is not enough for fast cold thread switching.
 - Revalidate stale conversations in the background and merge by message id,
   turn id, and client message id. Users should not experience "loading the whole
   history" as the primary interaction.
@@ -134,7 +134,8 @@ item completed when modifying chat, history, sidebar, rendering, or diagnostics:
   normalized in-memory conversation, persisted conversation cache, or a
   lightweight thread skeleton.
 - [x] Status: completed - Recent conversation bodies are persisted in bounded
-  IndexedDB cache, separate from the outbox recovery layer.
+  IndexedDB cache as normalized `turnOrder` / `turns` data, separate from the
+  outbox recovery layer. `ChatItem[]` is only a renderer fallback projection.
 - [x] Status: completed - Network history refresh runs as background
   stale-while-revalidate and reconciles by message id, turn id, and client
   message id.

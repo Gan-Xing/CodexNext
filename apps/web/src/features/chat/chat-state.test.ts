@@ -293,6 +293,70 @@ describe("chat state", () => {
       .toEqual(["你好", "你好！"]);
   });
 
+  it("persists full normalized turns in the conversation cache", () => {
+    const turn: CodexThreadTurn = {
+      id: "turn_1",
+      items: [
+        {
+          id: "item_user",
+          type: "userMessage",
+          content: [{ type: "text", text: "查日志", text_elements: [] }]
+        },
+        {
+          id: "item_command",
+          type: "commandExecution",
+          command: "pnpm test",
+          aggregatedOutput: "ok"
+        },
+        {
+          id: "item_agent",
+          type: "agentMessage",
+          text: "通过。"
+        }
+      ],
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: 10,
+      completedAt: 12,
+      durationMs: 2_000
+    };
+    const workspace = hydrateSessionFromTurns(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      "session_1",
+      [turn]
+    );
+
+    const cache = buildConversationCacheEntries(workspace);
+    expect(cache[0]?.turnOrder).toEqual(["turn_1"]);
+    expect(cache[0]?.turns?.turn_1?.items.item_command).toMatchObject({
+      role: "command",
+      text: "$ pnpm test\nok",
+      type: "commandExecution"
+    });
+
+    const restored = restoreConversationCacheEntries(makeWorkspace(), cache);
+    const groups = selectConversationTurnGroups(restored, {
+      sessionId: "session_1",
+      threadId: "thread_1"
+    });
+    expect(groups[0]?.processItems[0]?.chatItem).toMatchObject({
+      role: "command",
+      text: "$ pnpm test\nok"
+    });
+    expect(groups[0]?.answerItems[0]?.text).toBe("通过。");
+  });
+
+  it("does not persist in-flight optimistic turns into the conversation cache", () => {
+    const workspace = addOptimisticUserMessage(makeWorkspace(), {
+      sessionId: "session_1",
+      clientMessageId: "msg_1",
+      text: "还在执行"
+    });
+
+    expect(buildConversationCacheEntries(workspace)).toEqual([]);
+  });
+
   it("marks failed optimistic messages", () => {
     const workspace = addOptimisticUserMessage(makeWorkspace(), {
       sessionId: "session_1",
