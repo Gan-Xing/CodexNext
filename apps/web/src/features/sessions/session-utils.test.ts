@@ -122,6 +122,55 @@ describe("session sidebar titles", () => {
     });
   });
 
+  it("uses readable sidebar titles instead of raw terminal logs", () => {
+    const logEntry = makeHistoryEntry({
+      title: [
+        "> daily-work@0.1.0 build /Users/ganxing/Desktop/Dev/dailywork",
+        "> prisma generate && next build",
+        "Environment variables loaded from .env",
+        " ✓ Creating an optimized production build",
+        "Failed to compile.",
+        "ganxing@mac-mini dailywork % 修复bug"
+      ].join("\n")
+    });
+
+    const groups = groupProjectThreads(
+      [],
+      [logEntry],
+      [],
+      { pinned: [] },
+      { hidden: [], pinned: [], renamed: {} },
+      null,
+      null
+    );
+
+    expect(groups[0]?.items[0]?.title).toBe("修复bug");
+  });
+
+  it("keeps diagnostic titles concise when no prompt input exists", () => {
+    const logEntry = makeHistoryEntry({
+      title: [
+        " ✓ Compiled successfully",
+        "   Linting and checking validity of types  ..Failed to compile.",
+        "Type error: Property 'sideLabel' does not exist on type Segment."
+      ].join("\n")
+    });
+
+    const groups = groupProjectThreads(
+      [],
+      [logEntry],
+      [],
+      { pinned: [] },
+      { hidden: [], pinned: [], renamed: {} },
+      null,
+      null
+    );
+
+    expect(groups[0]?.items[0]?.title).toBe(
+      "Type error: Property 'sideLabel' does not exist on type Seg…"
+    );
+  });
+
   it("excludes history entries whose folders no longer exist", () => {
     const missingEntry = makeHistoryEntry({
       id: "thread_missing_folder",

@@ -148,7 +148,7 @@ export function groupProjectThreads(
           threadId: threadKeyForSession(session),
           timeLabel: formatRelativeThreadTime(session.updatedAt),
           timestamp: session.updatedAt,
-          title: sessionTitle(session, chatItems, entries)
+          title: sidebarThreadTitle(sessionTitle(session, chatItems, entries))
         })),
         ...group.entries.map((entry) => {
           const timestamp = parseHistoryTimestamp(entry.updatedAt, entry.createdAt);
@@ -167,7 +167,7 @@ export function groupProjectThreads(
             threadId: threadKeyForHistory(entry),
             timeLabel: formatRelativeThreadTime(timestamp),
             timestamp,
-            title: entry.title
+            title: sidebarThreadTitle(entry.title)
           };
         })
       ]
@@ -324,6 +324,93 @@ export function sessionTitle(
     return firstUserTitle;
   }
   return shortPath(session.cwd);
+}
+
+function sidebarThreadTitle(input: string): string {
+  const terminalPromptInput = extractTerminalPromptInput(input);
+  if (terminalPromptInput) {
+    return deriveCodexGeneratedTitle(terminalPromptInput) ?? terminalPromptInput;
+  }
+
+  const diagnosticLine = extractDiagnosticTitleLine(input);
+  if (diagnosticLine) {
+    return deriveCodexGeneratedTitle(diagnosticLine) ?? diagnosticLine;
+  }
+
+  const meaningfulLine = extractMeaningfulTitleLine(input);
+  if (meaningfulLine) {
+    return deriveCodexGeneratedTitle(meaningfulLine) ?? meaningfulLine;
+  }
+
+  return deriveCodexGeneratedTitle(input) ?? shortLogTitle(input) ?? "未命名会话";
+}
+
+function extractTerminalPromptInput(input: string): string | null {
+  for (const line of splitTitleLines(input)) {
+    const match = line.match(/^(?:[\w.-]+@[\w.-]+)(?::[^$#%>]*)?\s+[^$#%>]*[$#%>]\s+(.+)$/);
+    const command = match?.[1]?.trim();
+    if (command && !isShellNoiseLine(command)) {
+      return command;
+    }
+  }
+  return null;
+}
+
+function extractDiagnosticTitleLine(input: string): string | null {
+  for (const line of splitTitleLines(input)) {
+    if (
+      /^(Type error|Error|Failed to compile|Command .* not found|Cannot find module|Module not found)\b/i.test(
+        line
+      )
+    ) {
+      return line;
+    }
+  }
+  return null;
+}
+
+function extractMeaningfulTitleLine(input: string): string | null {
+  for (const line of splitTitleLines(input)) {
+    if (!isShellNoiseLine(line)) {
+      return line;
+    }
+  }
+  return null;
+}
+
+function splitTitleLines(input: string): string[] {
+  return input
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function isShellNoiseLine(line: string): boolean {
+  return (
+    line.length === 0 ||
+    /^>? ?(?:npm|pnpm|yarn|node|npx|bun|prisma|next)\b/i.test(line) ||
+    /^[-┌└│✓✔●·\s]+$/.test(line) ||
+    /^[✓✔]\s/.test(line) ||
+    /^[┌└│]/.test(line) ||
+    /^\d+\s*\|/.test(line) ||
+    /^at\s.+\(.+\)$/.test(line) ||
+    /^(Environment variables loaded|Prisma schema loaded|Start by importing|Tip:|Update available|Run the following|Linting and checking|Creating an optimized|Compiled successfully)\b/i.test(
+      line
+    ) ||
+    /^ganxing@|^ubuntu@|^root@/i.test(line) ||
+    /^>?\s*[\w.-]+@[\w.-]+\s/.test(line) ||
+    /^ ?ELIFECYCLE\b/i.test(line)
+  );
+}
+
+function shortLogTitle(input: string): string | null {
+  const line = splitTitleLines(input)[0];
+  if (!line) {
+    return null;
+  }
+  const normalized = deriveCodexGeneratedTitle(line);
+  return normalized || null;
 }
 
 export function sessionSubtitle(session: LocalSessionSummary): string {
