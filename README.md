@@ -80,6 +80,9 @@ boundary.
   normalized turns. It classifies `userMessage` as user input, process item
   types as process, `agentMessage` as answer, and carries status/timing without
   writing back to the store.
+- [x] Status: completed - The chat canvas receives `TurnGroup` projections as
+  the primary render input. Legacy `ChatItem[]` is only a projection fallback at
+  the renderer boundary and must not become a second live source of truth.
 - [x] Status: completed - Model selection remains part of the start/resume/turn
   path. Schema or adapter work must not drop the selected model when switching
   or sending.

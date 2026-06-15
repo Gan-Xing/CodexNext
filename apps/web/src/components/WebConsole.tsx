@@ -191,7 +191,8 @@ export function WebConsole() {
     canLoadOlderHistory,
     loadOlderHistory,
     loadingOlderHistory,
-    visibleChatItems
+    visibleChatItems,
+    visibleTurnGroups
   } = useWebConsoleController();
   const deferredSidebarQuery = useDeferredValue(sidebarQuery);
   const normalizedSidebarQuery = deferredSidebarQuery.trim().toLocaleLowerCase();
@@ -598,6 +599,7 @@ export function WebConsole() {
               blockedNotice={missingHistoryNotice}
               canLoadOlderHistory={canLoadOlderHistory}
               items={visibleChatItems}
+              turnGroups={visibleTurnGroups}
               loadingInitialHistory={initialHistoryLoading}
               loadingOlderHistory={loadingOlderHistory}
               onLoadOlderHistory={() => void loadOlderHistory()}

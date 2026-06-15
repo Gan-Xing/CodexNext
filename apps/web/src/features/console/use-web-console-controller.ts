@@ -62,12 +62,14 @@ import {
   resolveStateUpdater,
   selectConversationChatItems,
   selectConversationRenderSnapshot,
+  selectConversationTurnGroups,
   setLoadedThreadIds,
   setSessionHistoryPageState,
   type AttachmentDraft,
   type ConversationCacheEntry,
   type DeviceWorkspace,
   type OutboxEntry,
+  type TurnGroup,
   type ResumeState,
   upsertSessionInWorkspace
 } from "../chat/chat-state";
@@ -604,6 +606,10 @@ export function useWebConsoleController() {
       }
     : null;
   const visibleChatItems = selectConversationChatItems(
+    activeWorkspace,
+    selectedConversationInput
+  );
+  const visibleTurnGroups = selectConversationTurnGroups(
     activeWorkspace,
     selectedConversationInput
   );
@@ -4410,7 +4416,8 @@ export function useWebConsoleController() {
     togglePinnedThread,
     archiveThread,
     deleteSavedDevice,
-    visibleChatItems
+    visibleChatItems,
+    visibleTurnGroups
   };
 }
 

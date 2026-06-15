@@ -10,6 +10,7 @@ import {
   useState
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import type { TurnGroup } from "../../features/chat/chat-state";
 import type { ChatItem, LocalSessionSummary } from "../../lib/types";
 import { buildChatTailSignature } from "../../lib/format/text";
 import { CommandOutputBlock } from "./CommandOutputBlock";
@@ -23,6 +24,20 @@ import { ThinkingRow } from "./ThinkingRow";
 const VIRTUAL_OVERSCAN_ITEMS = 10;
 const VIRTUAL_ROW_GAP = 16;
 const BOTTOM_STICK_WINDOW_MS = 1_000;
+
+function flattenTurnGroupsForRendering(
+  turnGroups: TurnGroup[] | undefined,
+  fallbackItems: ChatItem[]
+): ChatItem[] {
+  if (!turnGroups || turnGroups.length === 0) {
+    return fallbackItems;
+  }
+  return turnGroups.flatMap((group) =>
+    group.items
+      .map((item) => item.chatItem)
+      .filter((item): item is ChatItem => Boolean(item))
+  );
+}
 
 export function ChatCanvas(props: {
   active: boolean;
@@ -39,6 +54,7 @@ export function ChatCanvas(props: {
   session: LocalSessionSummary;
   threadSubtitle?: string;
   threadTitle?: string;
+  turnGroups?: TurnGroup[];
   onOpenSummary: () => void;
 }) {
   const viewportRef = useRef<HTMLElement | null>(null);
@@ -52,8 +68,11 @@ export function ChatCanvas(props: {
   const bottomStickFrameRef = useRef<number | null>(null);
   const [showJumpButton, setShowJumpButton] = useState(false);
 
-  const tailSignature = buildChatTailSignature(props.items.at(-1));
-  const visibleItems = useMemo(() => props.items, [props.items]);
+  const visibleItems = useMemo(
+    () => flattenTurnGroupsForRendering(props.turnGroups, props.items),
+    [props.items, props.turnGroups]
+  );
+  const tailSignature = buildChatTailSignature(visibleItems.at(-1));
   const rowVirtualizer = useVirtualizer({
     count: visibleItems.length,
     estimateSize: (index) => estimateItemHeight(visibleItems[index] ?? null),
@@ -203,7 +222,7 @@ export function ChatCanvas(props: {
         </div>
       ) : null}
 
-      {props.items.length > 0 ? (
+      {visibleItems.length > 0 ? (
         <>
           {props.canLoadOlderHistory || props.loadingOlderHistory ? (
             <div className="cn-history-pagination">
