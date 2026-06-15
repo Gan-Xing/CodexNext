@@ -83,6 +83,9 @@ boundary.
 - [x] Status: completed - History hydration guards read normalized page state
   (`historyPages[sourceKey]`) through chat-state selectors. They must not scan
   `ChatItem` projection ids such as `history-${sessionId}-...`.
+- [x] Status: completed - History turn hydration and prepend reconciliation
+  preserve local live items from the selected conversation projection only. They
+  must not fall back to global `workspace.chatItems`.
 - [x] Status: completed - Local submit state, thinking feedback, ack binding,
   agent errors, legacy assistant/command/diff deltas, and outbox recovery are
   represented as turn/items first. `ChatItem` is a projection for the current

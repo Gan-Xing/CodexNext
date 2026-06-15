@@ -1981,9 +1981,7 @@ export function hydrateSessionFromTurns(
     normalizedTurns,
     { sessionId, threadId }
   );
-  const conversationItems =
-    next.conversations[canonicalKey]?.items ??
-    workspace.chatItems.filter((item) => item.sessionId === sessionId);
+  const conversationItems = next.conversations[canonicalKey]?.items ?? [];
   next = upsertNormalizedTurns(next, canonicalKey, normalizedTurns, {
     order: "incoming-first"
   });
@@ -2031,9 +2029,7 @@ export function prependSessionHistoryTurns(
     normalizedTurns,
     { sessionId, threadId }
   );
-  const sessionItems =
-    next.conversations[canonicalKey]?.items ??
-    workspace.chatItems.filter((item) => item.sessionId === sessionId);
+  const sessionItems = next.conversations[canonicalKey]?.items ?? [];
 
   next = upsertNormalizedTurns(next, canonicalKey, normalizedTurns, {
     order: "incoming-first"
