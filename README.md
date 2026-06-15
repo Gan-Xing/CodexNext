@@ -102,6 +102,31 @@ item completed when modifying chat, history, sidebar, rendering, or diagnostics:
 - [x] Status: completed - Development render logs are summary-only and must not
   write the full visible message list per render.
 
+## UX Regression Guardrails
+
+These guardrails protect the shipped Web UI while mobile and sidebar polish
+continues. Do not regress them when changing layout, search, title generation,
+or development tooling:
+
+- Development-only Next.js route indicators must not cover mobile composer
+  controls. Keep dev overlays away from the bottom-left composer action area.
+- Mobile chat states must prioritize the conversation viewport. Loading and
+  empty states should be lightweight; they must not take over the screen like a
+  desktop card.
+- Sidebar thread titles must be readable summaries. Terminal output, build
+  logs, stack traces, and prompt noise should be collapsed into the user command
+  or the most useful diagnostic line.
+- Fresh browsers with no localStorage must recover relay devices after Web
+  session bootstrap. They should not strand the user on "connect device" when
+  the relay already has online devices.
+- Sidebar action controls must remain discoverable: thread rows expose pin and
+  archive with concise `aria-label`/`title` text, and mobile keeps the actions
+  accessible without hover.
+- These UX rules are additive to the conversation state/performance guardrails
+  above. Do not fix visual polish by weakening normalized conversation state,
+  optimistic outbox, reconciliation, cache-first switching, virtualization, or
+  summary-only dev traces.
+
 ## Not Included
 
 - React Native
