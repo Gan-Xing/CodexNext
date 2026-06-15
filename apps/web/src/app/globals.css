@@ -5894,10 +5894,14 @@ summary {
 }
 
 .cn-message-virtual-row {
+  display: flex;
+  flex-direction: column;
   left: 0;
+  min-width: 0;
   position: absolute;
   right: 0;
   top: 0;
+  width: 100%;
   will-change: transform;
 }
 
@@ -6835,12 +6839,6 @@ summary {
   .cn-live-console .cn-session-sidebar {
     width: min(var(--cn-sidebar-width), 34vw);
   }
-}
-
-.cn-message-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
 }
 
 .cn-history-pagination {

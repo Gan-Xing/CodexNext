@@ -20,7 +20,6 @@ import { PlanBlock } from "./PlanBlock";
 import { SystemStatusRow } from "./SystemStatusRow";
 import { ThinkingRow } from "./ThinkingRow";
 
-const VIRTUALIZE_AFTER_ITEMS = 80;
 const VIRTUAL_OVERSCAN_ITEMS = 10;
 const VIRTUAL_ROW_GAP = 16;
 const BOTTOM_STICK_WINDOW_MS = 1_000;
@@ -55,24 +54,23 @@ export function ChatCanvas(props: {
 
   const tailSignature = buildChatTailSignature(props.items.at(-1));
   const visibleItems = useMemo(() => props.items, [props.items]);
-  const shouldVirtualize = visibleItems.length > VIRTUALIZE_AFTER_ITEMS;
   const rowVirtualizer = useVirtualizer({
-    count: shouldVirtualize ? visibleItems.length : 0,
+    count: visibleItems.length,
     estimateSize: (index) => estimateItemHeight(visibleItems[index] ?? null),
     gap: VIRTUAL_ROW_GAP,
     getItemKey: (index) => visibleItems[index]?.id ?? index,
     getScrollElement: () => viewportRef.current,
     overscan: VIRTUAL_OVERSCAN_ITEMS
   });
-  const virtualItems = shouldVirtualize ? rowVirtualizer.getVirtualItems() : [];
-  const virtualTotalSize = shouldVirtualize ? rowVirtualizer.getTotalSize() : 0;
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const virtualTotalSize = rowVirtualizer.getTotalSize();
 
   const scrollToBottomNow = useCallback(() => {
     const viewport = viewportRef.current;
     if (!viewport) {
       return;
     }
-    if (shouldVirtualize && visibleItems.length > 0) {
+    if (visibleItems.length > 0) {
       rowVirtualizer.scrollToIndex(visibleItems.length - 1, {
         align: "end"
       });
@@ -82,7 +80,7 @@ export function ChatCanvas(props: {
     pinnedRef.current = true;
     setShowJumpButton(false);
     previousHeightRef.current = viewport.scrollHeight;
-  }, [rowVirtualizer, shouldVirtualize, visibleItems.length]);
+  }, [rowVirtualizer, visibleItems.length]);
 
   const scheduleBottomStick = useCallback(() => {
     const run = () => {
@@ -183,7 +181,6 @@ export function ChatCanvas(props: {
     scheduleBottomStick();
   }, [
     scheduleBottomStick,
-    shouldVirtualize,
     tailSignature,
     virtualTotalSize,
     visibleItems.length
@@ -220,36 +217,28 @@ export function ChatCanvas(props: {
               </button>
             </div>
           ) : null}
-          {shouldVirtualize ? (
-            <div
-              className="cn-message-virtual-list"
-              style={{ height: `${virtualTotalSize}px` }}
-            >
-              {virtualItems.map((virtualItem) => {
-                const item = visibleItems[virtualItem.index];
-                if (!item) {
-                  return null;
-                }
-                return (
-                  <div
-                    key={virtualItem.key}
-                    ref={rowVirtualizer.measureElement}
-                    className="cn-message-virtual-row"
-                    data-index={virtualItem.index}
-                    style={{ transform: `translateY(${virtualItem.start}px)` }}
-                  >
-                    <ChatMessageRow item={item} />
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="cn-message-list">
-              {visibleItems.map((item) => (
-                <ChatMessageRow key={item.id} item={item} />
-              ))}
-            </div>
-          )}
+          <div
+            className="cn-message-virtual-list"
+            style={{ height: `${virtualTotalSize}px` }}
+          >
+            {virtualItems.map((virtualItem) => {
+              const item = visibleItems[virtualItem.index];
+              if (!item) {
+                return null;
+              }
+              return (
+                <div
+                  key={virtualItem.key}
+                  ref={rowVirtualizer.measureElement}
+                  className="cn-message-virtual-row"
+                  data-index={virtualItem.index}
+                  style={{ transform: `translateY(${virtualItem.start}px)` }}
+                >
+                  <ChatMessageRow item={item} />
+                </div>
+              );
+            })}
+          </div>
         </>
       ) : props.blockedNotice ? null : props.loadingInitialHistory ? (
         <div className="cn-thread-loading-skeleton" role="status">
