@@ -100,6 +100,9 @@ boundary.
 - [x] Status: completed - Chat header titles and the summary sheet read the
   selected conversation's `TurnGroup` projection. They must not accept
   `ChatItem[]` fallback inputs.
+- [x] Status: completed - Sidebar session rows receive precomputed titles from
+  per-session `TurnGroup` projections. Sidebar grouping must not inspect global
+  `chatItems`.
 - [x] Status: completed - Development render traces and turn completion checks
   read `TurnGroup` / normalized turn selectors. They must stay summary-only and
   must not scan global `workspace.chatItems`.

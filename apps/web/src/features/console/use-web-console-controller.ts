@@ -146,7 +146,7 @@ import {
   sanitizeProjectSidebarPrefs,
   sanitizeThreadSidebarPrefs,
   sessionSubtitle,
-  sessionTitle,
+  sessionTitleFromTurnGroups,
   type ProjectSidebarPrefs,
   type ProjectThreadGroupData,
   type ThreadListItem,
@@ -587,7 +587,6 @@ export function useWebConsoleController() {
   const selectedHistoryKey = activeWorkspace?.selectedHistoryKey ?? null;
   const sessionHistoryOrigins = activeWorkspace?.sessionHistoryOrigins ?? {};
   const pendingApprovals = activeWorkspace?.pendingApprovals ?? [];
-  const chatItems = activeWorkspace?.chatItems ?? [];
   const cwd = activeWorkspace?.cwd ?? "";
   const directoryList = activeWorkspace?.directoryList ?? null;
   const directoryError = activeWorkspace?.directoryError ?? null;
@@ -722,10 +721,24 @@ export function useWebConsoleController() {
     }
     return {};
   }, [currentResumeState, currentSession, selectedHistoryEntry]);
+  const sessionTitlesById = useMemo(() => {
+    const titles: Record<string, string> = {};
+    for (const session of sessions) {
+      titles[session.sessionId] = sessionTitleFromTurnGroups(
+        session,
+        selectConversationTurnGroups(activeWorkspace, {
+          sessionId: session.sessionId,
+          ...(session.threadId ? { threadId: session.threadId } : {})
+        }),
+        codexHistory
+      );
+    }
+    return titles;
+  }, [activeWorkspace, codexHistory, sessions]);
   const projectGroups = groupProjectThreads(
     sessions,
     codexHistory,
-    chatItems,
+    sessionTitlesById,
     activeThreadPrefs,
     activeProjectPrefs,
     currentSessionId,

@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { ChatItem, LocalCodexHistoryEntry, LocalSessionSummary } from "../../lib/types";
+import type { LocalCodexHistoryEntry, LocalSessionSummary } from "../../lib/types";
 import type { TurnGroup } from "../chat/chat-state";
 import {
   groupProjectThreads,
   makeHistoryPreviewSession,
-  sessionTitle,
   sessionTitleFromTurnGroups
 } from "./session-utils";
 
@@ -75,27 +74,17 @@ function makeTurnGroup(userText: string): TurnGroup {
 describe("session sidebar titles", () => {
   it("prefers the live session title when present", () => {
     expect(
-      sessionTitle(makeSession({ title: "实时会话标题" }), [], [makeHistoryEntry()])
+      sessionTitleFromTurnGroups(
+        makeSession({ title: "实时会话标题" }),
+        [makeTurnGroup("当前 TurnGroup 标题")],
+        [makeHistoryEntry()]
+      )
     ).toBe("实时会话标题");
   });
 
   it("falls back to the matching history title", () => {
-    expect(sessionTitle(makeSession(), [], [makeHistoryEntry()])).toBe("官方 Codex 标题");
-  });
-
-  it("falls back to the first user message before using cwd", () => {
-    const items: ChatItem[] = [
-      {
-        id: "message_1",
-        role: "user",
-        text: "请帮我把这个会话标题逻辑改成和原生 Codex 一样",
-        sessionId: "session_1",
-        status: "sending"
-      }
-    ];
-
-    expect(sessionTitle(makeSession({ threadId: "thread_missing" }), items, [])).toBe(
-      "请帮我把这个会话标题逻辑改成和原生 Codex 一样"
+    expect(sessionTitleFromTurnGroups(makeSession(), [], [makeHistoryEntry()])).toBe(
+      "官方 Codex 标题"
     );
   });
 
@@ -130,7 +119,7 @@ describe("session sidebar titles", () => {
         })
       ],
       [],
-      [],
+      {},
       { pinned: [] },
       { hidden: [], pinned: [], renamed: {} },
       null,
@@ -141,12 +130,26 @@ describe("session sidebar titles", () => {
     expect(groups[0]?.items.map((item) => item.id)).toEqual(["session_2"]);
   });
 
+  it("uses precomputed turn-group titles for session rows", () => {
+    const groups = groupProjectThreads(
+      [makeSession({ title: null, threadId: "thread_missing" })],
+      [],
+      { session_1: "TurnGroup 派生标题" },
+      { pinned: [] },
+      { hidden: [], pinned: [], renamed: {} },
+      null,
+      null
+    );
+
+    expect(groups[0]?.items[0]?.title).toBe("TurnGroup 派生标题");
+  });
+
   it("attaches sidebar notices to the matching thread item", () => {
     const entry = makeHistoryEntry({ id: "thread_notice" });
     const groups = groupProjectThreads(
       [],
       [entry],
-      [],
+      {},
       { pinned: [] },
       { hidden: [], pinned: [], renamed: {} },
       null,
@@ -181,7 +184,7 @@ describe("session sidebar titles", () => {
     const groups = groupProjectThreads(
       [],
       [logEntry],
-      [],
+      {},
       { pinned: [] },
       { hidden: [], pinned: [], renamed: {} },
       null,
@@ -203,7 +206,7 @@ describe("session sidebar titles", () => {
     const groups = groupProjectThreads(
       [],
       [logEntry],
-      [],
+      {},
       { pinned: [] },
       { hidden: [], pinned: [], renamed: {} },
       null,
@@ -230,7 +233,7 @@ describe("session sidebar titles", () => {
     const groups = groupProjectThreads(
       [],
       [missingEntry, validEntry],
-      [],
+      {},
       { pinned: [] },
       { hidden: [], pinned: [], renamed: {} },
       null,

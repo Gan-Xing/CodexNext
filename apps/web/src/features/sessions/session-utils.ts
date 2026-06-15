@@ -4,7 +4,6 @@ import type {
   LocalReasoningEffort,
   LocalSessionSummary
 } from "../../lib/types";
-import type { ChatItem } from "../../lib/types";
 import { deriveCodexGeneratedTitle } from "@codexnext/protocol";
 import type { TurnGroup } from "../chat/chat-state";
 import { normalizeAgentUrl } from "../devices/device-utils";
@@ -54,7 +53,7 @@ export const projectSidebarPrefsStorageKey = "codexnext.projectSidebarPrefs.v1";
 export function groupProjectThreads(
   sessions: LocalSessionSummary[],
   entries: LocalCodexHistoryEntry[],
-  chatItems: ChatItem[],
+  sessionTitlesById: Record<string, string>,
   threadPrefs: ThreadSidebarPrefs,
   projectPrefs: ProjectSidebarPrefs,
   activeSessionId: string | null,
@@ -148,7 +147,9 @@ export function groupProjectThreads(
           threadId: threadKeyForSession(session),
           timeLabel: formatRelativeThreadTime(session.updatedAt),
           timestamp: session.updatedAt,
-          title: sidebarThreadTitle(sessionTitle(session, chatItems, entries))
+          title: sidebarThreadTitle(
+            sessionTitlesById[session.sessionId] ?? sessionBaseTitle(session, entries)
+          )
         })),
         ...group.entries.map((entry) => {
           const timestamp = parseHistoryTimestamp(entry.updatedAt, entry.createdAt);
@@ -292,9 +293,8 @@ export function makePendingSession(input: {
   };
 }
 
-export function sessionTitle(
+function sessionBaseTitle(
   session: LocalSessionSummary,
-  chatItems: ChatItem[],
   historyEntries: LocalCodexHistoryEntry[] = []
 ): string {
   const explicitTitle = session.title?.trim();
@@ -304,10 +304,6 @@ export function sessionTitle(
   const historyTitle = historyEntries.find((entry) => entry.id === session.threadId)?.title?.trim();
   if (historyTitle) {
     return historyTitle;
-  }
-  const firstUserTitle = deriveSessionChatFallbackTitle(session, chatItems);
-  if (firstUserTitle) {
-    return firstUserTitle;
   }
   return shortPath(session.cwd);
 }
@@ -329,7 +325,7 @@ export function sessionTitleFromTurnGroups(
   if (firstTurnGroupTitle) {
     return firstTurnGroupTitle;
   }
-  return shortPath(session.cwd);
+  return sessionBaseTitle(session, []);
 }
 
 function sidebarThreadTitle(input: string): string {
@@ -620,22 +616,6 @@ export function threadKeyForHistory(entry: LocalCodexHistoryEntry): string {
 
 export function threadKeyForSession(session: LocalSessionSummary): string {
   return session.threadId || session.sessionId;
-}
-
-function deriveSessionChatFallbackTitle(
-  session: LocalSessionSummary,
-  chatItems: ChatItem[]
-): string | null {
-  const firstUserMessage = chatItems.find(
-    (item) =>
-      item.sessionId === session.sessionId &&
-      item.role === "user" &&
-      item.text.trim().length > 0
-  );
-  if (!firstUserMessage) {
-    return null;
-  }
-  return deriveCodexGeneratedTitle(firstUserMessage.text);
 }
 
 function deriveSessionTurnGroupFallbackTitle(turnGroups: TurnGroup[]): string | null {
