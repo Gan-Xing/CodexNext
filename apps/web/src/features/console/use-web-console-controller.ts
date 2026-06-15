@@ -1325,6 +1325,21 @@ export function useWebConsoleController() {
   }, [relayBootstrap]);
 
   useEffect(() => {
+    if (!relayBootstrap || savedDevices.length > 0) {
+      return;
+    }
+    let cancelled = false;
+    void refreshRelayDevices().catch((err) => {
+      if (!cancelled) {
+        setError(formatConsoleError(err));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshRelayDevices, relayBootstrap, savedDevices.length]);
+
+  useEffect(() => {
     latestThreadSidebarPrefsRef.current = threadSidebarPrefs;
   }, [threadSidebarPrefs]);
 
