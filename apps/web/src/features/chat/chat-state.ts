@@ -8,7 +8,6 @@ import {
 import type {
   ChatItem,
   LocalCodexHistoryDetailResponse,
-  LocalCodexHistoryMessage,
   LocalDirectoryListResponse,
   LocalEvent,
   LocalHealthResponse,
@@ -1244,66 +1243,6 @@ function timestampSecondsToMs(value: number | null | undefined): number | undefi
   return value > 10_000_000_000 ? value : value * 1000;
 }
 
-function historyMessagesToSyntheticTurns(
-  _sessionId: string,
-  messages: LocalCodexHistoryMessage[]
-): CodexThreadTurn[] {
-  return messages.map((message, index) => {
-    const tsMs = Date.parse(message.ts);
-    const ts = Number.isFinite(tsMs) ? tsMs / 1000 : null;
-    return {
-      id: `synthetic-${message.id || index}`,
-      items: [historyMessageToSyntheticThreadItem(message, index)],
-      itemsView: "full",
-      status: "completed",
-      error: null,
-      startedAt: ts,
-      completedAt: ts,
-      durationMs: null
-    };
-  });
-}
-
-function historyMessageToSyntheticThreadItem(
-  message: LocalCodexHistoryMessage,
-  index: number
-): CodexThreadItem {
-  const id = message.id || `message-${index}`;
-  switch (message.role) {
-    case "user":
-      return {
-        id,
-        type: CodexThreadItemType.UserMessage,
-        content: [{ type: "text", text: message.text, text_elements: [] }]
-      };
-    case "assistant":
-      return {
-        id,
-        type: CodexThreadItemType.AgentMessage,
-        text: message.text
-      };
-    case "command":
-      return {
-        id,
-        type: CodexThreadItemType.CommandExecution,
-        command: "",
-        aggregatedOutput: message.text
-      };
-    case "diff":
-      return {
-        id,
-        type: CodexThreadItemType.FileChange,
-        text: message.text,
-        changes: []
-      };
-    default:
-      return {
-        id,
-        type: CodexThreadItemType.ContextCompaction
-      };
-  }
-}
-
 function setOutboxEntry(workspace: DeviceWorkspace, entry: OutboxEntry): DeviceWorkspace {
   return {
     ...workspace,
@@ -1981,18 +1920,6 @@ export function rememberSessionHistoryOrigin(
   };
 }
 
-export function hydrateSessionFromHistory(
-  workspace: DeviceWorkspace,
-  sessionId: string,
-  messages: LocalCodexHistoryMessage[]
-): DeviceWorkspace {
-  return hydrateSessionFromTurns(
-    workspace,
-    sessionId,
-    historyMessagesToSyntheticTurns(sessionId, messages)
-  );
-}
-
 export function hydrateSessionFromTurns(
   workspace: DeviceWorkspace,
   sessionId: string,
@@ -2041,18 +1968,6 @@ export function hydrateSessionFromTurns(
     ].slice(-500)
   );
   return materializeWorkspace(next);
-}
-
-export function prependSessionHistoryMessages(
-  workspace: DeviceWorkspace,
-  sessionId: string,
-  messages: LocalCodexHistoryMessage[]
-): DeviceWorkspace {
-  return prependSessionHistoryTurns(
-    workspace,
-    sessionId,
-    historyMessagesToSyntheticTurns(sessionId, messages)
-  );
 }
 
 export function prependSessionHistoryTurns(

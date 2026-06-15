@@ -6,7 +6,6 @@ import {
   addOptimisticUserMessage,
   buildConversationCacheEntries,
   createDeviceWorkspace,
-  hydrateSessionFromHistory,
   hydrateSessionFromTurns,
   ingestEventsIntoWorkspace,
   markOptimisticMessageFailed,
@@ -56,6 +55,75 @@ function makeSession(input: Partial<LocalSessionSummary> = {}): LocalSessionSumm
     goal: input.goal ?? null,
     createdAt: input.createdAt ?? 1,
     updatedAt: input.updatedAt ?? 2
+  };
+}
+
+function makeHistoryTurns(
+  messages: Array<{
+    id: string;
+    role: "user" | "assistant" | "command" | "system" | "diff";
+    text: string;
+    ts: string;
+  }>
+): CodexThreadTurn[] {
+  return messages.map((message, index) => {
+    const tsMs = Date.parse(message.ts);
+    const ts = Number.isFinite(tsMs) ? tsMs / 1000 : null;
+    return {
+      id: `history-${message.id || index}`,
+      items: [makeHistoryTurnItem(message, index)],
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: ts,
+      completedAt: ts,
+      durationMs: null
+    };
+  });
+}
+
+function makeHistoryTurnItem(
+  message: {
+    id: string;
+    role: "user" | "assistant" | "command" | "system" | "diff";
+    text: string;
+  },
+  index: number
+): CodexThreadTurn["items"][number] {
+  const id = message.id || `message-${index}`;
+  if (message.role === "user") {
+    return {
+      id,
+      type: "userMessage",
+      content: [{ type: "text", text: message.text, text_elements: [] }]
+    };
+  }
+  if (message.role === "assistant") {
+    return {
+      id,
+      type: "agentMessage",
+      text: message.text
+    };
+  }
+  if (message.role === "command") {
+    return {
+      id,
+      type: "commandExecution",
+      command: "",
+      aggregatedOutput: message.text
+    };
+  }
+  if (message.role === "diff") {
+    return {
+      id,
+      type: "fileChange",
+      text: message.text,
+      changes: []
+    };
+  }
+  return {
+    id,
+    type: "contextCompaction"
   };
 }
 
@@ -274,7 +342,7 @@ describe("chat state", () => {
       makeWorkspace(),
       makeSession({ sessionId: "session_1", threadId: "thread_1" })
     );
-    const hydrated = hydrateSessionFromHistory(workspace, "session_1", [
+    const hydrated = hydrateSessionFromTurns(workspace, "session_1", makeHistoryTurns([
       { id: "item-1", role: "user", text: "你好", ts: new Date(1).toISOString() },
       {
         id: "item-2",
@@ -282,7 +350,7 @@ describe("chat state", () => {
         text: "你好！",
         ts: new Date(2).toISOString()
       }
-    ]);
+    ]));
 
     const cache = buildConversationCacheEntries(hydrated);
     const restored = restoreConversationCacheEntries(makeWorkspace(), cache);
@@ -380,8 +448,8 @@ describe("chat state", () => {
     });
   });
 
-  it("keeps resumed history messages above a newly typed optimistic message", () => {
-    const preview = hydrateSessionFromHistory(makeWorkspace(), "history-preview:1", [
+  it("keeps resumed history turns above a newly typed optimistic message", () => {
+    const preview = hydrateSessionFromTurns(makeWorkspace(), "history-preview:1", makeHistoryTurns([
       { id: "item-1", role: "user", text: "你好", ts: new Date(1).toISOString() },
       {
         id: "item-2",
@@ -389,7 +457,7 @@ describe("chat state", () => {
         text: "你好！有什么我可以帮你的。",
         ts: new Date(2).toISOString()
       }
-    ]);
+    ]));
 
     const withOptimistic = addOptimisticUserMessage(preview, {
       sessionId: "history-preview:1",
@@ -403,10 +471,10 @@ describe("chat state", () => {
       "session_1"
     );
 
-    const resumed = hydrateSessionFromHistory(
+    const resumed = hydrateSessionFromTurns(
       reassigned,
       "session_1",
-      [
+      makeHistoryTurns([
         { id: "item-1", role: "user", text: "你好", ts: new Date(1).toISOString() },
         {
           id: "item-2",
@@ -414,7 +482,7 @@ describe("chat state", () => {
           text: "你好！有什么我可以帮你的。",
           ts: new Date(2).toISOString()
         }
-      ]
+      ])
     );
 
     expect(resumed.chatItems.map((item) => item.text)).toEqual([
@@ -446,7 +514,7 @@ describe("chat state", () => {
       ]
     };
 
-    const hydrated = hydrateSessionFromHistory(workspace, "session_1", [
+    const hydrated = hydrateSessionFromTurns(workspace, "session_1", makeHistoryTurns([
       { id: "item-1", role: "user", text: "你好", ts: new Date(1).toISOString() },
       {
         id: "item-2",
@@ -472,7 +540,7 @@ describe("chat state", () => {
         text: "可以。请说明要测试哪一项功能。",
         ts: new Date(5).toISOString()
       }
-    ]);
+    ]));
 
     expect(hydrated.chatItems.map((item) => item.text)).toEqual([
       "你好",
@@ -489,7 +557,7 @@ describe("chat state", () => {
       text: "你好"
     });
 
-    const hydrated = hydrateSessionFromHistory(workspace, "session_1", [
+    const hydrated = hydrateSessionFromTurns(workspace, "session_1", makeHistoryTurns([
       { id: "item-1", role: "user", text: "你好", ts: new Date(1).toISOString() },
       {
         id: "item-2",
@@ -497,11 +565,11 @@ describe("chat state", () => {
         text: "你好！有什么可以帮你？",
         ts: new Date(2).toISOString()
       }
-    ]);
+    ]));
 
     expect(hydrated.chatItems.map((item) => item.id)).toEqual([
-      "turn-synthetic-item-1-item-1",
-      "turn-synthetic-item-2-item-2"
+      "turn-history-item-1-item-1",
+      "turn-history-item-2-item-2"
     ]);
     expect(hydrated.chatItems.map((item) => item.text)).toEqual([
       "你好",

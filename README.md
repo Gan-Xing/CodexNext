@@ -76,6 +76,10 @@ boundary.
   `CodexThreadTurn.items` to confirm submitted user input and later assistant or
   command responses. It must not decide delivery state from legacy flat
   `LocalCodexHistoryMessage[]` pages.
+- [x] Status: completed - Web chat state no longer exposes flat message
+  hydration helpers. History hydration and older-page prepending must use
+  `hydrateSessionFromTurns` / `prependSessionHistoryTurns` with app-server turn
+  data.
 - [x] Status: completed - Local submit state, thinking feedback, ack binding,
   agent errors, legacy assistant/command/diff deltas, and outbox recovery are
   represented as turn/items first. `ChatItem` is a projection for the current
