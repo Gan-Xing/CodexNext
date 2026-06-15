@@ -87,6 +87,11 @@ boundary.
   turn-level process summary such as `已处理 5m 58s`; running or failed turns keep
   process, approval, and error rows visible. Assistant answer items remain
   expanded and are not hidden inside the process summary.
+- [x] Status: completed - High-content blocks use a shared thin
+  `CollapsibleBlock` wrapper. Markdown, code highlighting, diff parsing, and
+  virtualization continue to use the installed render stack (`react-markdown`,
+  `remark-gfm`, `rehype-highlight`, and `@tanstack/react-virtual`) instead of a
+  custom renderer or a new dependency.
 - [x] Status: completed - Model selection remains part of the start/resume/turn
   path. Schema or adapter work must not drop the selected model when switching
   or sending.

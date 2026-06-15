@@ -3,6 +3,14 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { CodeBlock } from "./CodeBlock";
+import {
+  CollapsibleBlock,
+  collapseLineToggleText,
+  hiddenLineCount,
+  shouldCollapseByLineCount
+} from "./CollapsibleBlock";
+
+const TABLE_COLLAPSE_ROWS = 18;
 
 export function MarkdownMessage(props: {
   className?: string;
@@ -40,6 +48,27 @@ export function MarkdownMessage(props: {
               </CodeBlock>
             );
           },
+          table: ({ children, node: _node, ...tableProps }: any) => {
+            const rowCount = countElementType(children, "tr");
+            const hiddenRows = hiddenLineCount(rowCount, TABLE_COLLAPSE_ROWS);
+            return (
+              <CollapsibleBlock
+                shouldCollapse={shouldCollapseByLineCount(rowCount, TABLE_COLLAPSE_ROWS)}
+                collapsedLabel={collapseLineToggleText({
+                  expanded: false,
+                  hiddenLines: hiddenRows,
+                  noun: "表格"
+                })}
+                expandedLabel={collapseLineToggleText({
+                  expanded: true,
+                  hiddenLines: hiddenRows,
+                  noun: "表格"
+                })}
+              >
+                <table {...tableProps}>{children}</table>
+              </CollapsibleBlock>
+            );
+          },
           hr: () => <hr className="cn-markdown-rule" />
         }}
       >
@@ -60,4 +89,15 @@ function extractTextContent(node: ReactNode): string {
     return extractTextContent((node.props as { children?: ReactNode }).children);
   }
   return "";
+}
+
+function countElementType(node: ReactNode, type: string): number {
+  if (Array.isArray(node)) {
+    return node.reduce((count, child) => count + countElementType(child, type), 0);
+  }
+  if (!isValidElement(node)) {
+    return 0;
+  }
+  const ownCount = node.type === type ? 1 : 0;
+  return ownCount + countElementType((node.props as { children?: ReactNode }).children, type);
 }
