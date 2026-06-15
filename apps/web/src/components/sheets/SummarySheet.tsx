@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import type {
-  ChatItem,
   LocalApprovalDecision,
   LocalEvent,
   PendingApprovalView
@@ -19,8 +18,7 @@ import {
 import { CodexIcon } from "../DesignLab";
 
 export function SummarySheet(props: {
-  chatItems: ChatItem[];
-  turnGroups?: TurnGroup[];
+  turnGroups: TurnGroup[];
   events: LocalEvent[];
   pendingApprovals: PendingApprovalView[];
   onClose: () => void;
@@ -28,11 +26,8 @@ export function SummarySheet(props: {
 }) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   const summaryChatItems = useMemo(
-    () =>
-      props.turnGroups !== undefined
-        ? chatItemsFromTurnGroups(props.turnGroups)
-        : props.chatItems,
-    [props.chatItems, props.turnGroups]
+    () => chatItemsFromTurnGroups(props.turnGroups),
+    [props.turnGroups]
   );
   const data = useMemo(
     () =>

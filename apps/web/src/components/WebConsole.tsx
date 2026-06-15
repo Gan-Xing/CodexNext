@@ -242,8 +242,7 @@ export function WebConsole() {
       ? sessionTitleFromTurnGroups(
           currentSession,
           visibleTurnGroups,
-          codexHistory,
-          visibleChatItems
+          codexHistory
         )
       : "新会话";
   const missingHistoryCwd =
@@ -713,7 +712,6 @@ export function WebConsole() {
 
         {activeSheet === "summary" ? (
           <SummarySheet
-            chatItems={visibleChatItems}
             turnGroups={visibleTurnGroups}
             events={
               currentSession

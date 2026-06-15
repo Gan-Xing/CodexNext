@@ -315,8 +315,7 @@ export function sessionTitle(
 export function sessionTitleFromTurnGroups(
   session: LocalSessionSummary,
   turnGroups: TurnGroup[],
-  historyEntries: LocalCodexHistoryEntry[] = [],
-  fallbackChatItems: ChatItem[] = []
+  historyEntries: LocalCodexHistoryEntry[] = []
 ): string {
   const explicitTitle = session.title?.trim();
   if (explicitTitle) {
@@ -329,10 +328,6 @@ export function sessionTitleFromTurnGroups(
   const firstTurnGroupTitle = deriveSessionTurnGroupFallbackTitle(turnGroups);
   if (firstTurnGroupTitle) {
     return firstTurnGroupTitle;
-  }
-  const firstUserTitle = deriveSessionChatFallbackTitle(session, fallbackChatItems);
-  if (firstUserTitle) {
-    return firstUserTitle;
   }
   return shortPath(session.cwd);
 }

@@ -98,9 +98,8 @@ boundary.
   the primary render input. Legacy `ChatItem[]` is only a projection fallback at
   the renderer boundary and must not become a second live source of truth.
 - [x] Status: completed - Chat header titles and the summary sheet read the
-  selected conversation's `TurnGroup` projection first. `ChatItem[]` may only be
-  used as a boundary fallback, not as a global flat state source for those UI
-  features.
+  selected conversation's `TurnGroup` projection. They must not accept
+  `ChatItem[]` fallback inputs.
 - [x] Status: completed - Development render traces and turn completion checks
   read `TurnGroup` / normalized turn selectors. They must stay summary-only and
   must not scan global `workspace.chatItems`.

@@ -99,23 +99,12 @@ describe("session sidebar titles", () => {
     );
   });
 
-  it("uses selected turn groups before the global chat projection fallback", () => {
-    const staleItems: ChatItem[] = [
-      {
-        id: "message_stale",
-        role: "user",
-        text: "这是旧的全局投影标题",
-        sessionId: "session_1",
-        status: "sent"
-      }
-    ];
-
+  it("uses selected turn groups before falling back to cwd", () => {
     expect(
       sessionTitleFromTurnGroups(
         makeSession({ threadId: "thread_missing" }),
         [makeTurnGroup("这是当前 TurnGroup 的标题")],
-        [],
-        staleItems
+        []
       )
     ).toBe("这是当前 TurnGroup 的标题");
   });
