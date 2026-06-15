@@ -2618,33 +2618,53 @@ export function useWebConsoleController() {
 
       if (cachedRecord) {
         showedCachedPage = true;
-        patchDeviceWorkspace(deviceId, (currentWorkspace) =>
-          setSessionHistoryPageState(
-            hydrateSessionFromTurns(
-              {
-                ...currentWorkspace,
-                historyLoadingKey:
-                  currentWorkspace.historyLoadingKey === key
-                    ? null
-                    : currentWorkspace.historyLoadingKey,
-                resumeStates: {
-                  ...currentWorkspace.resumeStates,
-                  [previewSession.sessionId]: isPreviewOnlyHistoryEntry(cachedRecord.page.entry)
-                    ? "missing"
-                    : "history"
-                }
-              },
-              previewSession.sessionId,
-              cachedRecord.page.turns
-            ),
+        webDevTrace("console.history.hydrate.input", {
+          historyKey: key,
+          threadId: entry.id,
+          cwd: entry.cwd,
+          source: "cache",
+          ...summarizeHistoryPageCounts(cachedRecord.page)
+        });
+        patchDeviceWorkspace(deviceId, (currentWorkspace) => {
+          const hydratedWorkspace = hydrateSessionFromTurns(
+            {
+              ...currentWorkspace,
+              historyLoadingKey:
+                currentWorkspace.historyLoadingKey === key
+                  ? null
+                  : currentWorkspace.historyLoadingKey,
+              resumeStates: {
+                ...currentWorkspace.resumeStates,
+                [previewSession.sessionId]: isPreviewOnlyHistoryEntry(cachedRecord.page.entry)
+                  ? "missing"
+                  : "history"
+              }
+            },
+            previewSession.sessionId,
+            cachedRecord.page.turns
+          );
+          const nextWorkspace = setSessionHistoryPageState(
+            hydratedWorkspace,
             previewSession.sessionId,
             {
               loadingOlder: false,
               olderCursor: cachedRecord.page.nextCursor,
               sourceKey: key
             }
-          )
-        );
+          );
+          webDevTrace("console.history.hydrate.applied", {
+            historyKey: key,
+            threadId: entry.id,
+            cwd: entry.cwd,
+            source: "cache",
+            ...summarizeHydratedConversation(
+              nextWorkspace,
+              previewSession.sessionId,
+              entry.id
+            )
+          });
+          return nextWorkspace;
+        });
       }
 
       if (hasFreshCache && refreshingHistoryKeysRef.current.has(key)) {
@@ -2663,33 +2683,56 @@ export function useWebConsoleController() {
         fetchedAt: Date.now(),
         page
       });
-      patchDeviceWorkspace(deviceId, (currentWorkspace) =>
-        setSessionHistoryPageState(
-          hydrateSessionFromTurns(
-            {
-              ...currentWorkspace,
-              historyLoadingKey:
-                currentWorkspace.historyLoadingKey === key
-                  ? null
-                  : currentWorkspace.historyLoadingKey,
-              resumeStates: {
-                ...currentWorkspace.resumeStates,
-                [previewSession.sessionId]: isPreviewOnlyHistoryEntry(page.entry)
-                  ? "missing"
-                  : "history"
-              }
-            },
-            previewSession.sessionId,
-            page.turns
-          ),
+      webDevTrace("console.history.fetch.end", {
+        historyKey: key,
+        threadId: entry.id,
+        cwd: entry.cwd,
+        source: "network",
+        ...summarizeHistoryPageCounts(page)
+      });
+      webDevTrace("console.history.hydrate.input", {
+        historyKey: key,
+        threadId: entry.id,
+        cwd: entry.cwd,
+        source: "network",
+        ...summarizeHistoryPageCounts(page)
+      });
+      patchDeviceWorkspace(deviceId, (currentWorkspace) => {
+        const hydratedWorkspace = hydrateSessionFromTurns(
+          {
+            ...currentWorkspace,
+            historyLoadingKey:
+              currentWorkspace.historyLoadingKey === key
+                ? null
+                : currentWorkspace.historyLoadingKey,
+            resumeStates: {
+              ...currentWorkspace.resumeStates,
+              [previewSession.sessionId]: isPreviewOnlyHistoryEntry(page.entry)
+                ? "missing"
+                : "history"
+            }
+          },
+          previewSession.sessionId,
+          page.turns
+        );
+        const nextWorkspace = setSessionHistoryPageState(
+          hydratedWorkspace,
           previewSession.sessionId,
           {
             loadingOlder: false,
             olderCursor: page.nextCursor,
             sourceKey: key
           }
-        )
-      );
+        );
+        webDevTrace("console.history.hydrate.applied", {
+          historyKey: key,
+          threadId: entry.id,
+          cwd: entry.cwd,
+          source: "network",
+          ...summarizeHydratedConversation(nextWorkspace, previewSession.sessionId, entry.id)
+        });
+        return nextWorkspace;
+      });
     } catch (err) {
       patchDeviceWorkspace(deviceId, (currentWorkspace) =>
         showedCachedPage
@@ -2757,7 +2800,7 @@ export function useWebConsoleController() {
           historyKey: key,
           threadId: entry.id,
           cwd: entry.cwd,
-          messageCount: page.messages.length
+          ...summarizeHistoryPageCounts(page)
         });
       })
       .catch((err) => {
@@ -4509,6 +4552,38 @@ function summarizeReducerWorkspaceState(workspace: DeviceWorkspace): Record<stri
     conversationCount: Object.keys(workspace.conversations).length,
     latestSeq: workspace.events.at(-1)?.seq ?? null,
     outbox: summarizeOutboxStatuses(workspace.outbox)
+  };
+}
+
+function summarizeHistoryPageCounts(page: LocalCodexHistoryPageResponse): Record<string, unknown> {
+  return {
+    messageCount: page.messages.length,
+    turnCount: page.turns.length,
+    turnItemCount: page.turns.reduce((total, turn) => total + turn.items.length, 0),
+    hasNextCursor: Boolean(page.nextCursor),
+    hasBackwardsCursor: Boolean(page.backwardsCursor)
+  };
+}
+
+function summarizeHydratedConversation(
+  workspace: DeviceWorkspace,
+  sessionId: string,
+  threadId?: string | undefined
+): Record<string, unknown> {
+  const input = {
+    sessionId,
+    ...(threadId ? { threadId } : {})
+  };
+  const snapshot = selectConversationRenderSnapshot(workspace, input);
+  const turnGroups = selectConversationTurnGroups(workspace, input);
+  return {
+    conversationKey: snapshot.key,
+    conversationMessageCount: snapshot.messageCount,
+    conversationLatestSeq: snapshot.latestSeq,
+    turnGroupCount: turnGroups.length,
+    turnGroupItemCount: turnGroups.reduce((total, group) => total + group.items.length, 0),
+    statusCounts: summarizeTurnGroupStatusCounts(turnGroups),
+    latestItem: latestTurnGroupItemSummary(turnGroups)
   };
 }
 

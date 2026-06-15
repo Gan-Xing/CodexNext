@@ -377,13 +377,13 @@ async function listCodexHistoryTurns(
   // already returns the full thread faster than `thread/read + thread/turns/list`.
   if (!(typeof params.cursor === "string" && params.cursor.trim())) {
     const detail = await readCodexHistoryDetailById(params.id, sessionManager, historyStore);
-    return {
+    return historyPageWithGuaranteedTurns(params.id, {
       entry: detail.entry,
       messages: detail.messages,
       turns: detail.turns,
       nextCursor: null,
       backwardsCursor: null
-    };
+    }, "initial-detail");
   }
 
   const entry = await readCodexHistoryEntryById(params.id, sessionManager, historyStore);
@@ -395,7 +395,11 @@ async function listCodexHistoryTurns(
     itemsView
   });
 
-  return historyPageFromTurns({ entry, turnsPage, sortDirection });
+  return historyPageWithGuaranteedTurns(
+    params.id,
+    historyPageFromTurns({ entry, turnsPage, sortDirection }),
+    "paged-turns"
+  );
 }
 
 async function archiveCodexHistoryThread(
@@ -418,23 +422,18 @@ async function readCodexHistoryDetailById(
   if (historyStore) {
     const detail = await historyStore.readDetail(id, loadedThreadIds);
     if (detail) {
-      return detail.turns.length > 0
-        ? detail
-        : {
-            ...detail,
-            turns: historyMessagesToSyntheticTurns(id, detail.messages)
-          };
+      return historyDetailWithGuaranteedTurns(id, detail, "state-db");
     }
   }
   const response = await sessionManager.readThread({
     threadId: id,
     includeTurns: true
   });
-  return {
+  return historyDetailWithGuaranteedTurns(id, {
     entry: await threadToHistoryEntry(response.thread),
     messages: threadToHistoryMessages(response.thread),
     turns: response.thread.turns ?? []
-  };
+  }, "app-server");
 }
 
 async function readCodexHistoryEntryById(
@@ -546,6 +545,59 @@ function historyPageFromTurns(input: {
     nextCursor: input.turnsPage?.nextCursor ?? null,
     backwardsCursor: input.turnsPage?.backwardsCursor ?? null
   };
+}
+
+function historyDetailWithGuaranteedTurns(
+  threadId: string,
+  detail: LocalCodexHistoryDetailResponse,
+  source: string
+): LocalCodexHistoryDetailResponse {
+  const turns = guaranteeHistoryTurns(threadId, detail.messages, detail.turns);
+  devTrace("agent.history.detail.counts", {
+    threadId,
+    source,
+    messageCount: detail.messages.length,
+    originalTurnCount: detail.turns.length,
+    turnCount: turns.length,
+    syntheticTurnCount: Math.max(0, turns.length - detail.turns.length)
+  });
+  return {
+    ...detail,
+    turns
+  };
+}
+
+function historyPageWithGuaranteedTurns(
+  threadId: string,
+  page: LocalCodexHistoryPageResponse,
+  source: string
+): LocalCodexHistoryPageResponse {
+  const turns = guaranteeHistoryTurns(threadId, page.messages, page.turns);
+  devTrace("agent.history.turns.counts", {
+    threadId,
+    source,
+    messageCount: page.messages.length,
+    originalTurnCount: page.turns.length,
+    turnCount: turns.length,
+    syntheticTurnCount: Math.max(0, turns.length - page.turns.length),
+    hasNextCursor: Boolean(page.nextCursor),
+    hasBackwardsCursor: Boolean(page.backwardsCursor)
+  });
+  return {
+    ...page,
+    turns
+  };
+}
+
+function guaranteeHistoryTurns(
+  threadId: string,
+  messages: LocalCodexHistoryMessage[],
+  turns: CodexThreadTurn[]
+): CodexThreadTurn[] {
+  if (turns.length > 0 || messages.length === 0) {
+    return turns;
+  }
+  return historyMessagesToSyntheticTurns(threadId, messages);
 }
 
 function turnsToHistoryMessages(

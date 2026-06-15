@@ -743,6 +743,7 @@ describe("local HTTP server guards", () => {
       const detail = await fetch(`${base}/api/codex-history/detail?token=secret&id=thread_local`);
       const detailBody = await detail.json() as {
         messages: Array<{ role: string; text: string }>;
+        turns: Array<{ items: Array<{ type: string }> }>;
       };
       expect(detail.status).toBe(200);
       expect(fake.threadReadParams).toHaveLength(0);
@@ -751,12 +752,19 @@ describe("local HTTP server guards", () => {
         { role: "assistant", text: "我会先查看文件结构。" },
         { role: "diff", text: expect.stringContaining("/repo/src/app.ts") }
       ]);
+      expect(detailBody.turns).toHaveLength(detailBody.messages.length);
+      expect(detailBody.turns.map((turn) => turn.items[0]?.type)).toEqual([
+        "userMessage",
+        "agentMessage",
+        "fileChange"
+      ]);
 
       const turns = await fetch(
         `${base}/api/codex-history/turns?token=secret&id=thread_local&limit=20&sortDirection=desc&itemsView=summary`
       );
       const turnsBody = await turns.json() as {
         messages: Array<{ role: string; text: string }>;
+        turns: Array<{ items: Array<{ type: string }> }>;
         nextCursor: string | null;
       };
       expect(turns.status).toBe(200);
@@ -765,6 +773,12 @@ describe("local HTTP server guards", () => {
         { role: "user", text: "继续这个项目" },
         { role: "assistant", text: "我会先查看文件结构。" },
         { role: "diff", text: expect.stringContaining("/repo/src/app.ts") }
+      ]);
+      expect(turnsBody.turns).toHaveLength(turnsBody.messages.length);
+      expect(turnsBody.turns.map((turn) => turn.items[0]?.type)).toEqual([
+        "userMessage",
+        "agentMessage",
+        "fileChange"
       ]);
       expect(turnsBody.nextCursor).toBeNull();
 
