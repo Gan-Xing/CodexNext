@@ -861,7 +861,7 @@ export function useWebConsoleController() {
     }
     const taskId = historyAutoCompletionTaskId(input.deviceId, input.sessionId);
     const active = historyAutoCompletionRef.current;
-    if (active?.taskId === taskId && active.cursor === input.cursor) {
+    if (active?.taskId === taskId) {
       return;
     }
     const version = historyAutoCompletionVersionRef.current + 1;
