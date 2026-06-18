@@ -732,7 +732,7 @@ function writeCachedHistoryPage(
 }
 
 function buildRecentHistoryPageCacheKey(params: HistoryPageCacheParams): string | null {
-  if (!params.id || (params.cursor && params.cursor.trim())) {
+  if (!params.id) {
     return null;
   }
   const limit =
@@ -742,7 +742,8 @@ function buildRecentHistoryPageCacheKey(params: HistoryPageCacheParams): string 
   const sortDirection = params.sortDirection === "asc" ? "asc" : "desc";
   const itemsView = params.itemsView === "full" ? "full" : "summary";
   const cwd = params.cwd?.trim() || "";
-  return `${params.id}::${cwd}::${sortDirection}::${itemsView}::${limit}`;
+  const cursor = params.cursor?.trim() || "latest";
+  return `${params.id}::${cwd}::${sortDirection}::${itemsView}::${limit}::${cursor}`;
 }
 
 function dropCachedHistoryPagesForThread(device: RegisteredDevice, threadId: string): void {

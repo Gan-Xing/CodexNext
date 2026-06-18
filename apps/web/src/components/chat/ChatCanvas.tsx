@@ -36,11 +36,8 @@ export function ChatCanvas(props: {
     body: string;
     title: string;
   } | null;
-  canLoadOlderHistory?: boolean;
   items: ChatItem[];
   loadingInitialHistory?: boolean;
-  loadingOlderHistory?: boolean;
-  onLoadOlderHistory?: () => void;
   pendingApprovals: number;
   session: LocalSessionSummary;
   threadSubtitle?: string;
@@ -239,18 +236,6 @@ export function ChatCanvas(props: {
 
       {visibleRows.length > 0 ? (
         <>
-          {props.canLoadOlderHistory || props.loadingOlderHistory ? (
-            <div className="cn-history-pagination">
-              <button
-                className="cn-history-load-more"
-                type="button"
-                onClick={props.onLoadOlderHistory}
-                disabled={props.loadingOlderHistory}
-              >
-                {props.loadingOlderHistory ? "正在加载更早消息…" : "加载更早消息"}
-              </button>
-            </div>
-          ) : null}
           <div
             className="cn-message-virtual-list"
             style={{ height: `${virtualTotalSize}px` }}

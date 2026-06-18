@@ -9,6 +9,7 @@ import {
   hydrateSessionFromTurns,
   ingestEventsIntoWorkspace,
   markOptimisticMessageFailed,
+  markOptimisticMessageSent,
   mergeLocalEvents,
   reassignSessionChatItems,
   restoreConversationCacheEntries,
@@ -446,6 +447,7 @@ describe("chat state", () => {
     );
 
     const cache = buildConversationCacheEntries(workspace);
+    expect(cache[0]?.items).toEqual([]);
     expect(cache[0]?.turnOrder).toEqual(["turn_1"]);
     expect(cache[0]?.turns?.turn_1?.items.item_command).toMatchObject({
       role: "command",
@@ -465,6 +467,65 @@ describe("chat state", () => {
     expect(groups[0]?.answerItems[0]?.text).toBe("通过。");
   });
 
+  it("restores turn cache without replaying stale flat chat items", () => {
+    const turn: CodexThreadTurn = {
+      id: "turn_1",
+      items: [
+        {
+          id: "item_user",
+          type: "userMessage",
+          clientId: "msg_1",
+          content: [{ type: "text", text: "测试8", text_elements: [] }]
+        },
+        {
+          id: "item_agent",
+          type: "agentMessage",
+          text: "测试8收到。"
+        }
+      ],
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: 10,
+      completedAt: 12,
+      durationMs: 2_000
+    };
+    const workspace = hydrateSessionFromTurns(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      "session_1",
+      [turn]
+    );
+    const cache = buildConversationCacheEntries(workspace);
+    const dirtyCache = [{
+      ...cache[0]!,
+      items: [
+        {
+          id: "stale_user",
+          role: "user" as const,
+          text: "测试8",
+          sessionId: "session_1",
+          clientMessageId: "msg_1",
+          status: "sent" as const,
+          createdAt: 1
+        }
+      ]
+    }];
+
+    const restored = restoreConversationCacheEntries(makeWorkspace(), dirtyCache);
+    const users = selectConversationChatItems(restored, { threadId: "thread_1" })
+      .filter((item) => item.role === "user");
+
+    expect(users).toHaveLength(1);
+    expect(users[0]).toMatchObject({
+      clientMessageId: "msg_1",
+      text: "测试8",
+      turnId: "turn_1",
+      meta: {
+        source: "turn-store"
+      }
+    });
+  });
+
   it("does not persist in-flight optimistic turns into the conversation cache", () => {
     const workspace = addOptimisticUserMessage(makeWorkspace(), {
       sessionId: "session_1",
@@ -473,6 +534,69 @@ describe("chat state", () => {
     });
 
     expect(buildConversationCacheEntries(workspace)).toEqual([]);
+  });
+
+  it("does not persist local transport errors into the conversation cache", () => {
+    const workspace = addOptimisticUserMessage(makeWorkspace(), {
+      sessionId: "session_1",
+      clientMessageId: "msg_1",
+      text: "测试超时"
+    });
+
+    const failed = markOptimisticMessageFailed(
+      workspace,
+      "msg_1",
+      "{\"error\":\"relay rpc timeout: operation has timed out\"}"
+    );
+
+    expect(buildConversationCacheEntries(failed)).toEqual([]);
+  });
+
+  it("strips local error items when persisting mixed normalized turns", () => {
+    const turn: CodexThreadTurn = {
+      id: "turn_1",
+      items: [
+        {
+          id: "item_agent",
+          type: "agentMessage",
+          text: "已经完成。"
+        }
+      ],
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: 10,
+      completedAt: 12,
+      durationMs: 2_000
+    };
+    const history = hydrateSessionFromTurns(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      "session_1",
+      [turn]
+    );
+    const withLocalError = ingestEventsIntoWorkspace(
+      history,
+      [
+        makeEvent({
+          seq: 1,
+          type: "agent.error",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            message: "{\"error\":\"relay rpc timeout: operation has timed out\"}"
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    const cache = buildConversationCacheEntries(withLocalError);
+    const cachedTurn = cache[0]?.turns?.turn_1;
+
+    expect(cachedTurn?.itemOrder).toEqual(["item_agent"]);
+    expect(Object.values(cachedTurn?.items ?? {}).some((item) => item.metaKind === "error")).toBe(false);
+    expect(JSON.stringify(cache)).not.toContain("relay rpc timeout");
   });
 
   it("marks failed optimistic messages", () => {
@@ -970,6 +1094,170 @@ describe("chat state", () => {
     });
   });
 
+  it("replaces confirmed live turns with split history turns instead of duplicating them", () => {
+    const live = ingestEventsIntoWorkspace(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      [
+        makeEvent({
+          seq: 1,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "live_turn_1",
+          payload: {
+            method: CodexNotificationMethod.TurnCompleted,
+            params: {
+              threadId: "thread_1",
+              turnId: "live_turn_1",
+              turn: {
+                id: "live_turn_1",
+                items: [
+                  {
+                    id: "live_user_1",
+                    type: "userMessage",
+                    clientId: "msg_1",
+                    content: [{ type: "text", text: "你好测试", text_elements: [] }]
+                  },
+                  {
+                    id: "live_agent_1",
+                    type: "agentMessage",
+                    text: "你好，我在。"
+                  }
+                ],
+                itemsView: "full",
+                status: "completed",
+                error: null,
+                startedAt: 1,
+                completedAt: 2,
+                durationMs: 1_000
+              }
+            }
+          }
+        }),
+        makeEvent({
+          seq: 2,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "live_turn_2",
+          payload: {
+            method: CodexNotificationMethod.TurnCompleted,
+            params: {
+              threadId: "thread_1",
+              turnId: "live_turn_2",
+              turn: {
+                id: "live_turn_2",
+                items: [
+                  {
+                    id: "live_user_2",
+                    type: "userMessage",
+                    clientId: "msg_2",
+                    content: [{ type: "text", text: "再次测试", text_elements: [] }]
+                  },
+                  {
+                    id: "live_agent_2",
+                    type: "agentMessage",
+                    text: "收到，再次测试正常。"
+                  }
+                ],
+                itemsView: "full",
+                status: "completed",
+                error: null,
+                startedAt: 3,
+                completedAt: 4,
+                durationMs: 1_000
+              }
+            }
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+    const historyTurns: CodexThreadTurn[] = [
+      {
+        id: "history_user_1",
+        items: [
+          {
+            id: "history_item_user_1",
+            type: "userMessage",
+            clientId: "msg_1",
+            content: [{ type: "text", text: "你好测试", text_elements: [] }]
+          }
+        ],
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: 1,
+        completedAt: 1,
+        durationMs: null
+      },
+      {
+        id: "history_agent_1",
+        items: [
+          {
+            id: "history_item_agent_1",
+            type: "agentMessage",
+            text: "你好，我在。"
+          }
+        ],
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: 2,
+        completedAt: 2,
+        durationMs: null
+      },
+      {
+        id: "history_user_2",
+        items: [
+          {
+            id: "history_item_user_2",
+            type: "userMessage",
+            clientId: "msg_2",
+            content: [{ type: "text", text: "再次测试", text_elements: [] }]
+          }
+        ],
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: 3,
+        completedAt: 3,
+        durationMs: null
+      },
+      {
+        id: "history_agent_2",
+        items: [
+          {
+            id: "history_item_agent_2",
+            type: "agentMessage",
+            text: "收到，再次测试正常。"
+          }
+        ],
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: 4,
+        completedAt: 4,
+        durationMs: null
+      }
+    ];
+
+    const hydrated = hydrateSessionFromTurns(live, "session_1", historyTurns);
+
+    expect(hydrated.chatItems.map((item) => item.text)).toEqual([
+      "你好测试",
+      "你好，我在。",
+      "再次测试",
+      "收到，再次测试正常。"
+    ]);
+    expect(hydrated.chatItems.map((item) => item.turnId)).toEqual([
+      "history_user_1",
+      "history_agent_1",
+      "history_user_2",
+      "history_agent_2"
+    ]);
+  });
+
   it("dedupes optimistic user messages after app-server projection and keeps thinking until a response", () => {
     const optimistic = addOptimisticUserMessage(
       upsertSessionInWorkspace(makeWorkspace(), makeSession()),
@@ -1056,6 +1344,373 @@ describe("chat state", () => {
         source: "turn-store"
       }
     });
+  });
+
+  it("dedupes canonical user items without clientId by the acknowledged turn", () => {
+    const optimistic = addOptimisticUserMessage(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      {
+        sessionId: "session_1",
+        clientMessageId: "msg_1",
+        text: "hello"
+      }
+    );
+    const acknowledged = markOptimisticMessageSent(optimistic, "msg_1", {
+      sessionId: "session_1",
+      threadId: "thread_1",
+      turnId: "turn_1"
+    });
+
+    const afterUserProjection = ingestEventsIntoWorkspace(
+      acknowledged,
+      [
+        makeEvent({
+          seq: 1,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            method: CodexNotificationMethod.ItemStarted,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              item: {
+                id: "item_user",
+                type: "userMessage",
+                content: [{ type: "text", text: "hello", text_elements: [] }]
+              }
+            }
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    expect(afterUserProjection.chatItems.filter((item) => item.role === "user"))
+      .toHaveLength(1);
+    expect(afterUserProjection.chatItems[0]).toMatchObject({
+      clientMessageId: "msg_1",
+      text: "hello",
+      turnId: "turn_1",
+      meta: {
+        appServerItemId: "item_user",
+        source: "turn-store"
+      }
+    });
+  });
+
+  it("dedupes when canonical user item arrives before the RPC ack", () => {
+    const optimistic = addOptimisticUserMessage(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      {
+        sessionId: "session_1",
+        clientMessageId: "msg_1",
+        text: "hello"
+      }
+    );
+    const projectedBeforeAck = ingestEventsIntoWorkspace(
+      optimistic,
+      [
+        makeEvent({
+          seq: 1,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            method: CodexNotificationMethod.ItemStarted,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              item: {
+                id: "item_user",
+                type: "userMessage",
+                content: [{ type: "text", text: "hello", text_elements: [] }]
+              }
+            }
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    const acknowledged = markOptimisticMessageSent(projectedBeforeAck, "msg_1", {
+      sessionId: "session_1",
+      threadId: "thread_1",
+      turnId: "turn_1"
+    });
+
+    const users = acknowledged.chatItems.filter((item) => item.role === "user");
+    expect(users).toHaveLength(1);
+    expect(users[0]).toMatchObject({
+      clientMessageId: "msg_1",
+      text: "hello",
+      turnId: "turn_1"
+    });
+  });
+
+  it("keeps one user message when chat.user echo arrives before the RPC ack", () => {
+    const optimistic = addOptimisticUserMessage(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      {
+        sessionId: "session_1",
+        clientMessageId: "msg_1",
+        text: "测试8"
+      }
+    );
+
+    const afterEcho = ingestEventsIntoWorkspace(
+      optimistic,
+      [
+        makeEvent({
+          id: "event_chat_user",
+          seq: 1,
+          type: "chat.user",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          payload: {
+            clientMessageId: "msg_1",
+            text: "测试8"
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+    const echoUsers = afterEcho.chatItems.filter((item) => item.role === "user");
+    expect(echoUsers).toHaveLength(1);
+    expect(echoUsers[0]).toMatchObject({
+      clientMessageId: "msg_1",
+      status: "sent",
+      turnId: "local-turn:msg_1"
+    });
+
+    const acknowledged = markOptimisticMessageSent(afterEcho, "msg_1", {
+      sessionId: "session_1",
+      threadId: "thread_1",
+      turnId: "turn_1"
+    });
+    const afterProjection = ingestEventsIntoWorkspace(
+      acknowledged,
+      [
+        makeEvent({
+          seq: 2,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            method: CodexNotificationMethod.ItemStarted,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              item: {
+                id: "item_user",
+                type: "userMessage",
+                content: [{ type: "text", text: "测试8", text_elements: [] }]
+              }
+            }
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    const users = afterProjection.chatItems.filter((item) => item.role === "user");
+    expect(users).toHaveLength(1);
+    expect(users[0]).toMatchObject({
+      clientMessageId: "msg_1",
+      text: "测试8",
+      turnId: "turn_1"
+    });
+  });
+
+  it("clears local thinking when the app-server turn completes", () => {
+    let workspace = upsertSessionInWorkspace(makeWorkspace(), makeSession());
+    workspace = addOptimisticUserMessage(workspace, {
+      sessionId: "session_1",
+      clientMessageId: "msg_1",
+      text: "测试"
+    });
+    workspace = markOptimisticMessageSent(workspace, "msg_1", {
+      sessionId: "session_1",
+      threadId: "thread_1",
+      turnId: "turn_1"
+    });
+
+    const next = ingestEventsIntoWorkspace(
+      workspace,
+      [
+        makeEvent({
+          seq: 1,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            method: CodexNotificationMethod.TurnCompleted,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              turn: {
+                id: "turn_1",
+                items: [
+                  {
+                    id: "item_user",
+                    type: "userMessage",
+                    content: [{ type: "text", text: "测试", text_elements: [] }]
+                  },
+                  {
+                    id: "item_agent",
+                    type: "agentMessage",
+                    text: "测试收到。"
+                  }
+                ],
+                itemsView: "full",
+                status: "completed",
+                error: null,
+                startedAt: 1,
+                completedAt: 2,
+                durationMs: 1000
+              }
+            }
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    expect(next.chatItems.filter((item) => item.meta?.kind === "thinking"))
+      .toHaveLength(0);
+    expect(next.chatItems.filter((item) => item.role === "user"))
+      .toHaveLength(1);
+    expect(next.chatItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          text: "测试收到。",
+          status: "complete"
+        })
+      ])
+    );
+  });
+
+  it("does not reinsert local thinking when a late ack follows a completed turn", () => {
+    let workspace = upsertSessionInWorkspace(makeWorkspace(), makeSession());
+    workspace = addOptimisticUserMessage(workspace, {
+      sessionId: "session_1",
+      clientMessageId: "msg_1",
+      text: "测试"
+    });
+    workspace = markOptimisticMessageSent(workspace, "msg_1", {
+      sessionId: "session_1",
+      threadId: "thread_1",
+      turnId: "turn_1"
+    });
+    workspace = ingestEventsIntoWorkspace(
+      workspace,
+      [
+        makeEvent({
+          seq: 1,
+          type: "turn.completed",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            threadId: "thread_1",
+            turnId: "turn_1"
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    const lateAck = markOptimisticMessageSent(workspace, "msg_1", {
+      sessionId: "session_1",
+      threadId: "thread_1",
+      turnId: "turn_1"
+    });
+
+    expect(lateAck.chatItems.filter((item) => item.meta?.kind === "thinking"))
+      .toHaveLength(0);
+    expect(lateAck.chatItems.filter((item) => item.role === "user"))
+      .toHaveLength(1);
+    expect(lateAck.chatItems.find((item) => item.role === "user")?.status)
+      .toBe("complete");
+  });
+
+  it("keeps repeated identical user text as separate sends across turns", () => {
+    let workspace = upsertSessionInWorkspace(makeWorkspace(), makeSession());
+    workspace = addOptimisticUserMessage(workspace, {
+      sessionId: "session_1",
+      clientMessageId: "msg_1",
+      text: "测试"
+    });
+    workspace = markOptimisticMessageSent(workspace, "msg_1", {
+      sessionId: "session_1",
+      threadId: "thread_1",
+      turnId: "turn_1"
+    });
+    workspace = addOptimisticUserMessage(workspace, {
+      sessionId: "session_1",
+      clientMessageId: "msg_2",
+      text: "测试"
+    });
+    workspace = markOptimisticMessageSent(workspace, "msg_2", {
+      sessionId: "session_1",
+      threadId: "thread_1",
+      turnId: "turn_2"
+    });
+
+    const next = ingestEventsIntoWorkspace(
+      workspace,
+      [
+        makeEvent({
+          seq: 1,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_1",
+          payload: {
+            method: CodexNotificationMethod.ItemStarted,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              item: {
+                id: "item_user_1",
+                type: "userMessage",
+                content: [{ type: "text", text: "测试", text_elements: [] }]
+              }
+            }
+          }
+        }),
+        makeEvent({
+          seq: 2,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_2",
+          payload: {
+            method: CodexNotificationMethod.ItemStarted,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_2",
+              item: {
+                id: "item_user_2",
+                type: "userMessage",
+                content: [{ type: "text", text: "测试", text_elements: [] }]
+              }
+            }
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    const users = next.chatItems.filter((item) => item.role === "user");
+    expect(users).toHaveLength(2);
+    expect(users.map((item) => item.clientMessageId)).toEqual(["msg_1", "msg_2"]);
+    expect(users.map((item) => item.turnId)).toEqual(["turn_1", "turn_2"]);
   });
 
   it("keeps plan.updated out of the main chat stream", () => {

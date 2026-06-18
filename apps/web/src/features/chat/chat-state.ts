@@ -179,6 +179,7 @@ const CHAT_ITEM_STATUSES = new Set<ChatItem["status"]>([
 ]);
 
 export interface SessionHistoryPageState {
+  autoCompleteFailedCursor: string | null;
   loadingOlder: boolean;
   olderCursor: string | null;
   sourceKey: string | null;
@@ -424,7 +425,7 @@ export function restoreConversationCacheEntries(
 ): DeviceWorkspace {
   let next = workspace;
   for (const entry of entries
-    .filter((item) => item.items.length > 0)
+    .filter((item) => item.items.length > 0 || Boolean(item.turns && item.turnOrder?.length))
     .sort((left, right) => left.updatedAt - right.updatedAt)) {
     next = ensureConversation(next, {
       conversationKey: entry.conversationKey,
@@ -441,18 +442,23 @@ export function restoreConversationCacheEntries(
       next,
       entry.threadId ?? entry.sessionIds[0] ?? entry.conversationKey
     );
+    if (entry.turns && entry.turnOrder && entry.turnOrder.length > 0) {
+      next = upsertNormalizedTurns(next, finalKey, {
+        turnOrder: entry.turnOrder,
+        turns: entry.turns
+      }, { latestSeq: entry.latestSeq });
+      next = syncConversationProjection(next, finalKey, {
+        sessionId: entry.sessionIds[0],
+        threadId: entry.threadId
+      });
+      continue;
+    }
     next = upsertConversationItems(
       next,
       finalKey,
       entry.items.map(sanitizeCachedChatItem).filter((item): item is ChatItem => Boolean(item)),
       { latestSeq: entry.latestSeq }
     );
-    if (entry.turns && entry.turnOrder) {
-      next = upsertNormalizedTurns(next, finalKey, {
-        turnOrder: entry.turnOrder,
-        turns: entry.turns
-      }, { latestSeq: entry.latestSeq });
-    }
   }
   return materializeWorkspace(next);
 }
@@ -462,15 +468,20 @@ export function buildConversationCacheEntries(
 ): ConversationCacheEntry[] {
   const entries: ConversationCacheEntry[] = [];
   for (const conversation of Object.values(workspace.conversations)) {
-    const items = conversation.items
-      .filter(shouldPersistChatItem)
-      .slice(-CONVERSATION_CACHE_MESSAGE_LIMIT);
-    const turnOrder = conversation.turnOrder
-      .filter((turnId) => shouldPersistTurn(conversation.turns[turnId]))
+    const persistedTurns = conversation.turnOrder
+      .map((turnId) => {
+        const turn = toPersistableTurn(conversation.turns[turnId]);
+        return turn ? ([turnId, turn] as const) : null;
+      })
+      .filter((entry): entry is readonly [string, NormalizedConversationTurn] => Boolean(entry))
       .slice(-CONVERSATION_CACHE_TURN_LIMIT);
-    const turns = Object.fromEntries(
-      turnOrder.map((turnId) => [turnId, conversation.turns[turnId]!])
-    );
+    const turnOrder = persistedTurns.map(([turnId]) => turnId);
+    const turns = Object.fromEntries(persistedTurns);
+    const items = turnOrder.length > 0
+      ? []
+      : conversation.items
+          .filter(shouldPersistChatItem)
+          .slice(-CONVERSATION_CACHE_MESSAGE_LIMIT);
     if (items.length === 0 && turnOrder.length === 0) {
       continue;
     }
@@ -860,13 +871,19 @@ function normalizeCodexThreadItem(
 ): NormalizedConversationTurnItem {
   const kind = codexThreadItemRenderKind(item);
   const role = codexThreadItemRole(item);
+  const clientMessageId =
+    typeof item.clientId === "string"
+      ? item.clientId
+      : typeof item.clientMessageId === "string"
+        ? item.clientMessageId
+        : undefined;
   return {
     id: item.id,
     type: item.type,
     kind,
     role,
     text: codexThreadItemText(item),
-    ...(typeof item.clientId === "string" ? { clientMessageId: item.clientId } : {}),
+    ...(clientMessageId ? { clientMessageId } : {}),
     content: item.content,
     ...(typeof item.aggregatedOutput === "string" || item.aggregatedOutput === null
       ? { aggregatedOutput: item.aggregatedOutput }
@@ -1001,10 +1018,10 @@ function findSemanticTurnItemId(
   incoming: NormalizedConversationTurnItem
 ): string | null {
   const incomingKey = semanticTurnItemKey(incoming);
-  if (!incomingKey) {
-    return null;
+  if (incomingKey) {
+    return itemOrder.find((itemId) => semanticTurnItemKey(items[itemId]) === incomingKey) ?? null;
   }
-  return itemOrder.find((itemId) => semanticTurnItemKey(items[itemId]) === incomingKey) ?? null;
+  return findUniqueUserTextClientItemId(items, itemOrder, incoming);
 }
 
 function semanticTurnItemKey(
@@ -1014,6 +1031,43 @@ function semanticTurnItemKey(
     return null;
   }
   return `${item.role}:${item.clientMessageId}`;
+}
+
+function findUniqueUserTextClientItemId(
+  items: Record<string, NormalizedConversationTurnItem>,
+  itemOrder: string[],
+  incoming: NormalizedConversationTurnItem
+): string | null {
+  if (incoming.role !== "user") {
+    return null;
+  }
+  const incomingText = normalizeRenderableText(incoming.text);
+  if (!incomingText) {
+    return null;
+  }
+  const matches = itemOrder.filter((itemId) => {
+    const item = items[itemId];
+    return (
+      item?.role === "user" &&
+      userClientIdsCanMerge(item.clientMessageId, incoming.clientMessageId) &&
+      normalizeRenderableText(item.text) === incomingText
+    );
+  });
+  return matches.length === 1 ? matches[0] ?? null : null;
+}
+
+function userClientIdsCanMerge(
+  currentClientMessageId: string | undefined,
+  incomingClientMessageId: string | undefined
+): boolean {
+  if (currentClientMessageId && incomingClientMessageId) {
+    return currentClientMessageId === incomingClientMessageId;
+  }
+  return Boolean(currentClientMessageId || incomingClientMessageId);
+}
+
+function normalizeRenderableText(value: string): string {
+  return value.replace(/\r\n/g, "\n").trim();
 }
 
 function mergeNormalizedItemText(
@@ -1357,18 +1411,33 @@ function shouldPersistChatItem(item: ChatItem): boolean {
   return true;
 }
 
-function shouldPersistTurn(turn: NormalizedConversationTurn | undefined): boolean {
+function toPersistableTurn(
+  turn: NormalizedConversationTurn | undefined
+): NormalizedConversationTurn | null {
   if (!turn || turn.status === "inProgress") {
-    return false;
+    return null;
   }
-  return turn.itemOrder.some((itemId) => shouldPersistTurnItem(turn.items[itemId]));
+  const itemOrder = turn.itemOrder.filter((itemId) => shouldPersistTurnItem(turn.items[itemId]));
+  if (itemOrder.length === 0) {
+    return null;
+  }
+  return {
+    ...turn,
+    itemOrder,
+    items: Object.fromEntries(
+      itemOrder.map((itemId) => [itemId, turn.items[itemId]!])
+    )
+  };
 }
 
 function shouldPersistTurnItem(item: NormalizedConversationTurnItem | undefined): boolean {
-  if (!item || item.metaKind === "thinking") {
+  if (!item || item.metaKind === "thinking" || item.metaKind === "error") {
     return false;
   }
   const status = normalizeChatStatus(item.status);
+  if (status === "failed" && item.clientMessageId) {
+    return false;
+  }
   return status !== "pending" && status !== "sending" && status !== "streaming";
 }
 
@@ -1789,8 +1858,12 @@ export function markOptimisticMessageSent(
   }
   const turnId = input?.turnId ?? outboxEntry?.turnId ?? pendingTurnIdForClientMessage(clientMessageId);
   const conversation = next.conversations[canonicalConversationKey(next, finalKey)];
+  const existingTurn = conversation?.turns[turnId];
+  if (outboxEntry?.status === "complete" || existingTurn?.status === "completed") {
+    return markOptimisticMessageComplete(next, clientMessageId, input);
+  }
   const existingUser = findTurnItemByClientMessageId(
-    conversation?.turns[turnId],
+    existingTurn,
     clientMessageId,
     "user"
   );
@@ -1801,7 +1874,7 @@ export function markOptimisticMessageSent(
     turnId,
     items: [
       localUserTurnItem({
-        id: input?.eventId ?? existingUser?.id,
+        id: input?.turnId ? (input.eventId ?? existingUser?.id) : existingUser?.id,
         clientMessageId,
         text: existingUser?.text ?? outboxEntry?.text ?? "",
         status: "sent",
@@ -1821,6 +1894,52 @@ export function markOptimisticMessageSent(
     ...(input?.threadId ? { threadId: input.threadId } : {}),
     ...(input?.turnId ? { turnId: input.turnId } : {}),
     status: entry.status === "complete" ? "complete" : "sent",
+    updatedAt: Date.now()
+  }));
+  return materializeWorkspace(next);
+}
+
+export function markOptimisticMessageComplete(
+  workspace: DeviceWorkspace,
+  clientMessageId: string,
+  input?: {
+    sessionId?: string;
+    threadId?: string;
+    turnId?: string;
+  }
+): DeviceWorkspace {
+  const outboxEntry = workspace.outbox[clientMessageId];
+  const key =
+    outboxEntry?.conversationKey ??
+    findConversationKey(workspace, {
+      pendingClientId: clientMessageId,
+      sessionId: input?.sessionId,
+      threadId: input?.threadId
+    }) ??
+    conversationKeyFor({
+      pendingClientId: clientMessageId,
+      sessionId: input?.sessionId,
+      threadId: input?.threadId
+    });
+  let next = ensureConversation(workspace, {
+    conversationKey: key,
+    pendingClientId: clientMessageId,
+    sessionId: input?.sessionId,
+    threadId: input?.threadId
+  });
+  const finalKey = canonicalConversationKey(next, input?.threadId ?? input?.sessionId ?? key);
+  if (input?.turnId) {
+    next = remapPendingTurnToServerTurn(next, finalKey, clientMessageId, input.turnId);
+  }
+  const turnId = input?.turnId ?? outboxEntry?.turnId ?? pendingTurnIdForClientMessage(clientMessageId);
+  next = markTurnItemsComplete(next, turnId);
+  next = updateOutboxEntry(next, clientMessageId, (entry) => ({
+    ...entry,
+    conversationKey: finalKey,
+    ...(input?.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input?.threadId ? { threadId: input.threadId } : {}),
+    ...(turnId ? { turnId } : {}),
+    status: "complete",
     updatedAt: Date.now()
   }));
   return materializeWorkspace(next);
@@ -1987,7 +2106,12 @@ export function hydrateSessionFromTurns(
   next = upsertNormalizedTurns(next, canonicalKey, normalizedTurns, {
     order: "incoming-first"
   });
-  next = removeHistoryConfirmedLocalTurns(next, canonicalKey, incomingHistoryItems);
+  next = removeHistoryConfirmedLiveTurns(
+    next,
+    canonicalKey,
+    incomingHistoryItems,
+    new Set(normalizedTurns.turnOrder)
+  );
   const mergedConversation = next.conversations[canonicalKey] ?? emptyConversation(canonicalKey);
   const projectedItems = projectNormalizedTurnsToChatItems(mergedConversation, {
     sessionId,
@@ -2036,7 +2160,12 @@ export function prependSessionHistoryTurns(
   next = upsertNormalizedTurns(next, canonicalKey, normalizedTurns, {
     order: "incoming-first"
   });
-  next = removeHistoryConfirmedLocalTurns(next, canonicalKey, incomingHistoryItems);
+  next = removeHistoryConfirmedLiveTurns(
+    next,
+    canonicalKey,
+    incomingHistoryItems,
+    new Set(normalizedTurns.turnOrder)
+  );
   const mergedConversation = next.conversations[canonicalKey] ?? emptyConversation(canonicalKey);
   const projectedItems = projectNormalizedTurnsToChatItems(mergedConversation, {
     sessionId,
@@ -2065,6 +2194,7 @@ export function setSessionHistoryPageState(
     delete nextPages[sessionId];
   } else {
     nextPages[sessionId] = {
+      autoCompleteFailedCursor: null,
       loadingOlder: false,
       olderCursor: null,
       sourceKey: null,
@@ -2333,7 +2463,7 @@ function applyCodexNotificationToWorkspace(
     case CodexNotificationMethod.ReasoningTextDelta:
       return applyAppServerReasoningDeltaParams(workspace, event, params);
     case CodexNotificationMethod.TurnCompleted:
-      return applyTurnPayloadToTurnStore(workspace, event, params);
+      return applyTurnCompletedEvent(workspace, event, params);
     default:
       return workspace;
   }
@@ -2480,13 +2610,17 @@ function appendLiveTurnItemText(
 
 function applyTurnCompletedEvent(
   workspace: DeviceWorkspace,
-  event: LocalEvent
+  event: LocalEvent,
+  paramsOverride?: Record<string, unknown>
 ): DeviceWorkspace {
-  const params = isRecord(event.payload) ? event.payload : null;
+  const params = paramsOverride ?? (isRecord(event.payload) ? event.payload : null);
   const withTurn = params
     ? applyTurnPayloadToTurnStore(workspace, event, params)
     : workspace;
-  return markTurnItemsComplete(withTurn, event.turnId);
+  const turnId =
+    event.turnId ??
+    (params ? readString(params, "turnId") ?? readCodexTurn(params.turn)?.id ?? undefined : undefined);
+  return markTurnItemsComplete(withTurn, turnId);
 }
 
 function applyTurnPayloadToTurnStore(
@@ -2868,10 +3002,11 @@ function reassignHistoryPageState(
   return next;
 }
 
-function removeHistoryConfirmedLocalTurns(
+function removeHistoryConfirmedLiveTurns(
   workspace: DeviceWorkspace,
   key: ConversationKey,
-  historyItems: ChatItem[]
+  historyItems: ChatItem[],
+  historyTurnIds: Set<string>
 ): DeviceWorkspace {
   const canonicalKey = canonicalConversationKey(workspace, key);
   const conversation = workspace.conversations[canonicalKey];
@@ -2881,20 +3016,21 @@ function removeHistoryConfirmedLocalTurns(
   const turns = { ...conversation.turns };
   let removed = false;
   for (const turnId of conversation.turnOrder) {
-    if (!turnId.startsWith("local-turn:")) {
+    if (historyTurnIds.has(turnId)) {
       continue;
     }
     const turn = turns[turnId];
-    const userItem = turn
-      ? projectNormalizedTurnsToChatItems(
-          {
-            turnOrder: [turnId],
-            turns: { [turnId]: turn }
-          },
-          { sessionId: conversation.sessionIds[0], threadId: conversation.threadId }
-        ).find((item) => item.role === "user")
-      : null;
-    if (historyConfirmsUserTurn(userItem, historyItems)) {
+    if (!turn || !isHistoryReplaceableTurn(turnId, turn)) {
+      continue;
+    }
+    const turnItems = projectNormalizedTurnsToChatItems(
+      {
+        turnOrder: [turnId],
+        turns: { [turnId]: turn }
+      },
+      { sessionId: conversation.sessionIds[0], threadId: conversation.threadId }
+    );
+    if (historyConfirmsProjectedTurn(turnItems, historyItems)) {
       delete turns[turnId];
       removed = true;
     }
@@ -2921,6 +3057,20 @@ function removeHistoryConfirmedLocalTurns(
       }
     }
   });
+}
+
+function isHistoryReplaceableTurn(
+  turnId: string,
+  turn: NormalizedConversationTurn
+): boolean {
+  return (
+    turnId.startsWith("local-turn:") ||
+    turn.latestSeq !== null ||
+    turn.itemOrder.some((itemId) => {
+      const item = turn.items[itemId];
+      return Boolean(item?.clientMessageId || item?.metaKind === "thinking");
+    })
+  );
 }
 
 function findHistoryOverlap(historyItems: ChatItem[], preservedItems: ChatItem[]): number {
@@ -2978,9 +3128,7 @@ function historyConfirmsUserTurn(
   if (!userItem) {
     return false;
   }
-  const userIndex = historyItems.findIndex((historyItem) =>
-    sameRenderableMessage(historyItem, userItem)
-  );
+  const userIndex = findHistoryUserIndex(userItem, historyItems);
   if (userIndex < 0) {
     return false;
   }
@@ -2990,6 +3138,53 @@ function historyConfirmsUserTurn(
       (historyItem) =>
         historyItem.role === "assistant" && historyItem.text.trim().length > 0
     );
+}
+
+function historyConfirmsProjectedTurn(
+  turnItems: ChatItem[],
+  historyItems: ChatItem[]
+): boolean {
+  const userItem = turnItems.find((item) => item.role === "user");
+  if (!userItem) {
+    return false;
+  }
+  const userIndex = findHistoryUserIndex(userItem, historyItems);
+  if (userIndex < 0) {
+    return false;
+  }
+  const assistantItem = turnItems
+    .slice()
+    .reverse()
+    .find((item) => item.role === "assistant" && item.text.trim().length > 0);
+  if (!assistantItem) {
+    return historyItems
+      .slice(userIndex + 1)
+      .some((item) => item.role === "assistant" && item.text.trim().length > 0);
+  }
+  return historyItems
+    .slice(userIndex + 1)
+    .some((item) => sameRenderableMessage(item, assistantItem));
+}
+
+function findHistoryUserIndex(userItem: ChatItem, historyItems: ChatItem[]): number {
+  if (userItem.clientMessageId) {
+    const clientMatch = historyItems.findIndex(
+      (historyItem) =>
+        historyItem.role === "user" &&
+        historyItem.clientMessageId === userItem.clientMessageId
+    );
+    if (clientMatch >= 0) {
+      return clientMatch;
+    }
+  }
+  const matches = historyItems
+    .map((historyItem, index) =>
+      historyItem.role === "user" && sameRenderableMessage(historyItem, userItem)
+        ? index
+        : -1
+    )
+    .filter((index) => index >= 0);
+  return matches.length === 1 ? matches[0]! : -1;
 }
 
 function isHistoryReplaceableRole(role: ChatItem["role"]): boolean {

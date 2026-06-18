@@ -187,9 +187,6 @@ export function WebConsole() {
     togglePinnedThread,
     archiveThread,
     deleteSavedDevice,
-    canLoadOlderHistory,
-    loadOlderHistory,
-    loadingOlderHistory,
     visibleChatItems,
     visibleTurnGroups
   } = useWebConsoleController();
@@ -600,12 +597,9 @@ export function WebConsole() {
             <ChatCanvas
               active={activeTurn}
               blockedNotice={missingHistoryNotice}
-              canLoadOlderHistory={canLoadOlderHistory}
               items={visibleChatItems}
               turnGroups={visibleTurnGroups}
               loadingInitialHistory={initialHistoryLoading}
-              loadingOlderHistory={loadingOlderHistory}
-              onLoadOlderHistory={() => void loadOlderHistory()}
               pendingApprovals={pendingApprovals.length}
               session={currentSession}
               threadSubtitle={selectedHistoryEntry?.cwd ?? currentSession.cwd}

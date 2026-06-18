@@ -12,6 +12,8 @@ import type {
   AskForApproval,
   ApprovalsReviewer,
   CodexThread,
+  CodexThreadItem,
+  CodexThreadTurn,
   LocalSendMessageInput,
   LocalPermissionMode,
   LocalResumeSessionInput,
@@ -102,6 +104,18 @@ interface LocalSession {
   updatedAt: number;
   client: ManagedCodexClient;
   removeNotificationListener: () => void;
+  pendingUserInputs: PendingUserInputRecord[];
+  userItemClientIds: Record<string, string>;
+  nextUserInputOrder: number;
+}
+
+interface PendingUserInputRecord {
+  clientMessageId: string;
+  itemId?: string | undefined;
+  mode: "turn-start" | "steer";
+  order: number;
+  text: string;
+  turnId?: string | undefined;
 }
 
 type PermissionInput = Pick<
@@ -244,13 +258,14 @@ export class SessionManager {
           includeTurns: params.includeTurns ?? false
         }
       );
+      const decoratedResponse = this.decorateThreadReadResponse(response);
       devTrace("session.thread.read.end", {
         durationMs: durationMs(startedAt),
-        threadId: response.thread.id,
-        cwd: response.thread.cwd,
-        turnCount: response.thread.turns?.length ?? 0
+        threadId: decoratedResponse.thread.id,
+        cwd: decoratedResponse.thread.cwd,
+        turnCount: decoratedResponse.thread.turns?.length ?? 0
       });
-      return response;
+      return decoratedResponse;
     } catch (error) {
       devTrace("session.thread.read.error", {
         durationMs: durationMs(startedAt),
@@ -274,15 +289,19 @@ export class SessionManager {
         (client) => client.threadTurnsList(params),
         traceFields
       );
+      const decoratedResponse = this.decorateThreadTurnsResponse(
+        params.threadId,
+        response
+      );
       devTrace("session.thread.turns.end", {
         durationMs: durationMs(startedAt),
         ...traceFields,
-        count: response.data.length,
-        nextCursor: response.nextCursor,
-        backwardsCursor: response.backwardsCursor,
-        itemCounts: response.data.map((turn) => turn.items.length)
+        count: decoratedResponse.data.length,
+        nextCursor: decoratedResponse.nextCursor,
+        backwardsCursor: decoratedResponse.backwardsCursor,
+        itemCounts: decoratedResponse.data.map((turn) => turn.items.length)
       });
-      return response;
+      return decoratedResponse;
     } catch (error) {
       devTrace("session.thread.turns.error", {
         durationMs: durationMs(startedAt),
@@ -467,7 +486,10 @@ export class SessionManager {
         createdAt: now,
         updatedAt: now,
         client,
-        removeNotificationListener
+        removeNotificationListener,
+        pendingUserInputs: [],
+        userItemClientIds: {},
+        nextUserInputOrder: 0
       };
       this.sessions.set(sessionId, session);
 
@@ -715,7 +737,10 @@ export class SessionManager {
         createdAt: now,
         updatedAt: now,
         client,
-        removeNotificationListener
+        removeNotificationListener,
+        pendingUserInputs: [],
+        userItemClientIds: {},
+        nextUserInputOrder: 0
       };
       this.sessions.set(sessionId, session);
 
@@ -851,6 +876,11 @@ export class SessionManager {
       textLength: input.text.length,
       model: session.model ?? null
     });
+    recordUserInput(session, {
+      text: input.text,
+      mode: "turn-start",
+      clientMessageId: input.clientMessageId
+    });
 
     this.emitChatUser(session, {
       text: input.text,
@@ -891,6 +921,7 @@ export class SessionManager {
         durationMs: durationMs(startedAt),
         ...payloadSummary(response)
       });
+      bindUserInputTurn(session, input.clientMessageId, responseTurnId);
       if (!session.activeTurnId) {
         session.activeTurnId = responseTurnId;
         session.currentTurnId = responseTurnId;
@@ -941,6 +972,12 @@ export class SessionManager {
       throw new Error(`Turn ${turnId} is not active`);
     }
 
+    recordUserInput(session, {
+      text: input.text,
+      mode: "steer",
+      clientMessageId: input.clientMessageId,
+      turnId
+    });
     this.emitChatUser(session, {
       text: input.text,
       mode: "steer",
@@ -1353,6 +1390,7 @@ export class SessionManager {
     session: LocalSession,
     notification: AppServerNotification
   ): void {
+    notification = decorateAppServerNotification(session, notification);
     const ids = extractNotificationIds(notification);
     const threadId = ids.threadId ?? session.threadId;
     const turnId = ids.turnId ?? session.activeTurnId ?? session.currentTurnId;
@@ -1692,6 +1730,36 @@ export class SessionManager {
     }
   }
 
+  private decorateThreadReadResponse(
+    response: ThreadReadResponse
+  ): ThreadReadResponse {
+    const session = this.findSessionForThread(response.thread.id);
+    if (!session) {
+      return response;
+    }
+    const thread = decorateCodexThreadForSession(session, response.thread);
+    return thread === response.thread ? response : { ...response, thread };
+  }
+
+  private decorateThreadTurnsResponse(
+    threadId: string,
+    response: ThreadTurnsListResponse
+  ): ThreadTurnsListResponse {
+    const session = this.findSessionForThread(threadId);
+    if (!session) {
+      return response;
+    }
+    const turns = decorateCodexTurnsForSession(session, response.data);
+    return turns === response.data ? response : { ...response, data: turns };
+  }
+
+  private findSessionForThread(threadId: string): LocalSession | null {
+    return (
+      [...this.sessions.values()].find((session) => session.threadId === threadId) ??
+      null
+    );
+  }
+
   private emitSessionUpdated(session: LocalSession): void {
     devTrace("session.emit.updated", {
       ...localSessionTraceFields(session)
@@ -1765,6 +1833,224 @@ export class SessionManager {
       }
     });
   }
+}
+
+const MAX_PENDING_USER_INPUTS = 200;
+
+function recordUserInput(
+  session: LocalSession,
+  input: {
+    text: string;
+    mode: PendingUserInputRecord["mode"];
+    clientMessageId?: string | undefined;
+    turnId?: string | undefined;
+  }
+): void {
+  if (!input.clientMessageId) {
+    return;
+  }
+  const record: PendingUserInputRecord = {
+    clientMessageId: input.clientMessageId,
+    mode: input.mode,
+    order: session.nextUserInputOrder,
+    text: input.text
+  };
+  session.nextUserInputOrder += 1;
+  if (input.turnId) {
+    record.turnId = input.turnId;
+  }
+  session.pendingUserInputs.push(record);
+  if (session.pendingUserInputs.length > MAX_PENDING_USER_INPUTS) {
+    session.pendingUserInputs.splice(
+      0,
+      session.pendingUserInputs.length - MAX_PENDING_USER_INPUTS
+    );
+  }
+}
+
+function bindUserInputTurn(
+  session: LocalSession,
+  clientMessageId: string | undefined,
+  turnId: string
+): void {
+  if (!clientMessageId) {
+    return;
+  }
+  const record = [...session.pendingUserInputs]
+    .reverse()
+    .find((item) => item.clientMessageId === clientMessageId);
+  if (record && !record.turnId) {
+    record.turnId = turnId;
+  }
+}
+
+function decorateAppServerNotification(
+  session: LocalSession,
+  notification: AppServerNotification
+): AppServerNotification {
+  if (!isRecord(notification.params)) {
+    return notification;
+  }
+  switch (notification.method) {
+    case CodexNotificationMethod.ItemStarted:
+    case CodexNotificationMethod.ItemCompleted: {
+      const params = decorateItemLifecycleParams(session, notification.params);
+      return params === notification.params ? notification : { ...notification, params };
+    }
+    case CodexNotificationMethod.TurnStarted:
+    case CodexNotificationMethod.TurnCompleted: {
+      const params = decorateTurnNotificationParams(session, notification.params);
+      return params === notification.params ? notification : { ...notification, params };
+    }
+    default:
+      return notification;
+  }
+}
+
+function decorateItemLifecycleParams(
+  session: LocalSession,
+  params: Record<string, unknown>
+): Record<string, unknown> {
+  if (!isRecord(params.item)) {
+    return params;
+  }
+  const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
+  const item = params.item as unknown as CodexThreadItem;
+  const decoratedItem = decorateCodexThreadItemForSession(session, turnId, item);
+  return decoratedItem === item ? params : { ...params, item: decoratedItem };
+}
+
+function decorateTurnNotificationParams(
+  session: LocalSession,
+  params: Record<string, unknown>
+): Record<string, unknown> {
+  if (!isRecord(params.turn)) {
+    return params;
+  }
+  const turn = params.turn as unknown as CodexThreadTurn;
+  const decoratedTurn = decorateCodexTurnForSession(session, turn);
+  return decoratedTurn === turn ? params : { ...params, turn: decoratedTurn };
+}
+
+function decorateCodexThreadForSession(
+  session: LocalSession,
+  thread: CodexThread
+): CodexThread {
+  if (!Array.isArray(thread.turns)) {
+    return thread;
+  }
+  const turns = decorateCodexTurnsForSession(session, thread.turns);
+  return turns === thread.turns ? thread : { ...thread, turns };
+}
+
+function decorateCodexTurnsForSession(
+  session: LocalSession,
+  turns: CodexThreadTurn[]
+): CodexThreadTurn[] {
+  let changed = false;
+  const decoratedTurns = turns.map((turn) => {
+    const decoratedTurn = decorateCodexTurnForSession(session, turn);
+    if (decoratedTurn !== turn) {
+      changed = true;
+    }
+    return decoratedTurn;
+  });
+  return changed ? decoratedTurns : turns;
+}
+
+function decorateCodexTurnForSession(
+  session: LocalSession,
+  turn: CodexThreadTurn
+): CodexThreadTurn {
+  if (!Array.isArray(turn.items)) {
+    return turn;
+  }
+  let changed = false;
+  const items = turn.items.map((item) => {
+    const decoratedItem = decorateCodexThreadItemForSession(session, turn.id, item);
+    if (decoratedItem !== item) {
+      changed = true;
+    }
+    return decoratedItem;
+  });
+  return changed ? { ...turn, items } : turn;
+}
+
+function decorateCodexThreadItemForSession(
+  session: LocalSession,
+  turnId: string | undefined,
+  item: CodexThreadItem
+): CodexThreadItem {
+  if (item.type !== "userMessage") {
+    return item;
+  }
+  if (typeof item.clientId === "string" && item.clientId.trim()) {
+    session.userItemClientIds[item.id] = item.clientId;
+    return item;
+  }
+  const mappedClientId = session.userItemClientIds[item.id];
+  if (mappedClientId) {
+    return { ...item, clientId: mappedClientId };
+  }
+
+  const record = findUserInputRecordForItem(session, turnId, item);
+  if (!record) {
+    return item;
+  }
+  record.itemId = item.id;
+  if (turnId && !record.turnId) {
+    record.turnId = turnId;
+  }
+  session.userItemClientIds[item.id] = record.clientMessageId;
+  devTrace("session.input.client_id.decorated", {
+    sessionId: session.sessionId,
+    threadId: session.threadId,
+    turnId,
+    itemId: item.id,
+    clientMessageId: record.clientMessageId,
+    mode: record.mode
+  });
+  return { ...item, clientId: record.clientMessageId };
+}
+
+function findUserInputRecordForItem(
+  session: LocalSession,
+  turnId: string | undefined,
+  item: CodexThreadItem
+): PendingUserInputRecord | null {
+  const itemText = normalizeUserInputText(readUserMessageText(item));
+  const candidates = session.pendingUserInputs
+    .filter((record) => !record.itemId || record.itemId === item.id)
+    .filter((record) => !turnId || !record.turnId || record.turnId === turnId)
+    .sort((left, right) => left.order - right.order);
+
+  if (itemText) {
+    return (
+      candidates.find(
+        (record) => normalizeUserInputText(record.text) === itemText
+      ) ?? null
+    );
+  }
+
+  return candidates.length === 1 ? candidates[0] ?? null : null;
+}
+
+function readUserMessageText(item: CodexThreadItem): string {
+  if (Array.isArray(item.content)) {
+    return item.content
+      .map((part) =>
+        isRecord(part) && part.type === "text" && typeof part.text === "string"
+          ? part.text
+          : ""
+      )
+      .filter(Boolean)
+      .join("\n");
+  }
+  return typeof item.text === "string" ? item.text : "";
+}
+
+function normalizeUserInputText(value: string): string {
+  return value.replace(/\r\n/g, "\n").trim();
 }
 
 async function assertDirectory(cwd: string): Promise<void> {

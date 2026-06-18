@@ -52,6 +52,7 @@ import {
   createDeviceWorkspace,
   hydrateSessionFromTurns,
   ingestEventsIntoWorkspace,
+  markOptimisticMessageComplete,
   markOptimisticMessageFailed,
   markOptimisticMessageSent,
   prependSessionHistoryTurns,
@@ -219,6 +220,8 @@ const DEFAULT_SIDEBAR_WIDTH = 292;
 const MIN_SIDEBAR_WIDTH = 272;
 const MAX_SIDEBAR_WIDTH = 620;
 const HISTORY_PAGE_CACHE_TTL_MS = 15_000;
+const HISTORY_AUTO_COMPLETE_PAGE_LIMIT = 100;
+const HISTORY_AUTO_COMPLETE_MAX_PAGES = 500;
 const HISTORY_PREFETCH_CONCURRENCY = 1;
 const MESSAGE_RECONCILE_INITIAL_DELAY_MS = 1_200;
 const MESSAGE_RECONCILE_INTERVAL_MS = 2_500;
@@ -236,6 +239,16 @@ interface HistoryPrefetchTask {
   connection: AgentConnection;
   entry: LocalCodexHistoryEntry;
   key: string;
+}
+
+interface HistoryAutoCompletionInput {
+  connection: AgentConnection;
+  cursor: string;
+  cwd: string;
+  deviceId: string;
+  sessionId: string;
+  sourceKey: string;
+  threadId: string;
 }
 
 interface MessageReconciliationRequest {
@@ -558,6 +571,12 @@ export function useWebConsoleController() {
   const activeHistoryPrefetchCountRef = useRef(0);
   const prefetchingHistoryKeysRef = useRef(new Set<string>());
   const refreshingHistoryKeysRef = useRef(new Set<string>());
+  const historyAutoCompletionRef = useRef<{
+    cursor: string;
+    taskId: string;
+    version: number;
+  } | null>(null);
+  const historyAutoCompletionVersionRef = useRef(0);
   const deviceHydrationVersionsRef = useRef(new Map<string, number>());
   const pendingHistoryHydrationsRef = useRef(new Set<string>());
   const desktopFrameRef = useRef<HTMLDivElement | null>(null);
@@ -807,6 +826,183 @@ export function useWebConsoleController() {
     [patchDeviceWorkspace]
   );
 
+  function historyAutoCompletionTaskId(deviceId: string, sessionId: string): string {
+    return `${deviceId}:${sessionId}`;
+  }
+
+  function isCurrentHistoryAutoCompletion(taskId: string, version: number): boolean {
+    const active = historyAutoCompletionRef.current;
+    return Boolean(active && active.taskId === taskId && active.version === version);
+  }
+
+  function cancelHistoryAutoCompletion(reason: string) {
+    const active = historyAutoCompletionRef.current;
+    if (!active) {
+      return;
+    }
+    historyAutoCompletionVersionRef.current += 1;
+    historyAutoCompletionRef.current = null;
+    if (activeHistoryLoadKeyRef.current?.startsWith("auto:")) {
+      activeHistoryLoadKeyRef.current = null;
+    }
+    webDevTrace("console.history.auto_complete.cancel", {
+      reason,
+      taskId: active.taskId
+    });
+    pumpHistoryPrefetchQueue();
+  }
+
+  function startHistoryAutoCompletion(input: HistoryAutoCompletionInput) {
+    if (!input.cursor) {
+      return;
+    }
+    if (input.connection.mode === "relay" && !input.connection.sessionToken) {
+      return;
+    }
+    const taskId = historyAutoCompletionTaskId(input.deviceId, input.sessionId);
+    const active = historyAutoCompletionRef.current;
+    if (active?.taskId === taskId && active.cursor === input.cursor) {
+      return;
+    }
+    const version = historyAutoCompletionVersionRef.current + 1;
+    historyAutoCompletionVersionRef.current = version;
+    historyAutoCompletionRef.current = {
+      cursor: input.cursor,
+      taskId,
+      version
+    };
+    activeHistoryLoadKeyRef.current = `auto:${input.sourceKey}`;
+    historyPrefetchQueueRef.current = [];
+    void runHistoryAutoCompletion({
+      ...input,
+      taskId,
+      version
+    });
+  }
+
+  async function runHistoryAutoCompletion(
+    input: HistoryAutoCompletionInput & { taskId: string; version: number }
+  ) {
+    let cursor: string | null = input.cursor;
+    let latestSourceKey = input.sourceKey;
+    let pageCount = 0;
+    let turnCount = 0;
+    let failedCursor: string | null = null;
+    let stoppedByLimit = false;
+    webDevTrace("console.history.auto_complete.begin", {
+      deviceId: input.deviceId,
+      sessionId: input.sessionId,
+      threadId: input.threadId,
+      cwd: input.cwd,
+      cursorPresent: Boolean(cursor)
+    });
+    patchDeviceWorkspace(input.deviceId, (workspace) =>
+      setSessionHistoryPageState(workspace, input.sessionId, {
+        autoCompleteFailedCursor: null,
+        loadingOlder: true,
+        olderCursor: cursor,
+        sourceKey: latestSourceKey
+      })
+    );
+
+    try {
+      while (cursor && isCurrentHistoryAutoCompletion(input.taskId, input.version)) {
+        if (pageCount >= HISTORY_AUTO_COMPLETE_MAX_PAGES) {
+          webDevTrace("console.history.auto_complete.limit", {
+            deviceId: input.deviceId,
+            sessionId: input.sessionId,
+            threadId: input.threadId,
+            pageCount,
+            remainingCursor: cursor
+          });
+          stoppedByLimit = true;
+          break;
+        }
+
+        const page = await getCodexHistoryTurns(input.connection, {
+          id: input.threadId,
+          cwd: input.cwd,
+          cursor,
+          limit: HISTORY_AUTO_COMPLETE_PAGE_LIMIT
+        });
+        if (!isCurrentHistoryAutoCompletion(input.taskId, input.version)) {
+          webDevTrace("console.history.auto_complete.stale_page", {
+            deviceId: input.deviceId,
+            sessionId: input.sessionId,
+            threadId: input.threadId
+          });
+          break;
+        }
+
+        pageCount += 1;
+        turnCount += page.turns.length;
+        latestSourceKey = codexHistoryKey(page.entry);
+        cursor = page.nextCursor;
+        patchDeviceWorkspace(input.deviceId, (workspace) => {
+          if (
+            workspace.currentSessionId !== input.sessionId ||
+            !isSameAgentConnection(workspace.connection, input.connection)
+          ) {
+            return workspace;
+          }
+          let next = rememberSessionHistoryOrigin(workspace, input.sessionId, page.entry.id);
+          next = prependSessionHistoryTurns(next, input.sessionId, page.turns);
+          return setSessionHistoryPageState(next, input.sessionId, {
+            autoCompleteFailedCursor: null,
+            loadingOlder: Boolean(page.nextCursor),
+            olderCursor: page.nextCursor,
+            sourceKey: latestSourceKey
+          });
+        });
+        webDevTrace("console.history.auto_complete.page", {
+          deviceId: input.deviceId,
+          sessionId: input.sessionId,
+          threadId: input.threadId,
+          pageCount,
+          pageTurnCount: page.turns.length,
+          hasNextCursor: Boolean(page.nextCursor)
+        });
+
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      }
+    } catch (err) {
+      if (isCurrentHistoryAutoCompletion(input.taskId, input.version)) {
+        failedCursor = cursor;
+        webDevTrace("console.history.auto_complete.error", {
+          deviceId: input.deviceId,
+          sessionId: input.sessionId,
+          threadId: input.threadId,
+          pageCount,
+          ...webErrorSummary(err)
+        });
+      }
+    } finally {
+      if (isCurrentHistoryAutoCompletion(input.taskId, input.version)) {
+        historyAutoCompletionRef.current = null;
+        if (activeHistoryLoadKeyRef.current === `auto:${input.sourceKey}`) {
+          activeHistoryLoadKeyRef.current = null;
+        }
+        patchDeviceWorkspace(input.deviceId, (workspace) =>
+          setSessionHistoryPageState(workspace, input.sessionId, {
+            autoCompleteFailedCursor: failedCursor ?? (stoppedByLimit ? cursor : null),
+            loadingOlder: false,
+            olderCursor: cursor,
+            sourceKey: latestSourceKey
+          })
+        );
+        webDevTrace("console.history.auto_complete.end", {
+          deviceId: input.deviceId,
+          sessionId: input.sessionId,
+          threadId: input.threadId,
+          pageCount,
+          turnCount,
+          complete: cursor === null
+        });
+        pumpHistoryPrefetchQueue();
+      }
+    }
+  }
+
   function rememberSubmitTrace(context: SubmitTraceContext) {
     submitTraceByClientMessageRef.current.set(context.clientMessageId, context);
     if (context.turnId) {
@@ -992,12 +1188,24 @@ export function useWebConsoleController() {
             hydrateSessionFromTurns(currentWorkspace, sessionId, page.turns),
             sessionId,
             {
+              autoCompleteFailedCursor: null,
               loadingOlder: false,
               olderCursor: page.nextCursor,
               sourceKey: cacheKey
             }
           );
         });
+        if (page.nextCursor) {
+          startHistoryAutoCompletion({
+            connection: workspace.connection,
+            cursor: page.nextCursor,
+            cwd: entry?.cwd ?? session.cwd,
+            deviceId,
+            sessionId,
+            sourceKey: cacheKey,
+            threadId: historyThreadId
+          });
+        }
       } catch {
         return;
       } finally {
@@ -1021,6 +1229,41 @@ export function useWebConsoleController() {
     }
     void ensureSessionHistoryHydrated(currentSessionId);
   }, [currentSessionId, ensureSessionHistoryHydrated, sessionHistoryOrigins]);
+
+  useEffect(() => {
+    if (!selectedDeviceId || !currentSession || !currentHistoryPageState?.olderCursor) {
+      return;
+    }
+    if (
+      currentHistoryPageState.autoCompleteFailedCursor ===
+      currentHistoryPageState.olderCursor
+    ) {
+      return;
+    }
+    const threadId =
+      currentSession.threadId ?? sessionHistoryOrigins[currentSession.sessionId] ?? null;
+    if (!threadId) {
+      return;
+    }
+    startHistoryAutoCompletion({
+      connection,
+      cursor: currentHistoryPageState.olderCursor,
+      cwd: currentSession.cwd,
+      deviceId: selectedDeviceId,
+      sessionId: currentSession.sessionId,
+      sourceKey:
+        currentHistoryPageState.sourceKey ?? `${threadId}::${currentSession.cwd}`,
+      threadId
+    });
+  }, [
+    connection,
+    currentHistoryPageState?.autoCompleteFailedCursor,
+    currentHistoryPageState?.olderCursor,
+    currentHistoryPageState?.sourceKey,
+    currentSession,
+    selectedDeviceId,
+    sessionHistoryOrigins
+  ]);
 
   useEffect(() => {
     const signature = JSON.stringify({
@@ -2578,6 +2821,7 @@ export function useWebConsoleController() {
     if (!deviceId) {
       return;
     }
+    cancelHistoryAutoCompletion("select_history");
     if (!isRestorableHistoryEntry(entry)) {
       setError(formatMissingHistoryFolderMessage(entry.cwd));
       return;
@@ -2659,6 +2903,7 @@ export function useWebConsoleController() {
             hydratedWorkspace,
             previewSession.sessionId,
             {
+              autoCompleteFailedCursor: null,
               loadingOlder: false,
               olderCursor: cachedRecord.page.nextCursor,
               sourceKey: key
@@ -2677,6 +2922,17 @@ export function useWebConsoleController() {
           });
           return nextWorkspace;
         });
+        if (cachedRecord.page.nextCursor) {
+          startHistoryAutoCompletion({
+            connection: deviceConnection,
+            cursor: cachedRecord.page.nextCursor,
+            cwd: cachedRecord.page.entry.cwd,
+            deviceId,
+            sessionId: previewSession.sessionId,
+            sourceKey: key,
+            threadId: cachedRecord.page.entry.id
+          });
+        }
       }
 
       if (hasFreshCache && refreshingHistoryKeysRef.current.has(key)) {
@@ -2731,6 +2987,7 @@ export function useWebConsoleController() {
           hydratedWorkspace,
           previewSession.sessionId,
           {
+            autoCompleteFailedCursor: null,
             loadingOlder: false,
             olderCursor: page.nextCursor,
             sourceKey: key
@@ -2745,6 +3002,17 @@ export function useWebConsoleController() {
         });
         return nextWorkspace;
       });
+      if (page.nextCursor) {
+        startHistoryAutoCompletion({
+          connection: deviceConnection,
+          cursor: page.nextCursor,
+          cwd: page.entry.cwd,
+          deviceId,
+          sessionId: previewSession.sessionId,
+          sourceKey: key,
+          threadId: page.entry.id
+        });
+      }
     } catch (err) {
       patchDeviceWorkspace(deviceId, (currentWorkspace) =>
         showedCachedPage
@@ -2965,6 +3233,12 @@ export function useWebConsoleController() {
       return;
     }
     if (hasLiveCompletionEvidence(workspace, request)) {
+      patchDeviceWorkspace(request.deviceId, (currentWorkspace) =>
+        markOptimisticMessageComplete(currentWorkspace, request.clientMessageId, {
+          sessionId: request.sessionId,
+          ...(request.turnId ? { turnId: request.turnId } : {})
+        })
+      );
       webDevTrace("console.reconcile.live_evidence", {
         deviceId: request.deviceId,
         sessionId: request.sessionId,
@@ -3103,6 +3377,7 @@ export function useWebConsoleController() {
           if (historyDecision.shouldApplyHistory) {
             next = hydrateSessionFromTurns(next, targetSession.sessionId, page.turns);
             next = setSessionHistoryPageState(next, targetSession.sessionId, {
+              autoCompleteFailedCursor: null,
               loadingOlder: false,
               olderCursor: page.nextCursor,
               sourceKey: pageKey
@@ -3110,7 +3385,10 @@ export function useWebConsoleController() {
           }
           const turnId =
             targetSession.currentTurnId ?? targetSession.activeTurnId ?? request.turnId;
-          return markOptimisticMessageSent(next, request.clientMessageId, {
+          const markOptimisticMessage = historyDecision.shouldStopReconciliation
+            ? markOptimisticMessageComplete
+            : markOptimisticMessageSent;
+          return markOptimisticMessage(next, request.clientMessageId, {
             sessionId: targetSession.sessionId,
             ...(targetSession.threadId ? { threadId: targetSession.threadId } : {}),
             ...(turnId ? { turnId } : {})
@@ -3120,7 +3398,10 @@ export function useWebConsoleController() {
         patchDeviceWorkspace(request.deviceId, (currentWorkspace) => {
           const turnId =
             targetSession.currentTurnId ?? targetSession.activeTurnId ?? request.turnId;
-          return markOptimisticMessageSent(
+          const markOptimisticMessage = isReconciledTerminalSession(targetSession, request)
+            ? markOptimisticMessageComplete
+            : markOptimisticMessageSent;
+          return markOptimisticMessage(
             upsertSessionInWorkspace(currentWorkspace, targetSession),
             request.clientMessageId,
             {
@@ -3259,6 +3540,7 @@ export function useWebConsoleController() {
         next = reassignSessionChatItems(next, previewSession.sessionId, result.session.sessionId);
         next = hydrateSessionFromTurns(next, result.session.sessionId, result.history.turns);
         next = setSessionHistoryPageState(next, result.session.sessionId, {
+          autoCompleteFailedCursor: null,
           loadingOlder: false,
           olderCursor: result.history.nextCursor,
           sourceKey: codexHistoryKey(result.history.entry)
@@ -3427,6 +3709,7 @@ export function useWebConsoleController() {
         next = reassignSessionChatItems(next, previewSession.sessionId, result.session.sessionId);
         next = hydrateSessionFromTurns(next, result.session.sessionId, result.history.turns);
         next = setSessionHistoryPageState(next, result.session.sessionId, {
+          autoCompleteFailedCursor: null,
           loadingOlder: false,
           olderCursor: result.history.nextCursor,
           sourceKey: codexHistoryKey(result.history.entry)
@@ -3800,7 +4083,6 @@ export function useWebConsoleController() {
     const message = buildMessageWithAttachments(text, attachments);
     const clientMessageId = createClientId("message");
     const targetSessionId = currentSession?.sessionId ?? pendingSessionId(clientMessageId);
-    const optimisticTurnId = currentSession?.activeTurnId ?? undefined;
     const submitContext: SubmitTraceContext = {
       clientMessageId,
       deviceId: selectedDeviceIdRef.current,
@@ -3808,31 +4090,29 @@ export function useWebConsoleController() {
       sessionId: targetSessionId,
       startedAt: submitStartedAt,
       submitTraceId,
-      textLength: message.length,
-      ...(optimisticTurnId ? { turnId: optimisticTurnId } : {})
+      textLength: message.length
     };
     rememberSubmitTrace(submitContext);
     webDevTrace("console.submit.message.begin", {
       submitTraceId,
       clientMessageId,
       targetSessionId,
-      optimisticTurnId,
       messageLength: message.length,
       attachmentCount: attachments.length,
       hasCurrentSession: Boolean(currentSession)
     });
 
+    // The active turn belongs to the backend's current run; new user input stays local
+    // until the RPC ack returns the authoritative turnId.
     patchActiveWorkspace((workspace) =>
       addOptimisticUserMessage(workspace, {
         sessionId: targetSessionId,
-        ...(optimisticTurnId ? { turnId: optimisticTurnId } : {}),
         clientMessageId,
         text: message
       })
     );
     traceSubmitStep("console.submit.queued", submitContext, {
       targetSessionId,
-      optimisticTurnId,
       hasCurrentSession: Boolean(currentSession)
     });
     setDraft("");
@@ -4063,57 +4343,6 @@ export function useWebConsoleController() {
     await interruptSessionTurn(connection, currentSession.sessionId, currentSession.activeTurnId);
   }
 
-  async function loadOlderHistory() {
-    if (!currentSession || !currentHistoryPageState?.olderCursor || currentHistoryPageState.loadingOlder) {
-      return;
-    }
-
-    const sessionId = currentSession.sessionId;
-    const sourceKey = currentHistoryPageState.sourceKey;
-    const historyThreadId = sessionHistoryOrigins[sessionId];
-    const sourceEntry =
-      (sourceKey
-        ? codexHistory.find((entry) => codexHistoryKey(entry) === sourceKey) ?? null
-        : null) ??
-      (historyThreadId
-        ? codexHistory.find((entry) => entry.id === historyThreadId && entry.cwd === currentSession.cwd) ??
-          codexHistory.find((entry) => entry.id === historyThreadId) ??
-          null
-        : null);
-    const historyId = sourceEntry?.id ?? historyThreadId;
-    if (!historyId) {
-      return;
-    }
-
-    patchActiveWorkspace((workspace) =>
-      setSessionHistoryPageState(workspace, sessionId, { loadingOlder: true })
-    );
-
-    try {
-      const page = await getCodexHistoryTurns(connection, {
-        id: historyId,
-        cwd: sourceEntry?.cwd ?? currentSession.cwd,
-        cursor: currentHistoryPageState.olderCursor,
-        limit: 40
-      });
-      const nextSourceKey = codexHistoryKey(page.entry);
-      patchActiveWorkspace((workspace) => {
-        let next = rememberSessionHistoryOrigin(workspace, sessionId, page.entry.id);
-        next = prependSessionHistoryTurns(next, sessionId, page.turns);
-        return setSessionHistoryPageState(next, sessionId, {
-          loadingOlder: false,
-          olderCursor: page.nextCursor,
-          sourceKey: nextSourceKey
-        });
-      });
-    } catch (err) {
-      patchActiveWorkspace((workspace) =>
-        setSessionHistoryPageState(workspace, sessionId, { loadingOlder: false })
-      );
-      setError(formatConsoleError(err));
-    }
-  }
-
   async function setGoalForSession(
     sessionId: string,
     input: { objective?: string | null; status?: string | null; tokenBudget?: number | null }
@@ -4213,6 +4442,7 @@ export function useWebConsoleController() {
   }
 
   function selectSession(sessionId: string) {
+    cancelHistoryAutoCompletion("select_session");
     patchActiveWorkspace((workspace) => ({
       ...workspace,
       currentSessionId: sessionId,
@@ -4246,6 +4476,7 @@ export function useWebConsoleController() {
   }
 
   function startNewSessionDraft() {
+    cancelHistoryAutoCompletion("new_session");
     patchActiveWorkspace((workspace) => ({
       ...workspace,
       currentSessionId: null,
@@ -4270,6 +4501,7 @@ export function useWebConsoleController() {
   }
 
   function selectCwd(nextCwd: string) {
+    cancelHistoryAutoCompletion("select_cwd");
     patchActiveWorkspace((workspace) => ({
       ...workspace,
       cwd: nextCwd,
@@ -4487,9 +4719,6 @@ export function useWebConsoleController() {
     selectedPermission,
     selectedReasoning,
     sessionSidebarRef,
-    canLoadOlderHistory: Boolean(currentSession && currentHistoryPageState?.olderCursor),
-    loadingOlderHistory: currentHistoryPageState?.loadingOlder ?? false,
-    loadOlderHistory,
     setActiveMenu,
     setDraft,
     setGoalObjective,

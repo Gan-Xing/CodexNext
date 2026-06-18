@@ -227,6 +227,143 @@ describe("SessionManager messages", () => {
     });
   });
 
+  it("decorates app-server user items with the local clientMessageId", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    const session = await manager.startSession({
+      cwd: process.cwd(),
+      permissionMode: "request-approval"
+    });
+    await manager.startTurn(session.sessionId, {
+      text: "hello",
+      clientMessageId: "msg_1"
+    });
+    fake.emit("notification", {
+      method: CodexNotificationMethod.ItemStarted,
+      params: {
+        threadId: "thread_1",
+        turnId: "turn_1",
+        startedAtMs: 1,
+        item: {
+          id: "item_user",
+          type: "userMessage",
+          content: [{ type: "text", text: "hello", text_elements: [] }]
+        }
+      }
+    } satisfies AppServerNotification);
+    fake.emit("notification", {
+      method: CodexNotificationMethod.TurnCompleted,
+      params: {
+        threadId: "thread_1",
+        turn: {
+          id: "turn_1",
+          itemsView: "full",
+          status: "completed",
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 1_000,
+          items: [
+            {
+              id: "item_user",
+              type: "userMessage",
+              content: [{ type: "text", text: "hello", text_elements: [] }]
+            },
+            {
+              id: "item_agent",
+              type: "agentMessage",
+              text: "hi"
+            }
+          ]
+        }
+      }
+    } satisfies AppServerNotification);
+
+    fake.threadReadResponse = {
+      thread: {
+        id: "thread_1",
+        sessionId: "session_1",
+        preview: "",
+        createdAt: 1,
+        updatedAt: 2,
+        cwd: process.cwd(),
+        turns: [
+          {
+            id: "turn_1",
+            itemsView: "full",
+            status: "completed",
+            error: null,
+            startedAt: 1,
+            completedAt: 2,
+            durationMs: 1_000,
+            items: [
+              {
+                id: "item_user",
+                type: "userMessage",
+                content: [{ type: "text", text: "hello", text_elements: [] }]
+              }
+            ]
+          }
+        ]
+      }
+    };
+    fake.threadTurnsListResponse = {
+      data: fake.threadReadResponse.thread.turns ?? [],
+      nextCursor: null,
+      backwardsCursor: null
+    };
+
+    const started = store
+      .all()
+      .find((event) => event.type === LocalEventType.AppServerItemStarted);
+    const completed = store
+      .all()
+      .find((event) => event.type === LocalEventType.TurnCompleted);
+    const read = await manager.readThread({
+      threadId: "thread_1",
+      includeTurns: true
+    });
+    const turns = await manager.listThreadTurns({
+      threadId: "thread_1",
+      cursor: null,
+      limit: 20,
+      sortDirection: "desc",
+      itemsView: "full"
+    });
+
+    expect(eventPayload(started).item).toMatchObject({
+      id: "item_user",
+      clientId: "msg_1"
+    });
+    expect(eventPayload(completed).turn).toMatchObject({
+      items: [
+        expect.objectContaining({
+          id: "item_user",
+          clientId: "msg_1"
+        }),
+        expect.objectContaining({
+          id: "item_agent"
+        })
+      ]
+    });
+    expect(read.thread.turns?.[0]?.items[0]).toMatchObject({
+      id: "item_user",
+      clientId: "msg_1"
+    });
+    expect(turns.data[0]?.items[0]).toMatchObject({
+      id: "item_user",
+      clientId: "msg_1"
+    });
+  });
+
   it("emits agent.error with clientMessageId when turn/steer fails", async () => {
     const store = new EventStore();
     const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
