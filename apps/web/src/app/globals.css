@@ -7173,7 +7173,13 @@ summary {
   display: grid;
   gap: 0.7rem;
   max-width: min(920px, 100%);
+  min-width: 0;
   padding: 0.9rem 1rem;
+}
+
+.cn-semantic-block > div {
+  max-width: 100%;
+  min-width: 0;
 }
 
 .cn-semantic-header,
@@ -7235,13 +7241,20 @@ summary {
 }
 
 .cn-command-pre {
-  white-space: pre-wrap;
+  overflow-x: auto;
+  white-space: pre;
+  -webkit-overflow-scrolling: touch;
 }
 
 .cn-code-pre code,
 .cn-command-pre code {
   display: block;
   min-width: max-content;
+}
+
+.cn-command-pre code {
+  min-width: 100%;
+  width: max-content;
 }
 
 .cn-command-block {
