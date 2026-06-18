@@ -274,6 +274,12 @@ interface SubmitTraceContext {
   turnId?: string | undefined;
 }
 
+interface PendingSessionQueuedMessage {
+  clientMessageId: string;
+  context: SubmitTraceContext;
+  message: string;
+}
+
 function applyLoadedThreadState(
   entries: LocalCodexHistoryEntry[],
   threadIds: string[]
@@ -562,6 +568,9 @@ export function useWebConsoleController() {
   const messageReconcileTimersRef = useRef(new Map<string, number>());
   const submitTraceByClientMessageRef = useRef(new Map<string, SubmitTraceContext>());
   const submitTraceByTurnRef = useRef(new Map<string, SubmitTraceContext>());
+  const pendingSessionMessageQueuesRef = useRef(
+    new Map<string, PendingSessionQueuedMessage[]>()
+  );
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const historyPageCacheRef = useRef(
     new Map<string, { fetchedAt: number; page: LocalCodexHistoryPageResponse }>()
@@ -1162,6 +1171,148 @@ export function useWebConsoleController() {
           eventSeq: event.seq,
           eventType: event.type
         });
+      }
+    }
+  }
+
+  function enqueuePendingSessionMessage(
+    pendingSessionIdValue: string,
+    queuedMessage: PendingSessionQueuedMessage
+  ) {
+    const queued = pendingSessionMessageQueuesRef.current.get(pendingSessionIdValue) ?? [];
+    pendingSessionMessageQueuesRef.current.set(pendingSessionIdValue, [
+      ...queued,
+      queuedMessage
+    ]);
+    traceSubmitStep("console.submit.pending_session_queued", queuedMessage.context, {
+      pendingSessionId: pendingSessionIdValue,
+      queuePosition: queued.length + 1
+    });
+  }
+
+  function failPendingSessionMessageQueue(
+    pendingSessionIdValue: string,
+    error: unknown
+  ) {
+    const queued = pendingSessionMessageQueuesRef.current.get(pendingSessionIdValue) ?? [];
+    pendingSessionMessageQueuesRef.current.delete(pendingSessionIdValue);
+    if (queued.length === 0) {
+      return;
+    }
+    const message = formatError(error);
+    patchActiveWorkspace((workspace) => {
+      let next = workspace;
+      for (const queuedMessage of queued) {
+        next = markOptimisticMessageFailed(next, queuedMessage.clientMessageId, message);
+      }
+      return next;
+    });
+    for (const queuedMessage of queued) {
+      traceSubmitFailed(queuedMessage.context, {
+        source: "pending_session_create_failed",
+        pendingSessionId: pendingSessionIdValue,
+        ...webErrorSummary(error)
+      });
+    }
+  }
+
+  async function drainPendingSessionMessageQueue(input: {
+    connection: AgentConnection;
+    pendingSessionIdValue: string;
+    sessionId: string;
+    threadId?: string | null | undefined;
+  }) {
+    while (true) {
+      const queued =
+        pendingSessionMessageQueuesRef.current.get(input.pendingSessionIdValue) ?? [];
+      pendingSessionMessageQueuesRef.current.delete(input.pendingSessionIdValue);
+      if (queued.length === 0) {
+        return;
+      }
+      webDevTrace("console.submit.pending_session_drain.begin", {
+        pendingSessionId: input.pendingSessionIdValue,
+        sessionId: input.sessionId,
+        threadId: input.threadId ?? null,
+        count: queued.length
+      });
+      for (const queuedMessage of queued) {
+        const context =
+          updateSubmitTrace(queuedMessage.clientMessageId, {
+            sessionId: input.sessionId
+          }) ?? queuedMessage.context;
+        traceSubmitStep("console.submit.rpc_start", context, {
+          operation: "drain_pending_session_message",
+          pendingSessionId: input.pendingSessionIdValue,
+          sessionId: input.sessionId,
+          threadId: input.threadId ?? null,
+          activeSubmitMode: "queue"
+        });
+        try {
+          const result = await sendSessionMessage(input.connection, input.sessionId, {
+            text: queuedMessage.message,
+            clientMessageId: queuedMessage.clientMessageId,
+            submitMode: "queue"
+          });
+          if (result.mode === "queued") {
+            traceSubmitStep("console.submit.ack", context, {
+              operation: "drain_pending_session_message",
+              mode: result.mode,
+              queuePosition: result.queuePosition,
+              sessionId: input.sessionId
+            });
+            patchActiveWorkspace((workspace) =>
+              markOptimisticMessageQueued(workspace, queuedMessage.clientMessageId, {
+                sessionId: input.sessionId,
+                ...(input.threadId ? { threadId: input.threadId } : {})
+              })
+            );
+            continue;
+          }
+          const sentContext =
+            updateSubmitTrace(queuedMessage.clientMessageId, {
+              sessionId: input.sessionId,
+              turnId: result.turnId
+            }) ?? context;
+          traceSubmitStep("console.submit.ack", sentContext, {
+            operation: "drain_pending_session_message",
+            mode: result.mode,
+            sessionId: input.sessionId,
+            turnId: result.turnId
+          });
+          patchActiveWorkspace((workspace) =>
+            markOptimisticMessageSent(workspace, queuedMessage.clientMessageId, {
+              sessionId: input.sessionId,
+              ...(input.threadId ? { threadId: input.threadId } : {}),
+              turnId: result.turnId
+            })
+          );
+          const selectedDeviceId = selectedDeviceIdRef.current;
+          if (selectedDeviceId) {
+            scheduleMessageReconciliation({
+              clientMessageId: queuedMessage.clientMessageId,
+              connection: input.connection,
+              deviceId: selectedDeviceId,
+              messageText: queuedMessage.message,
+              sessionId: input.sessionId,
+              submitTraceId: sentContext.submitTraceId,
+              turnId: result.turnId
+            });
+          }
+        } catch (error) {
+          traceSubmitFailed(context, {
+            operation: "drain_pending_session_message",
+            sessionId: input.sessionId,
+            pendingSessionId: input.pendingSessionIdValue,
+            ...webErrorSummary(error)
+          });
+          patchActiveWorkspace((workspace) =>
+            markOptimisticMessageFailed(
+              workspace,
+              queuedMessage.clientMessageId,
+              formatError(error)
+            )
+          );
+        }
       }
     }
   }
@@ -4130,9 +4281,15 @@ export function useWebConsoleController() {
 
     const message = buildMessageWithAttachments(text, attachments);
     const clientMessageId = createClientId("message");
-    const targetSessionId = currentSession?.sessionId ?? pendingSessionId(clientMessageId);
+    const pendingCurrentSessionId =
+      currentSession && isPendingSessionId(currentSession.sessionId)
+        ? currentSession.sessionId
+        : null;
+    const realCurrentSession = pendingCurrentSessionId ? null : currentSession;
+    const targetSessionId =
+      realCurrentSession?.sessionId ?? pendingCurrentSessionId ?? pendingSessionId(clientMessageId);
     const activeSubmitMode: LocalMessageSubmitMode | undefined =
-      currentSession?.activeTurnId ? (submitMode ?? "queue") : undefined;
+      realCurrentSession?.activeTurnId ? (submitMode ?? "queue") : undefined;
     const submitContext: SubmitTraceContext = {
       clientMessageId,
       deviceId: selectedDeviceIdRef.current,
@@ -4149,7 +4306,8 @@ export function useWebConsoleController() {
       targetSessionId,
       messageLength: message.length,
       attachmentCount: attachments.length,
-      hasCurrentSession: Boolean(currentSession),
+      hasCurrentSession: Boolean(realCurrentSession),
+      pendingCurrentSessionId,
       activeSubmitMode: activeSubmitMode ?? null
     });
 
@@ -4160,7 +4318,7 @@ export function useWebConsoleController() {
         sessionId: targetSessionId,
         clientMessageId,
         text: message,
-        ...(activeSubmitMode === "queue"
+        ...(activeSubmitMode === "queue" || pendingCurrentSessionId
           ? {
               status: "queued",
               includeThinking: true
@@ -4170,19 +4328,36 @@ export function useWebConsoleController() {
     );
     traceSubmitStep("console.submit.queued", submitContext, {
       targetSessionId,
-      hasCurrentSession: Boolean(currentSession)
+      hasCurrentSession: Boolean(realCurrentSession),
+      pendingCurrentSessionId
     });
     setDraft("");
     setAttachments([]);
     setError(null);
 
     try {
-      if (currentSession) {
-        if (isHistoryPreviewSessionId(currentSession.sessionId)) {
+      if (pendingCurrentSessionId) {
+        enqueuePendingSessionMessage(pendingCurrentSessionId, {
+          clientMessageId,
+          context: submitContext,
+          message
+        });
+        webDevTrace("console.submit.message.end", {
+          submitTraceId,
+          clientMessageId,
+          mode: "pending_session_queue",
+          pendingSessionId: pendingCurrentSessionId,
+          durationMs: traceDurationMs(submitStartedAt)
+        });
+        return;
+      }
+
+      if (realCurrentSession) {
+        if (isHistoryPreviewSessionId(realCurrentSession.sessionId)) {
           const historyEntry =
             selectedHistoryEntry ??
             codexHistory.find(
-              (entry) => historyPreviewSessionId(entry) === currentSession.sessionId
+              (entry) => historyPreviewSessionId(entry) === realCurrentSession.sessionId
             ) ??
             null;
           if (!historyEntry) {
@@ -4196,10 +4371,10 @@ export function useWebConsoleController() {
           webDevTrace("console.submit.message.resume_history", {
             submitTraceId,
             clientMessageId,
-            previewSessionId: currentSession.sessionId,
+            previewSessionId: realCurrentSession.sessionId,
             historyId: historyEntry.id
           });
-          await resumeHistorySessionForMessage(historyEntry, currentSession, message, clientMessageId);
+          await resumeHistorySessionForMessage(historyEntry, realCurrentSession, message, clientMessageId);
           webDevTrace("console.submit.message.end", {
             submitTraceId,
             clientMessageId,
@@ -4211,19 +4386,19 @@ export function useWebConsoleController() {
         webDevTrace("console.submit.message.send_existing", {
           submitTraceId,
           clientMessageId,
-          sessionId: currentSession.sessionId,
-          threadId: currentSession.threadId,
-          activeTurnId: currentSession.activeTurnId,
+          sessionId: realCurrentSession.sessionId,
+          threadId: realCurrentSession.threadId,
+          activeTurnId: realCurrentSession.activeTurnId,
           activeSubmitMode: activeSubmitMode ?? null
         });
         traceSubmitStep("console.submit.rpc_start", submitContext, {
           operation: "send_existing",
-          sessionId: currentSession.sessionId,
-          threadId: currentSession.threadId,
-          activeTurnId: currentSession.activeTurnId,
+          sessionId: realCurrentSession.sessionId,
+          threadId: realCurrentSession.threadId,
+          activeTurnId: realCurrentSession.activeTurnId,
           activeSubmitMode: activeSubmitMode ?? null
         });
-        const result = await sendSessionMessage(connection, currentSession.sessionId, {
+        const result = await sendSessionMessage(connection, realCurrentSession.sessionId, {
           text: message,
           clientMessageId,
           ...(activeSubmitMode ? { submitMode: activeSubmitMode } : {})
@@ -4231,24 +4406,24 @@ export function useWebConsoleController() {
         if (result.mode === "queued") {
           const queuedContext =
             updateSubmitTrace(clientMessageId, {
-              sessionId: currentSession.sessionId
+              sessionId: realCurrentSession.sessionId
             }) ?? submitContext;
           traceSubmitStep("console.submit.ack", queuedContext, {
             operation: "send_existing",
-            sessionId: currentSession.sessionId,
+            sessionId: realCurrentSession.sessionId,
             mode: result.mode,
             queuePosition: result.queuePosition
           });
           patchActiveWorkspace((workspace) =>
             markOptimisticMessageQueued(workspace, clientMessageId, {
-              sessionId: currentSession.sessionId,
-              ...(currentSession.threadId ? { threadId: currentSession.threadId } : {})
+              sessionId: realCurrentSession.sessionId,
+              ...(realCurrentSession.threadId ? { threadId: realCurrentSession.threadId } : {})
             })
           );
           webDevTrace("console.submit.message.end", {
             submitTraceId,
             clientMessageId,
-            sessionId: currentSession.sessionId,
+            sessionId: realCurrentSession.sessionId,
             mode: result.mode,
             queuePosition: result.queuePosition,
             durationMs: traceDurationMs(submitStartedAt)
@@ -4257,19 +4432,19 @@ export function useWebConsoleController() {
         }
         const sentContext =
           updateSubmitTrace(clientMessageId, {
-            sessionId: currentSession.sessionId,
+            sessionId: realCurrentSession.sessionId,
             turnId: result.turnId
           }) ?? submitContext;
         traceSubmitStep("console.submit.ack", sentContext, {
           operation: "send_existing",
-          sessionId: currentSession.sessionId,
+          sessionId: realCurrentSession.sessionId,
           turnId: result.turnId,
           mode: result.mode
         });
         patchActiveWorkspace((workspace) =>
           markOptimisticMessageSent(workspace, clientMessageId, {
-            sessionId: currentSession.sessionId,
-            ...(currentSession.threadId ? { threadId: currentSession.threadId } : {}),
+            sessionId: realCurrentSession.sessionId,
+            ...(realCurrentSession.threadId ? { threadId: realCurrentSession.threadId } : {}),
             turnId: result.turnId
           })
         );
@@ -4280,7 +4455,7 @@ export function useWebConsoleController() {
             connection,
             deviceId: selectedDeviceId,
             messageText: message,
-            sessionId: currentSession.sessionId,
+            sessionId: realCurrentSession.sessionId,
             submitTraceId,
             turnId: result.turnId
           });
@@ -4294,7 +4469,7 @@ export function useWebConsoleController() {
         webDevTrace("console.submit.message.end", {
           submitTraceId,
           clientMessageId,
-          sessionId: currentSession.sessionId,
+          sessionId: realCurrentSession.sessionId,
           turnId: result.turnId,
           mode: result.mode,
           durationMs: traceDurationMs(submitStartedAt)
@@ -4396,6 +4571,12 @@ export function useWebConsoleController() {
           operation: "create_session_with_message"
         });
       }
+      void drainPendingSessionMessageQueue({
+        connection,
+        pendingSessionIdValue: pendingSession.sessionId,
+        sessionId: result.session.sessionId,
+        threadId: result.session.threadId
+      });
       setActiveSheet(null);
       webDevTrace("console.submit.message.end", {
         submitTraceId,
@@ -4419,6 +4600,9 @@ export function useWebConsoleController() {
       patchActiveWorkspace((workspace) =>
         markOptimisticMessageFailed(workspace, clientMessageId, formatError(err))
       );
+      if (isPendingSessionId(targetSessionId)) {
+        failPendingSessionMessageQueue(targetSessionId, err);
+      }
       setError(formatConsoleError(err));
     }
   }
