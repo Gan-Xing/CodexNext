@@ -835,6 +835,15 @@ export function useWebConsoleController() {
     return Boolean(active && active.taskId === taskId && active.version === version);
   }
 
+  function isHistoryAutoCompletionSelectionCurrent(input: HistoryAutoCompletionInput): boolean {
+    const workspace = latestDeviceWorkspacesRef.current[input.deviceId];
+    return Boolean(
+      workspace &&
+        workspace.currentSessionId === input.sessionId &&
+        isSameAgentConnection(workspace.connection, input.connection)
+    );
+  }
+
   function cancelHistoryAutoCompletion(reason: string) {
     const active = historyAutoCompletionRef.current;
     if (!active) {
@@ -859,10 +868,16 @@ export function useWebConsoleController() {
     if (input.connection.mode === "relay" && !input.connection.sessionToken) {
       return;
     }
+    if (!isHistoryAutoCompletionSelectionCurrent(input)) {
+      return;
+    }
     const taskId = historyAutoCompletionTaskId(input.deviceId, input.sessionId);
     const active = historyAutoCompletionRef.current;
     if (active?.taskId === taskId) {
       return;
+    }
+    if (active) {
+      cancelHistoryAutoCompletion("superseded");
     }
     const version = historyAutoCompletionVersionRef.current + 1;
     historyAutoCompletionVersionRef.current = version;
@@ -906,7 +921,11 @@ export function useWebConsoleController() {
     );
 
     try {
-      while (cursor && isCurrentHistoryAutoCompletion(input.taskId, input.version)) {
+      while (
+        cursor &&
+        isCurrentHistoryAutoCompletion(input.taskId, input.version) &&
+        isHistoryAutoCompletionSelectionCurrent(input)
+      ) {
         if (pageCount >= HISTORY_AUTO_COMPLETE_MAX_PAGES) {
           webDevTrace("console.history.auto_complete.limit", {
             deviceId: input.deviceId,
@@ -925,6 +944,14 @@ export function useWebConsoleController() {
           cursor,
           limit: HISTORY_AUTO_COMPLETE_PAGE_LIMIT
         });
+        if (!isHistoryAutoCompletionSelectionCurrent(input)) {
+          webDevTrace("console.history.auto_complete.stale_selection", {
+            deviceId: input.deviceId,
+            sessionId: input.sessionId,
+            threadId: input.threadId
+          });
+          break;
+        }
         if (!isCurrentHistoryAutoCompletion(input.taskId, input.version)) {
           webDevTrace("console.history.auto_complete.stale_page", {
             deviceId: input.deviceId,

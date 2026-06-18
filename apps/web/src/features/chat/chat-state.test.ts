@@ -13,6 +13,7 @@ import {
   mergeLocalEvents,
   reassignSessionChatItems,
   restoreConversationCacheEntries,
+  selectConversationRenderSnapshot,
   selectSessionHistoryHydrated,
   selectTurnHasCompletionEvidence,
   setSessionHistoryPageState,
@@ -1020,6 +1021,56 @@ describe("chat state", () => {
       role: "command",
       text: "$ pnpm test\nok"
     });
+  });
+
+  it("keeps the chat render projection bounded for large normalized histories", () => {
+    const turns: CodexThreadTurn[] = Array.from({ length: 620 }, (_, index) => ({
+      id: `turn_${index}`,
+      items: [
+        {
+          id: `item_${index}`,
+          type: "agentMessage",
+          text: `reply ${index}`
+        }
+      ],
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: index,
+      completedAt: index,
+      durationMs: null
+    }));
+    let workspace = hydrateSessionFromTurns(
+      upsertSessionInWorkspace(makeWorkspace(), makeSession()),
+      "session_1",
+      turns
+    );
+
+    expect(selectConversationRenderSnapshot(workspace, { threadId: "thread_1" }).messageCount)
+      .toBe(500);
+    expect(selectConversationChatItems(workspace, { threadId: "thread_1" })).toHaveLength(500);
+    expect(selectConversationTurnGroups(workspace, { threadId: "thread_1" })).toHaveLength(500);
+
+    workspace = ingestEventsIntoWorkspace(
+      workspace,
+      [
+        makeEvent({
+          seq: 10_000,
+          type: "turn.completed",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_619"
+        })
+      ],
+      { selectSessions: false }
+    );
+
+    const chatItems = selectConversationChatItems(workspace, { threadId: "thread_1" });
+    expect(selectConversationRenderSnapshot(workspace, { threadId: "thread_1" }).messageCount)
+      .toBe(500);
+    expect(chatItems).toHaveLength(500);
+    expect(selectConversationTurnGroups(workspace, { threadId: "thread_1" })).toHaveLength(500);
+    expect(chatItems.at(-1)?.text).toBe("reply 619");
   });
 
   it("does not let stale history overwrite a live turn-store stream", () => {

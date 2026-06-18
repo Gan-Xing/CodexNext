@@ -165,6 +165,7 @@ const THINKING_TEXT = "正在思考";
 const CONVERSATION_CACHE_THREAD_LIMIT = 120;
 const CONVERSATION_CACHE_MESSAGE_LIMIT = 100;
 const CONVERSATION_CACHE_TURN_LIMIT = 80;
+const CONVERSATION_RENDER_ITEM_LIMIT = 500;
 const LOCAL_THREAD_ITEM_TYPE = {
   Thinking: "local.thinking",
   Error: "local.error"
@@ -280,7 +281,9 @@ export function selectConversationTurnGroups(
   if (!conversation) {
     return [];
   }
-  return projectConversationToTurnGroups(conversation);
+  return projectConversationToTurnGroups(conversation, {
+    itemLimit: CONVERSATION_RENDER_ITEM_LIMIT
+  });
 }
 
 export function selectConversationRenderSnapshot(
@@ -772,7 +775,7 @@ function updateConversationItems(
       ...workspace.conversations,
       [canonicalKey]: {
         ...conversation,
-        items: updater(conversation.items).slice(-500),
+        items: limitConversationItems(updater(conversation.items)),
         updatedAt: Date.now()
       }
     }
@@ -1089,9 +1092,13 @@ function mergeNormalizedItemText(
 
 function projectNormalizedTurnsToChatItems(
   collection: NormalizedTurnCollection,
-  input: { sessionId?: string | undefined; threadId?: string | null | undefined }
+  input: { sessionId?: string | undefined; threadId?: string | null | undefined },
+  options: { itemLimit?: number | undefined } = {}
 ): ChatItem[] {
-  return collection.turnOrder
+  const turnOrder = options.itemLimit
+    ? selectTurnOrderForRenderableItemLimit(collection, options.itemLimit)
+    : collection.turnOrder;
+  return turnOrder
     .map((turnId) => collection.turns[turnId])
     .filter((turn): turn is NormalizedConversationTurn => Boolean(turn))
     .flatMap((turn) =>
@@ -1105,12 +1112,47 @@ function projectNormalizedTurnsToChatItems(
 }
 
 function projectConversationToTurnGroups(
-  conversation: Pick<ConversationRecord, "turnOrder" | "turns">
+  conversation: Pick<ConversationRecord, "turnOrder" | "turns">,
+  options: { itemLimit?: number | undefined } = {}
 ): TurnGroup[] {
-  return conversation.turnOrder
+  const turnOrder = options.itemLimit
+    ? selectTurnOrderForRenderableItemLimit(conversation, options.itemLimit)
+    : conversation.turnOrder;
+  return turnOrder
     .map((turnId) => conversation.turns[turnId])
     .filter((turn): turn is NormalizedConversationTurn => Boolean(turn))
     .map((turn) => projectTurnToTurnGroup(turn));
+}
+
+function selectTurnOrderForRenderableItemLimit(
+  collection: Pick<NormalizedTurnCollection, "turnOrder" | "turns">,
+  limit: number
+): string[] {
+  const selected: string[] = [];
+  let itemCount = 0;
+  for (let index = collection.turnOrder.length - 1; index >= 0; index -= 1) {
+    const turnId = collection.turnOrder[index];
+    if (!turnId) {
+      continue;
+    }
+    const turn = collection.turns[turnId];
+    if (!turn) {
+      continue;
+    }
+    selected.push(turnId);
+    itemCount += countRenderableTurnItems(turn);
+    if (itemCount >= limit) {
+      break;
+    }
+  }
+  return selected.reverse();
+}
+
+function countRenderableTurnItems(turn: NormalizedConversationTurn): number {
+  return turn.itemOrder.reduce((total, itemId) => {
+    const item = turn.items[itemId];
+    return item && shouldProjectTurnItem(turn, item) ? total + 1 : total;
+  }, 0);
 }
 
 function projectTurnToTurnGroup(turn: NormalizedConversationTurn): TurnGroup {
@@ -1392,9 +1434,13 @@ function mergeConversationItems(existing: ChatItem[], incoming: ChatItem[]): Cha
       next.push(item);
     }
   }
-  return next
-    .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0))
-    .slice(-500);
+  return limitConversationItems(
+    next.sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0))
+  );
+}
+
+function limitConversationItems(items: ChatItem[]): ChatItem[] {
+  return items.slice(-CONVERSATION_RENDER_ITEM_LIMIT);
 }
 
 function shouldPersistChatItem(item: ChatItem): boolean {
@@ -1481,7 +1527,7 @@ function materializeWorkspace(workspace: DeviceWorkspace): DeviceWorkspace {
   );
   return {
     ...workspace,
-    chatItems: conversations.flatMap((conversation) => conversation.items).slice(-500)
+    chatItems: limitConversationItems(conversations.flatMap((conversation) => conversation.items))
   };
 }
 
@@ -2113,10 +2159,14 @@ export function hydrateSessionFromTurns(
     new Set(normalizedTurns.turnOrder)
   );
   const mergedConversation = next.conversations[canonicalKey] ?? emptyConversation(canonicalKey);
-  const projectedItems = projectNormalizedTurnsToChatItems(mergedConversation, {
-    sessionId,
-    threadId
-  });
+  const projectedItems = projectNormalizedTurnsToChatItems(
+    mergedConversation,
+    {
+      sessionId,
+      threadId
+    },
+    { itemLimit: CONVERSATION_RENDER_ITEM_LIMIT }
+  );
   const preservedSessionItems = conversationItems
     .filter((item) => item.sessionId === sessionId)
     .filter((item) =>
@@ -2127,7 +2177,7 @@ export function hydrateSessionFromTurns(
     [
       ...projectedItems,
       ...preservedSessionItems.slice(overlap)
-    ].slice(-500)
+    ]
   );
   return materializeWorkspace(next);
 }
@@ -2167,10 +2217,14 @@ export function prependSessionHistoryTurns(
     new Set(normalizedTurns.turnOrder)
   );
   const mergedConversation = next.conversations[canonicalKey] ?? emptyConversation(canonicalKey);
-  const projectedItems = projectNormalizedTurnsToChatItems(mergedConversation, {
-    sessionId,
-    threadId
-  });
+  const projectedItems = projectNormalizedTurnsToChatItems(
+    mergedConversation,
+    {
+      sessionId,
+      threadId
+    },
+    { itemLimit: CONVERSATION_RENDER_ITEM_LIMIT }
+  );
   const preservedSessionItems = sessionItems.filter((item) =>
     shouldPreserveAfterProjection(item, projectedItems, incomingHistoryItems, sessionItems)
   );
@@ -2179,7 +2233,7 @@ export function prependSessionHistoryTurns(
     [
       ...projectedItems,
       ...preservedSessionItems.slice(overlap)
-    ].slice(-500)
+    ]
   );
   return materializeWorkspace(next);
 }
@@ -2737,7 +2791,9 @@ function syncConversationProjection(
   if (!conversation) {
     return workspace;
   }
-  const projected = projectNormalizedTurnsToChatItems(conversation, input);
+  const projected = projectNormalizedTurnsToChatItems(conversation, input, {
+    itemLimit: CONVERSATION_RENDER_ITEM_LIMIT
+  });
   return updateConversationItems(workspace, canonicalKey, (items) => [
     ...projected,
     ...items.filter((item) => {
@@ -2958,10 +3014,14 @@ function markTurnItemsComplete(
           key,
           {
             ...updatedConversation,
-            items: projectNormalizedTurnsToChatItems(updatedConversation, {
-              sessionId: updatedConversation.sessionIds[0],
-              threadId: updatedConversation.threadId
-            })
+            items: projectNormalizedTurnsToChatItems(
+              updatedConversation,
+              {
+                sessionId: updatedConversation.sessionIds[0],
+                threadId: updatedConversation.threadId
+              },
+              { itemLimit: CONVERSATION_RENDER_ITEM_LIMIT }
+            )
           }
         ] as const;
       })
@@ -3050,10 +3110,14 @@ function removeHistoryConfirmedLiveTurns(
       ...workspace.conversations,
       [canonicalKey]: {
         ...nextConversation,
-        items: projectNormalizedTurnsToChatItems(nextConversation, {
-          sessionId: nextConversation.sessionIds[0],
-          threadId: nextConversation.threadId
-        })
+        items: projectNormalizedTurnsToChatItems(
+          nextConversation,
+          {
+            sessionId: nextConversation.sessionIds[0],
+            threadId: nextConversation.threadId
+          },
+          { itemLimit: CONVERSATION_RENDER_ITEM_LIMIT }
+        )
       }
     }
   });
