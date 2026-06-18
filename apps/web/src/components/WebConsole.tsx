@@ -112,9 +112,7 @@ function writeMobileScreenPreference(screen: MobileConsoleScreen): void {
 }
 
 export function WebConsole() {
-  const [mobileScreen, setMobileScreen] = useState<MobileConsoleScreen>(
-    () => readMobileScreenPreference() ?? "directory"
-  );
+  const [mobileScreen, setMobileScreen] = useState<MobileConsoleScreen>("directory");
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const [sidebarQuery, setSidebarQuery] = useState("");
@@ -293,6 +291,13 @@ export function WebConsole() {
   ]
     .filter(Boolean)
     .join(" ");
+
+  useEffect(() => {
+    const preference = readMobileScreenPreference();
+    if (preference) {
+      setMobileScreen(preference);
+    }
+  }, []);
 
   useEffect(() => {
     if (currentSession && restoredMobileSessionRef.current === null) {
