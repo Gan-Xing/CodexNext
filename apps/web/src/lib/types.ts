@@ -91,6 +91,7 @@ export type ChatItemRole =
 
 export type ChatItemStatus =
   | "pending"
+  | "queued"
   | "sending"
   | "sent"
   | "failed"

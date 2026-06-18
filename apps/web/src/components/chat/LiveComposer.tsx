@@ -64,6 +64,7 @@ export function LiveComposer(props: {
   onSelectPermission: (value: LocalPermissionMode) => void;
   onSelectReasoning: (value: LocalReasoningEffort) => void;
   onSubmit: () => void;
+  onSubmitGuide: () => void;
   onTogglePlanMode: () => void;
 }) {
   const footerRef = useRef<HTMLElement | null>(null);
@@ -76,6 +77,7 @@ export function LiveComposer(props: {
   const composerDisabled = Boolean(props.disabledReason);
   const hasDraft = props.draft.trim().length > 0;
   const showInterrupt = props.activeTurn && !hasDraft && !composerDisabled;
+  const showGuideSubmit = props.activeTurn && hasDraft && !composerDisabled && !props.goalMode;
   const showGoalPill = props.goalMode || props.hasGoal;
   const placeholder = props.disabledReason
     ? props.disabledReason
@@ -373,6 +375,17 @@ export function LiveComposer(props: {
             onClick={activateGoalMode}
           />
         ) : null}
+        {showGuideSubmit ? (
+          <button
+            className="cn-composer-pill cn-guide-submit-pill"
+            type="button"
+            title="把这条消息发送到当前正在回复的对话中"
+            onClick={props.onSubmitGuide}
+          >
+            <CodexIcon name="hand" />
+            引导对话
+          </button>
+        ) : null}
         <button
           ref={modelButtonRef}
           className="cn-composer-pill cn-composer-pill-model"
@@ -388,7 +401,7 @@ export function LiveComposer(props: {
           type="button"
           disabled={composerDisabled || (!hasDraft && !showInterrupt)}
           onClick={showInterrupt ? props.onInterrupt : props.onSubmit}
-          title={props.disabledReason ?? (showInterrupt ? "打断当前运行" : "发送")}
+          title={props.disabledReason ?? (showInterrupt ? "打断当前运行" : props.activeTurn ? "排队发送" : "发送")}
         >
           <CodexIcon name={showInterrupt ? "stop" : "arrowUp"} />
         </button>

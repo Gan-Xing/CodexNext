@@ -473,6 +473,7 @@ function sanitizeOutboxEntryForStorage(value: unknown): OutboxEntry | null {
 function isOutboxStatus(value: unknown): value is OutboxStatus {
   return (
     value === "pending" ||
+    value === "queued" ||
     value === "sent" ||
     value === "streaming" ||
     value === "complete" ||

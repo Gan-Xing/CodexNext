@@ -265,6 +265,42 @@ describe("chat state", () => {
     });
   });
 
+  it("keeps queued chat.user echoes in queued state", () => {
+    const workspace = addOptimisticUserMessage(makeWorkspace(), {
+      sessionId: "session_1",
+      clientMessageId: "msg_queued",
+      text: "second",
+      status: "queued"
+    });
+
+    const next = ingestEventsIntoWorkspace(
+      workspace,
+      [
+        makeEvent({
+          seq: 1,
+          type: "chat.user",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          payload: {
+            text: "second",
+            clientMessageId: "msg_queued",
+            mode: "queued"
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    const users = next.chatItems.filter((item) => item.role === "user");
+    expect(users).toHaveLength(1);
+    expect(users[0]).toMatchObject({
+      clientMessageId: "msg_queued",
+      status: "queued",
+      text: "second"
+    });
+    expect(next.chatItems.some((item) => item.meta?.kind === "queued")).toBe(true);
+  });
+
   it("does not re-apply the same chat.user event twice", () => {
     const event = makeEvent({
       seq: 1,

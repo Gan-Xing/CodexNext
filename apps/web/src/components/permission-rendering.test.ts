@@ -124,6 +124,7 @@ describe("rendered permission filtering", () => {
         onSelectPermission: noop,
         onSelectReasoning: noop,
         onSubmit: noop,
+        onSubmitGuide: noop,
         onTogglePlanMode: noop
       })
     );

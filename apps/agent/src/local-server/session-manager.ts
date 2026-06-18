@@ -90,6 +90,7 @@ interface LocalSession {
   threadId: string;
   currentTurnId?: string | undefined;
   activeTurnId?: string | undefined;
+  drainingQueue: boolean;
   status: LocalSessionStatus;
   cwd: string;
   title?: string | null;
@@ -105,6 +106,7 @@ interface LocalSession {
   client: ManagedCodexClient;
   removeNotificationListener: () => void;
   pendingUserInputs: PendingUserInputRecord[];
+  queuedMessages: QueuedMessageRecord[];
   userItemClientIds: Record<string, string>;
   nextUserInputOrder: number;
 }
@@ -116,6 +118,12 @@ interface PendingUserInputRecord {
   order: number;
   text: string;
   turnId?: string | undefined;
+}
+
+interface QueuedMessageRecord {
+  clientMessageId?: string | undefined;
+  createdAt: number;
+  text: string;
 }
 
 type PermissionInput = Pick<
@@ -486,8 +494,10 @@ export class SessionManager {
         createdAt: now,
         updatedAt: now,
         client,
+        drainingQueue: false,
         removeNotificationListener,
         pendingUserInputs: [],
+        queuedMessages: [],
         userItemClientIds: {},
         nextUserInputOrder: 0
       };
@@ -737,8 +747,10 @@ export class SessionManager {
         createdAt: now,
         updatedAt: now,
         client,
+        drainingQueue: false,
         removeNotificationListener,
         pendingUserInputs: [],
+        queuedMessages: [],
         userItemClientIds: {},
         nextUserInputOrder: 0
       };
@@ -790,7 +802,7 @@ export class SessionManager {
   public async sendMessage(
     sessionId: string,
     input: LocalSendMessageInput
-  ): Promise<{ mode: "turn-start" | "steer"; turnId: string }> {
+  ): Promise<{ mode: "turn-start" | "steer" | "queued"; turnId?: string; queuePosition?: number }> {
     const startedAt = Date.now();
     devTrace("session.message.begin", {
       sessionId,
@@ -800,6 +812,9 @@ export class SessionManager {
     try {
       const session = this.requireSession(sessionId);
       if (session.activeTurnId) {
+        if (input.submitMode === "queue") {
+          return this.queueMessage(session, input, startedAt);
+        }
         devTrace("session.message.route", {
           sessionId,
           threadId: session.threadId,
@@ -844,6 +859,87 @@ export class SessionManager {
     }
   }
 
+  private queueMessage(
+    session: LocalSession,
+    input: LocalSendMessageInput,
+    startedAt: number
+  ): { mode: "queued"; queuePosition: number } {
+    const queued: QueuedMessageRecord = {
+      clientMessageId: input.clientMessageId,
+      createdAt: Date.now(),
+      text: input.text
+    };
+    session.queuedMessages.push(queued);
+    const queuePosition = session.queuedMessages.length;
+    devTrace("session.message.route", {
+      sessionId: session.sessionId,
+      threadId: session.threadId,
+      activeTurnId: session.activeTurnId,
+      mode: "queued",
+      queuePosition,
+      clientMessageId: input.clientMessageId
+    });
+    this.emitChatUser(session, {
+      text: input.text,
+      mode: "queued",
+      ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {})
+    });
+    touch(session, "running");
+    this.emitSessionUpdated(session);
+    devTrace("session.message.end", {
+      sessionId: session.sessionId,
+      threadId: session.threadId,
+      mode: "queued",
+      queuePosition,
+      durationMs: durationMs(startedAt)
+    });
+    return { mode: "queued", queuePosition };
+  }
+
+  private drainQueuedMessages(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.drainingQueue || session.activeTurnId) {
+      return;
+    }
+    session.drainingQueue = true;
+    void (async () => {
+      try {
+        while (session.queuedMessages.length > 0 && !session.activeTurnId) {
+          const next = session.queuedMessages.shift()!;
+          devTrace("session.queue.drain_start", {
+            sessionId: session.sessionId,
+            threadId: session.threadId,
+            remaining: session.queuedMessages.length,
+            clientMessageId: next.clientMessageId
+          });
+          try {
+            const turnId = await this.startTurn(session.sessionId, {
+              text: next.text,
+              ...(next.clientMessageId ? { clientMessageId: next.clientMessageId } : {})
+            });
+            devTrace("session.queue.drain_started", {
+              sessionId: session.sessionId,
+              threadId: session.threadId,
+              turnId,
+              remaining: session.queuedMessages.length,
+              clientMessageId: next.clientMessageId
+            });
+          } catch (error) {
+            devTrace("session.queue.drain_error", {
+              sessionId: session.sessionId,
+              threadId: session.threadId,
+              clientMessageId: next.clientMessageId,
+              ...errorSummary(error)
+            });
+            break;
+          }
+        }
+      } finally {
+        session.drainingQueue = false;
+      }
+    })();
+  }
+
   public async startTurn(
     sessionId: string,
     input: LocalSendMessageInput
@@ -882,14 +978,6 @@ export class SessionManager {
       clientMessageId: input.clientMessageId
     });
 
-    this.emitChatUser(session, {
-      text: input.text,
-      mode: "turn-start",
-      ...(input.clientMessageId
-        ? { clientMessageId: input.clientMessageId }
-        : {})
-    });
-
     try {
       devTrace("session.turn.start.codex_request", {
         sessionId,
@@ -922,6 +1010,14 @@ export class SessionManager {
         ...payloadSummary(response)
       });
       bindUserInputTurn(session, input.clientMessageId, responseTurnId);
+      this.emitChatUser(session, {
+        text: input.text,
+        mode: "turn-start",
+        turnId: responseTurnId,
+        ...(input.clientMessageId
+          ? { clientMessageId: input.clientMessageId }
+          : {})
+      });
       if (!session.activeTurnId) {
         session.activeTurnId = responseTurnId;
         session.currentTurnId = responseTurnId;
@@ -1479,6 +1575,7 @@ export class SessionManager {
           payload: notification.params
         });
         this.emitSessionUpdated(session);
+        this.drainQueuedMessages(session.sessionId);
         return;
       }
       case CodexNotificationMethod.ItemStarted:
@@ -1777,7 +1874,7 @@ export class SessionManager {
     session: LocalSession,
     input: {
       text: string;
-      mode: "turn-start" | "steer";
+      mode: "turn-start" | "steer" | "queued";
       clientMessageId?: string;
       turnId?: string;
     }

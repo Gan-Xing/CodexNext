@@ -3753,6 +3753,10 @@ summary {
     max-width: 3.4rem;
   }
 
+  .cn-live-console .cn-guide-submit-pill {
+    max-width: 6.2rem;
+  }
+
   .cn-live-console .cn-send-button {
     flex: 0 0 38px;
     height: 38px;
@@ -5730,6 +5734,12 @@ summary {
 
 .cn-composer-pill:hover {
   background: var(--cn-soft-2);
+}
+
+.cn-guide-submit-pill {
+  border-color: color-mix(in srgb, var(--cn-ink) 18%, var(--cn-line));
+  color: var(--cn-ink);
+  font-weight: 620;
 }
 
 .cn-send-button {

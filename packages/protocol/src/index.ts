@@ -1456,22 +1456,34 @@ export const LocalResumeSessionSchema = z.object({
 
 export type LocalResumeSessionInput = z.infer<typeof LocalResumeSessionSchema>;
 
+export const LocalMessageSubmitModeSchema = z.enum(["queue", "steer"]);
+
+export type LocalMessageSubmitMode = z.infer<typeof LocalMessageSubmitModeSchema>;
+
 export const LocalSendMessageSchema = z.object({
   text: z.string().min(1),
-  clientMessageId: z.string().min(1).optional()
+  clientMessageId: z.string().min(1).optional(),
+  submitMode: LocalMessageSubmitModeSchema.optional()
 });
 
 export type LocalSendMessageInput = z.infer<typeof LocalSendMessageSchema>;
 
-export const LocalSendMessageResponseSchema = z.object({
-  mode: z.enum(["turn-start", "steer"]),
-  turnId: z.string().min(1)
-});
+export const LocalSendMessageResponseSchema = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("turn-start"),
+    turnId: z.string().min(1)
+  }),
+  z.object({
+    mode: z.literal("steer"),
+    turnId: z.string().min(1)
+  }),
+  z.object({
+    mode: z.literal("queued"),
+    queuePosition: z.number().int().positive()
+  })
+]);
 
-export interface LocalSendMessageResponse {
-  mode: "turn-start" | "steer";
-  turnId: string;
-}
+export type LocalSendMessageResponse = z.infer<typeof LocalSendMessageResponseSchema>;
 
 export const LocalInterruptResponseSchema = z.object({
   turnId: z.string().min(1)

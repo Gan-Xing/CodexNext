@@ -2,7 +2,7 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
-import type { LocalReasoningEffort, ThreadGoal } from "@codexnext/protocol";
+import type { LocalMessageSubmitMode, LocalReasoningEffort, ThreadGoal } from "@codexnext/protocol";
 import {
   agentFetch,
   archiveCodexHistory,
@@ -54,6 +54,7 @@ import {
   ingestEventsIntoWorkspace,
   markOptimisticMessageComplete,
   markOptimisticMessageFailed,
+  markOptimisticMessageQueued,
   markOptimisticMessageSent,
   reassignSessionChatItems,
   rememberSessionHistoryOrigin,
@@ -3623,6 +3624,9 @@ export function useWebConsoleController() {
         text: message,
         clientMessageId
       });
+      if (sent.mode === "queued") {
+        throw new Error("恢复会话后消息被排队，请稍后重试。");
+      }
       const sentContext =
         updateSubmitTrace(clientMessageId, {
           sessionId: result.session.sessionId,
@@ -3828,7 +3832,7 @@ export function useWebConsoleController() {
     }
   }
 
-  async function submitComposer() {
+  async function submitComposer(submitMode?: LocalMessageSubmitMode) {
     const submitStartedAt = Date.now();
     const submitTraceId = createClientId("submit");
     const text = draft.trim();
@@ -4127,6 +4131,8 @@ export function useWebConsoleController() {
     const message = buildMessageWithAttachments(text, attachments);
     const clientMessageId = createClientId("message");
     const targetSessionId = currentSession?.sessionId ?? pendingSessionId(clientMessageId);
+    const activeSubmitMode: LocalMessageSubmitMode | undefined =
+      currentSession?.activeTurnId ? (submitMode ?? "queue") : undefined;
     const submitContext: SubmitTraceContext = {
       clientMessageId,
       deviceId: selectedDeviceIdRef.current,
@@ -4143,7 +4149,8 @@ export function useWebConsoleController() {
       targetSessionId,
       messageLength: message.length,
       attachmentCount: attachments.length,
-      hasCurrentSession: Boolean(currentSession)
+      hasCurrentSession: Boolean(currentSession),
+      activeSubmitMode: activeSubmitMode ?? null
     });
 
     // The active turn belongs to the backend's current run; new user input stays local
@@ -4152,7 +4159,13 @@ export function useWebConsoleController() {
       addOptimisticUserMessage(workspace, {
         sessionId: targetSessionId,
         clientMessageId,
-        text: message
+        text: message,
+        ...(activeSubmitMode === "queue"
+          ? {
+              status: "queued",
+              includeThinking: true
+            }
+          : {})
       })
     );
     traceSubmitStep("console.submit.queued", submitContext, {
@@ -4200,18 +4213,48 @@ export function useWebConsoleController() {
           clientMessageId,
           sessionId: currentSession.sessionId,
           threadId: currentSession.threadId,
-          activeTurnId: currentSession.activeTurnId
+          activeTurnId: currentSession.activeTurnId,
+          activeSubmitMode: activeSubmitMode ?? null
         });
         traceSubmitStep("console.submit.rpc_start", submitContext, {
           operation: "send_existing",
           sessionId: currentSession.sessionId,
           threadId: currentSession.threadId,
-          activeTurnId: currentSession.activeTurnId
+          activeTurnId: currentSession.activeTurnId,
+          activeSubmitMode: activeSubmitMode ?? null
         });
         const result = await sendSessionMessage(connection, currentSession.sessionId, {
           text: message,
-          clientMessageId
+          clientMessageId,
+          ...(activeSubmitMode ? { submitMode: activeSubmitMode } : {})
         });
+        if (result.mode === "queued") {
+          const queuedContext =
+            updateSubmitTrace(clientMessageId, {
+              sessionId: currentSession.sessionId
+            }) ?? submitContext;
+          traceSubmitStep("console.submit.ack", queuedContext, {
+            operation: "send_existing",
+            sessionId: currentSession.sessionId,
+            mode: result.mode,
+            queuePosition: result.queuePosition
+          });
+          patchActiveWorkspace((workspace) =>
+            markOptimisticMessageQueued(workspace, clientMessageId, {
+              sessionId: currentSession.sessionId,
+              ...(currentSession.threadId ? { threadId: currentSession.threadId } : {})
+            })
+          );
+          webDevTrace("console.submit.message.end", {
+            submitTraceId,
+            clientMessageId,
+            sessionId: currentSession.sessionId,
+            mode: result.mode,
+            queuePosition: result.queuePosition,
+            durationMs: traceDurationMs(submitStartedAt)
+          });
+          return;
+        }
         const sentContext =
           updateSubmitTrace(clientMessageId, {
             sessionId: currentSession.sessionId,

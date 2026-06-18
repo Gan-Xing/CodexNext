@@ -343,6 +343,7 @@ function isChatItemRole(value: unknown): value is ChatItem["role"] {
 
 function isChatItemStatus(value: unknown): value is NonNullable<ChatItem["status"]> {
   return (
+    value === "queued" ||
     value === "sending" ||
     value === "sent" ||
     value === "streaming" ||

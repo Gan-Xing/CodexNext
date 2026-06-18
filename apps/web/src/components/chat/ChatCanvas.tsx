@@ -355,7 +355,9 @@ const ChatMessageRow = memo(function ChatMessageRow(props: {
         <div className="cn-message-user-shell">
           <div className="cn-message-user-bubble">
             <MarkdownMessage text={props.item.text} />
-            {props.item.status !== "sending" && props.item.status !== "pending" ? (
+            {props.item.status !== "sending" &&
+            props.item.status !== "pending" &&
+            props.item.status !== "queued" ? (
               <MessageCopyButton value={props.item.text} />
             ) : null}
           </div>
@@ -382,7 +384,7 @@ function optimisticFeedback(item: ChatRenderItem): {
   if (item.role !== "system") {
     return null;
   }
-  if (item.meta?.kind === "thinking") {
+  if (item.meta?.kind === "thinking" || item.meta?.kind === "queued") {
     return {
       text: item.text,
       tone: "thinking"

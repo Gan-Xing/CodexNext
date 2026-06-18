@@ -693,6 +693,7 @@ export function WebConsole() {
             onSelectPermission={setPermissionMode}
             onSelectReasoning={setReasoningEffort}
             onSubmit={() => void submitComposer()}
+            onSubmitGuide={() => void submitComposer("steer")}
             onTogglePlanMode={handleTogglePlanMode}
             disabledReason={composerDisabledReason}
           />

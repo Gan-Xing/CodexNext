@@ -287,6 +287,10 @@ describe("relay client contract helpers", () => {
       mode: "steer",
       turnId: "turn_1"
     });
+    expect(parseLocalSendMessageResponse({ mode: "queued", queuePosition: 1 })).toEqual({
+      mode: "queued",
+      queuePosition: 1
+    });
     expect(parseLocalInterruptResponse({ turnId: "turn_1" })).toEqual({
       turnId: "turn_1"
     });

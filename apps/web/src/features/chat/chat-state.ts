@@ -28,7 +28,7 @@ export type ResumeState = "history" | "resuming" | "failed" | "missing";
 export type WorkspaceSyncState = "idle" | "loading" | "ready" | "error";
 export type StateUpdater<T> = T | ((previous: T) => T);
 export type ConversationKey = string;
-export type OutboxStatus = "pending" | "sent" | "streaming" | "complete" | "failed";
+export type OutboxStatus = "pending" | "queued" | "sent" | "streaming" | "complete" | "failed";
 
 export interface ConversationRecord {
   items: ChatItem[];
@@ -76,7 +76,7 @@ export interface NormalizedConversationTurnItem {
   error?: string | undefined;
   id: string;
   kind: "user" | "assistant" | "process" | "metadata";
-  metaKind?: "thinking" | "error" | "legacy" | undefined;
+  metaKind?: "thinking" | "queued" | "error" | "legacy" | undefined;
   role: ChatItem["role"] | null;
   startedAtMs?: number | undefined;
   status?: unknown;
@@ -85,7 +85,7 @@ export interface NormalizedConversationTurnItem {
   updatedAt: number;
 }
 
-export type TurnGroupStatus = "pending" | "sent" | "streaming" | "complete" | "failed";
+export type TurnGroupStatus = "pending" | "queued" | "sent" | "streaming" | "complete" | "failed";
 export type TurnGroupItemKind = "user" | "process" | "answer" | "metadata";
 
 export interface TurnGroupItem {
@@ -162,6 +162,7 @@ export interface DeviceWorkspace {
 
 type LocalCodexHistoryEntryLike = LocalCodexHistoryDetailResponse["entry"];
 const THINKING_TEXT = "正在思考";
+const QUEUED_TEXT = "排队中";
 const CONVERSATION_CACHE_THREAD_LIMIT = 120;
 const CONVERSATION_CACHE_MESSAGE_LIMIT = 100;
 const CONVERSATION_CACHE_TURN_LIMIT = 80;
@@ -172,6 +173,7 @@ const LOCAL_THREAD_ITEM_TYPE = {
 } as const;
 const CHAT_ITEM_STATUSES = new Set<ChatItem["status"]>([
   "pending",
+  "queued",
   "sending",
   "sent",
   "failed",
@@ -401,7 +403,7 @@ export function restoreOutboxEntries(
         localUserTurnItem({
           clientMessageId: entry.clientMessageId,
           text: entry.text,
-          status: entry.status === "pending" ? "pending" : entry.status,
+          status: entry.status,
           ...(entry.error ? { error: entry.error } : {}),
           createdAt: entry.createdAt
         }),
@@ -411,10 +413,15 @@ export function restoreOutboxEntries(
               text: entry.error ?? "消息发送失败",
               createdAt: entry.createdAt
             })
-          : localThinkingTurnItem({
-              clientMessageId: entry.clientMessageId,
-              createdAt: entry.createdAt
-            })
+          : entry.status === "queued"
+            ? localQueuedTurnItem({
+                clientMessageId: entry.clientMessageId,
+                createdAt: entry.createdAt
+              })
+            : localThinkingTurnItem({
+                clientMessageId: entry.clientMessageId,
+                createdAt: entry.createdAt
+              })
       ],
       turnStatus: entry.status === "failed" ? "failed" : "inProgress"
     });
@@ -1225,6 +1232,9 @@ function turnGroupStatus(
   if (items.some((item) => item.status === "streaming")) {
     return "streaming";
   }
+  if (items.some((item) => item.status === "queued")) {
+    return "queued";
+  }
   if (items.some((item) => item.status === "sent")) {
     return "sent";
   }
@@ -1268,7 +1278,7 @@ function shouldProjectTurnItem(
   turn: NormalizedConversationTurn,
   item: NormalizedConversationTurnItem
 ): boolean {
-  if (item.metaKind !== "thinking") {
+  if (item.metaKind !== "thinking" && item.metaKind !== "queued") {
     return true;
   }
   return !turnHasRenderableResponse(turn);
@@ -1447,11 +1457,11 @@ function shouldPersistChatItem(item: ChatItem): boolean {
   if (item.text.trim().length === 0) {
     return false;
   }
-  if (item.status === "pending" || item.status === "failed") {
+  if (item.status === "pending" || item.status === "queued" || item.status === "failed") {
     return false;
   }
   const metaKind = typeof item.meta?.kind === "string" ? item.meta.kind : null;
-  if (metaKind === "thinking" || metaKind === "error") {
+  if (metaKind === "thinking" || metaKind === "queued" || metaKind === "error") {
     return false;
   }
   return true;
@@ -1477,14 +1487,14 @@ function toPersistableTurn(
 }
 
 function shouldPersistTurnItem(item: NormalizedConversationTurnItem | undefined): boolean {
-  if (!item || item.metaKind === "thinking" || item.metaKind === "error") {
+  if (!item || item.metaKind === "thinking" || item.metaKind === "queued" || item.metaKind === "error") {
     return false;
   }
   const status = normalizeChatStatus(item.status);
   if (status === "failed" && item.clientMessageId) {
     return false;
   }
-  return status !== "pending" && status !== "sending" && status !== "streaming";
+  return status !== "pending" && status !== "queued" && status !== "sending" && status !== "streaming";
 }
 
 function buildConversationStatusSignature(conversation: ConversationRecord): string {
@@ -1649,6 +1659,24 @@ function localThinkingTurnItem(input: {
     clientMessageId: input.clientMessageId,
     metaKind: "thinking",
     status: "streaming",
+    createdAt: input.createdAt,
+    updatedAt: Date.now()
+  };
+}
+
+function localQueuedTurnItem(input: {
+  clientMessageId: string;
+  createdAt: number;
+}): NormalizedConversationTurnItem {
+  return {
+    id: `local-queued:${input.clientMessageId}`,
+    type: LOCAL_THREAD_ITEM_TYPE.Thinking,
+    kind: "metadata",
+    role: "system",
+    text: QUEUED_TEXT,
+    clientMessageId: input.clientMessageId,
+    metaKind: "queued",
+    status: "queued",
     createdAt: input.createdAt,
     updatedAt: Date.now()
   };
@@ -1819,7 +1847,9 @@ function readTurnItemText(
 
 export interface OptimisticUserMessageInput {
   clientMessageId: string;
+  includeThinking?: boolean;
   sessionId: string;
+  status?: OutboxStatus;
   text: string;
   turnId?: string;
 }
@@ -1844,11 +1874,13 @@ export function addOptimisticUserMessage(
     conversationKey: canonicalConversationKey(next, key),
     createdAt,
     sessionId: input.sessionId,
-    status: "pending",
+    status: input.status ?? "pending",
     text: input.text,
     ...(input.turnId ? { turnId: input.turnId } : {}),
     updatedAt: createdAt
   });
+  const status = input.status ?? "pending";
+  const includeThinking = input.includeThinking ?? true;
   return upsertLocalTurnItems(next, {
     key,
     sessionId: input.sessionId,
@@ -1857,13 +1889,22 @@ export function addOptimisticUserMessage(
       localUserTurnItem({
         clientMessageId: input.clientMessageId,
         text: input.text,
-        status: "pending",
+        status,
         createdAt
       }),
-      localThinkingTurnItem({
-        clientMessageId: input.clientMessageId,
-        createdAt
-      })
+      ...(includeThinking
+        ? [
+            status === "queued"
+              ? localQueuedTurnItem({
+                  clientMessageId: input.clientMessageId,
+                  createdAt
+                })
+              : localThinkingTurnItem({
+                  clientMessageId: input.clientMessageId,
+                  createdAt
+                })
+          ]
+        : [])
     ],
     turnStatus: "inProgress"
   });
@@ -1940,6 +1981,73 @@ export function markOptimisticMessageSent(
     ...(input?.threadId ? { threadId: input.threadId } : {}),
     ...(input?.turnId ? { turnId: input.turnId } : {}),
     status: entry.status === "complete" ? "complete" : "sent",
+    updatedAt: Date.now()
+  }));
+  return materializeWorkspace(next);
+}
+
+export function markOptimisticMessageQueued(
+  workspace: DeviceWorkspace,
+  clientMessageId: string,
+  input?: {
+    eventId?: string;
+    sessionId?: string;
+    threadId?: string;
+  }
+): DeviceWorkspace {
+  const outboxEntry = workspace.outbox[clientMessageId];
+  const key =
+    outboxEntry?.conversationKey ??
+    findConversationKey(workspace, {
+      pendingClientId: clientMessageId,
+      sessionId: input?.sessionId,
+      threadId: input?.threadId
+    }) ??
+    conversationKeyFor({
+      pendingClientId: clientMessageId,
+      sessionId: input?.sessionId,
+      threadId: input?.threadId
+    });
+  let next = ensureConversation(workspace, {
+    conversationKey: key,
+    pendingClientId: clientMessageId,
+    sessionId: input?.sessionId,
+    threadId: input?.threadId
+  });
+  const finalKey = canonicalConversationKey(next, input?.threadId ?? input?.sessionId ?? key);
+  const turnId = outboxEntry?.turnId ?? pendingTurnIdForClientMessage(clientMessageId);
+  const conversation = next.conversations[canonicalConversationKey(next, finalKey)];
+  const existingUser = findTurnItemByClientMessageId(
+    conversation?.turns[turnId],
+    clientMessageId,
+    "user"
+  );
+  next = upsertLocalTurnItems(next, {
+    key: finalKey,
+    sessionId: input?.sessionId ?? outboxEntry?.sessionId,
+    threadId: input?.threadId ?? outboxEntry?.threadId,
+    turnId,
+    items: [
+      localUserTurnItem({
+        id: input?.eventId ?? existingUser?.id,
+        clientMessageId,
+        text: existingUser?.text ?? outboxEntry?.text ?? "",
+        status: "queued",
+        createdAt: existingUser?.createdAt ?? outboxEntry?.createdAt ?? Date.now()
+      }),
+      localQueuedTurnItem({
+        clientMessageId,
+        createdAt: outboxEntry?.createdAt ?? Date.now()
+      })
+    ],
+    turnStatus: "inProgress"
+  });
+  next = updateOutboxEntry(next, clientMessageId, (entry) => ({
+    ...entry,
+    conversationKey: finalKey,
+    ...(input?.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input?.threadId ? { threadId: input.threadId } : {}),
+    status: "queued",
     updatedAt: Date.now()
   }));
   return materializeWorkspace(next);
@@ -2404,8 +2512,16 @@ function applyServerChatUser(
 ): DeviceWorkspace {
   const text = readText(event.payload);
   const clientMessageId = readClientMessageId(event.payload);
+  const mode = readPayloadMode(event.payload);
   if (clientMessageId) {
     if (workspace.outbox[clientMessageId]) {
+      if (mode === "queued") {
+        return markOptimisticMessageQueued(workspace, clientMessageId, {
+          eventId: event.id,
+          ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+          ...(event.threadId ? { threadId: event.threadId } : {})
+        });
+      }
       return markOptimisticMessageSent(workspace, clientMessageId, {
         eventId: event.id,
         ...(event.sessionId ? { sessionId: event.sessionId } : {}),
@@ -2421,7 +2537,7 @@ function applyServerChatUser(
     role: "user",
     text,
     ...(clientMessageId ? { clientMessageId } : {}),
-    status: "sent",
+    status: mode === "queued" ? "queued" : "sent",
     latestSeq: event.seq
   });
 }
@@ -2983,7 +3099,7 @@ function markTurnItemsComplete(
             (turn.startedAt ? Math.max(0, now - timestampSecondsToMs(turn.startedAt)!) : null),
           items: Object.fromEntries(
             Object.entries(turn.items)
-              .filter(([, item]) => item.metaKind !== "thinking")
+              .filter(([, item]) => item.metaKind !== "thinking" && item.metaKind !== "queued")
               .map(([itemId, item]) => [
                 itemId,
                 {
@@ -2999,7 +3115,10 @@ function markTurnItemsComplete(
               ])
           ),
           itemOrder: turn.itemOrder.filter(
-            (itemId) => turn.items[itemId]?.metaKind !== "thinking"
+            (itemId) => {
+              const item = turn.items[itemId];
+              return item?.metaKind !== "thinking" && item?.metaKind !== "queued";
+            }
           )
         };
         const updatedConversation: ConversationRecord = {
@@ -3132,7 +3251,7 @@ function isHistoryReplaceableTurn(
     turn.latestSeq !== null ||
     turn.itemOrder.some((itemId) => {
       const item = turn.items[itemId];
-      return Boolean(item?.clientMessageId || item?.metaKind === "thinking");
+      return Boolean(item?.clientMessageId || item?.metaKind === "thinking" || item?.metaKind === "queued");
     })
   );
 }
@@ -3405,6 +3524,13 @@ function readClientMessageId(payload: unknown): string | null {
     return null;
   }
   return payload.clientMessageId;
+}
+
+function readPayloadMode(payload: unknown): string | null {
+  if (!isRecord(payload) || typeof payload.mode !== "string") {
+    return null;
+  }
+  return payload.mode;
 }
 
 function readResumedFrom(payload: unknown): string | null {

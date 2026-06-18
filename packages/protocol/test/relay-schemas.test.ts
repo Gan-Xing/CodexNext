@@ -972,6 +972,19 @@ describe("relay protocol schemas", () => {
         turnId: "turn_1"
       })
     ).toEqual({ mode: "steer", turnId: "turn_1" });
+    expect(LocalSendMessageSchema.parse({
+      text: "queue this",
+      submitMode: "queue"
+    })).toEqual({
+      text: "queue this",
+      submitMode: "queue"
+    });
+    expect(
+      LocalSendMessageResponseSchema.parse({
+        mode: "queued",
+        queuePosition: 1
+      })
+    ).toEqual({ mode: "queued", queuePosition: 1 });
     expect(LocalInterruptResponseSchema.parse({ turnId: "turn_1" })).toEqual({
       turnId: "turn_1"
     });

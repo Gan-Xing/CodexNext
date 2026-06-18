@@ -169,6 +169,74 @@ describe("SessionManager messages", () => {
     expect(fake.turnSteerCalls).toBe(1);
   });
 
+  it("queues active-turn messages and starts them after completion", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    const session = await manager.startSession({
+      cwd: process.cwd(),
+      permissionMode: "request-approval"
+    });
+    const first = await manager.sendMessage(session.sessionId, { text: "first" });
+    const queued = await manager.sendMessage(session.sessionId, {
+      text: "second",
+      clientMessageId: "msg_queued",
+      submitMode: "queue"
+    });
+
+    expect(first.mode).toBe("turn-start");
+    expect(queued).toEqual({ mode: "queued", queuePosition: 1 });
+    expect(fake.turnStartCalls).toBe(1);
+    expect(fake.turnSteerCalls).toBe(0);
+    expect(
+      store
+        .all()
+        .some(
+          (event) =>
+            event.type === LocalEventType.ChatUser &&
+            eventPayload(event).mode === "queued" &&
+            eventPayload(event).clientMessageId === "msg_queued"
+        )
+    ).toBe(true);
+
+    fake.emit("notification", {
+      method: CodexNotificationMethod.TurnCompleted,
+      params: {
+        threadId: "thread_1",
+        turn: {
+          id: "turn_1",
+          itemsView: "full",
+          status: "completed",
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 1_000,
+          items: []
+        }
+      }
+    } satisfies AppServerNotification);
+
+    await vi.waitFor(() => expect(fake.turnStartCalls).toBe(2));
+    expect(fake.turnSteerCalls).toBe(0);
+    expect(
+      store
+        .all()
+        .filter(
+          (event) =>
+            event.type === LocalEventType.ChatUser &&
+            eventPayload(event).mode === "turn-start" &&
+            eventPayload(event).clientMessageId === "msg_queued"
+        )
+    ).toHaveLength(1);
+  });
+
   it("accepts clientMessageId in the local send schema", () => {
     const parsed = LocalSendMessageSchema.parse({
       text: "hello",

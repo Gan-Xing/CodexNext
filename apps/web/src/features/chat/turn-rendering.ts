@@ -10,6 +10,7 @@ export type ChatRenderItemRole =
 
 export type ChatRenderItemStatus =
   | "pending"
+  | "queued"
   | "sending"
   | "sent"
   | "failed"
@@ -27,7 +28,7 @@ export interface ChatRenderItem {
     appServerItemId?: string | undefined;
     appServerItemType?: string | undefined;
     clientMessageId?: string | undefined;
-    kind?: "thinking" | "error" | "legacy" | undefined;
+    kind?: "thinking" | "queued" | "error" | "legacy" | undefined;
     payload?: unknown;
     source?: "turn-store" | "legacy" | undefined;
     turnStatus?: string | undefined;
