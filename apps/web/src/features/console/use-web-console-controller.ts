@@ -55,7 +55,6 @@ import {
   markOptimisticMessageComplete,
   markOptimisticMessageFailed,
   markOptimisticMessageSent,
-  prependSessionHistoryTurns,
   reassignSessionChatItems,
   rememberSessionHistoryOrigin,
   restoreConversationCacheEntries,
@@ -844,6 +843,69 @@ export function useWebConsoleController() {
     );
   }
 
+  function mergeHistoryItemsById<T extends { id: string }>(items: T[]): T[] {
+    const seen = new Set<string>();
+    const merged: T[] = [];
+    for (const item of items) {
+      if (seen.has(item.id)) {
+        continue;
+      }
+      seen.add(item.id);
+      merged.push(item);
+    }
+    return merged;
+  }
+
+  function prependHistoryPageCache(
+    sourceKey: string,
+    page: LocalCodexHistoryPageResponse
+  ): LocalCodexHistoryPageResponse {
+    const existing = historyPageCacheRef.current.get(sourceKey)?.page ?? null;
+    const merged: LocalCodexHistoryPageResponse = existing
+      ? {
+          entry: page.entry,
+          messages: mergeHistoryItemsById([...page.messages, ...existing.messages]),
+          turns: mergeHistoryItemsById([...page.turns, ...existing.turns]),
+          nextCursor: page.nextCursor,
+          backwardsCursor: existing.backwardsCursor ?? page.backwardsCursor
+        }
+      : page;
+    historyPageCacheRef.current.set(sourceKey, {
+      fetchedAt: Date.now(),
+      page: merged
+    });
+    return merged;
+  }
+
+  function writeFreshHistoryPageCache(
+    sourceKey: string,
+    page: LocalCodexHistoryPageResponse
+  ): LocalCodexHistoryPageResponse {
+    const existing = historyPageCacheRef.current.get(sourceKey)?.page ?? null;
+    const freshMessageIds = new Set(page.messages.map((item) => item.id));
+    const freshTurnIds = new Set(page.turns.map((item) => item.id));
+    const merged: LocalCodexHistoryPageResponse = existing
+      ? {
+          entry: page.entry,
+          messages: [
+            ...existing.messages.filter((item) => !freshMessageIds.has(item.id)),
+            ...page.messages
+          ],
+          turns: [
+            ...existing.turns.filter((item) => !freshTurnIds.has(item.id)),
+            ...page.turns
+          ],
+          nextCursor: existing.nextCursor,
+          backwardsCursor: page.backwardsCursor ?? existing.backwardsCursor
+        }
+      : page;
+    historyPageCacheRef.current.set(sourceKey, {
+      fetchedAt: Date.now(),
+      page: merged
+    });
+    return merged;
+  }
+
   function cancelHistoryAutoCompletion(reason: string) {
     const active = historyAutoCompletionRef.current;
     if (!active) {
@@ -862,7 +924,9 @@ export function useWebConsoleController() {
   }
 
   function startHistoryAutoCompletion(input: HistoryAutoCompletionInput) {
-    if (!input.cursor) {
+    const cachedRecord = historyPageCacheRef.current.get(input.sourceKey) ?? null;
+    const cachedCursor = cachedRecord ? cachedRecord.page.nextCursor : input.cursor;
+    if (!cachedCursor) {
       return;
     }
     if (input.connection.mode === "relay" && !input.connection.sessionToken) {
@@ -882,7 +946,7 @@ export function useWebConsoleController() {
     const version = historyAutoCompletionVersionRef.current + 1;
     historyAutoCompletionVersionRef.current = version;
     historyAutoCompletionRef.current = {
-      cursor: input.cursor,
+      cursor: cachedCursor,
       taskId,
       version
     };
@@ -890,6 +954,7 @@ export function useWebConsoleController() {
     historyPrefetchQueueRef.current = [];
     void runHistoryAutoCompletion({
       ...input,
+      cursor: cachedCursor,
       taskId,
       version
     });
@@ -899,7 +964,6 @@ export function useWebConsoleController() {
     input: HistoryAutoCompletionInput & { taskId: string; version: number }
   ) {
     let cursor: string | null = input.cursor;
-    let latestSourceKey = input.sourceKey;
     let pageCount = 0;
     let turnCount = 0;
     let failedCursor: string | null = null;
@@ -911,14 +975,6 @@ export function useWebConsoleController() {
       cwd: input.cwd,
       cursorPresent: Boolean(cursor)
     });
-    patchDeviceWorkspace(input.deviceId, (workspace) =>
-      setSessionHistoryPageState(workspace, input.sessionId, {
-        autoCompleteFailedCursor: null,
-        loadingOlder: true,
-        olderCursor: cursor,
-        sourceKey: latestSourceKey
-      })
-    );
 
     try {
       while (
@@ -963,29 +1019,14 @@ export function useWebConsoleController() {
 
         pageCount += 1;
         turnCount += page.turns.length;
-        latestSourceKey = codexHistoryKey(page.entry);
-        cursor = page.nextCursor;
-        patchDeviceWorkspace(input.deviceId, (workspace) => {
-          if (
-            workspace.currentSessionId !== input.sessionId ||
-            !isSameAgentConnection(workspace.connection, input.connection)
-          ) {
-            return workspace;
-          }
-          let next = rememberSessionHistoryOrigin(workspace, input.sessionId, page.entry.id);
-          next = prependSessionHistoryTurns(next, input.sessionId, page.turns);
-          return setSessionHistoryPageState(next, input.sessionId, {
-            autoCompleteFailedCursor: null,
-            loadingOlder: Boolean(page.nextCursor),
-            olderCursor: page.nextCursor,
-            sourceKey: latestSourceKey
-          });
-        });
+        const cachedPage = prependHistoryPageCache(input.sourceKey, page);
+        cursor = cachedPage.nextCursor;
         webDevTrace("console.history.auto_complete.page", {
           deviceId: input.deviceId,
           sessionId: input.sessionId,
           threadId: input.threadId,
           pageCount,
+          cachedTurnCount: cachedPage.turns.length,
           pageTurnCount: page.turns.length,
           hasNextCursor: Boolean(page.nextCursor)
         });
@@ -1009,18 +1050,11 @@ export function useWebConsoleController() {
         if (activeHistoryLoadKeyRef.current === `auto:${input.sourceKey}`) {
           activeHistoryLoadKeyRef.current = null;
         }
-        patchDeviceWorkspace(input.deviceId, (workspace) =>
-          setSessionHistoryPageState(workspace, input.sessionId, {
-            autoCompleteFailedCursor: failedCursor ?? (stoppedByLimit ? cursor : null),
-            loadingOlder: false,
-            olderCursor: cursor,
-            sourceKey: latestSourceKey
-          })
-        );
         webDevTrace("console.history.auto_complete.end", {
           deviceId: input.deviceId,
           sessionId: input.sessionId,
           threadId: input.threadId,
+          failedCursor: failedCursor ?? (stoppedByLimit ? cursor : null),
           pageCount,
           turnCount,
           complete: cursor === null
@@ -1202,10 +1236,7 @@ export function useWebConsoleController() {
             id: historyThreadId,
             cwd: entry?.cwd ?? session.cwd
           }));
-        historyPageCacheRef.current.set(cacheKey, {
-          fetchedAt: Date.now(),
-          page
-        });
+        writeFreshHistoryPageCache(cacheKey, page);
         patchDeviceWorkspace(deviceId, (currentWorkspace) => {
           const hasHistory = selectSessionHistoryHydrated(currentWorkspace, sessionId);
           if (hasHistory) {
@@ -2975,10 +3006,7 @@ export function useWebConsoleController() {
         cwd: entry.cwd,
         limit: 40
       });
-      historyPageCacheRef.current.set(key, {
-        fetchedAt: Date.now(),
-        page
-      });
+      writeFreshHistoryPageCache(key, page);
       webDevTrace("console.history.fetch.end", {
         historyKey: key,
         threadId: entry.id,
@@ -3137,10 +3165,7 @@ export function useWebConsoleController() {
       limit: 40
     })
       .then((page) => {
-        historyPageCacheRef.current.set(key, {
-          fetchedAt: Date.now(),
-          page
-        });
+        writeFreshHistoryPageCache(key, page);
         webDevTrace("console.history.prefetch.end", {
           historyKey: key,
           threadId: entry.id,
@@ -3395,10 +3420,7 @@ export function useWebConsoleController() {
           shouldStopReconciliation: historyDecision.shouldStopReconciliation
         });
         shouldStopReconciliation = historyDecision.shouldStopReconciliation;
-        historyPageCacheRef.current.set(pageKey, {
-          fetchedAt: Date.now(),
-          page
-        });
+        writeFreshHistoryPageCache(pageKey, page);
         patchDeviceWorkspace(request.deviceId, (currentWorkspace) => {
           let next = upsertSessionInWorkspace(currentWorkspace, targetSession);
           next = rememberSessionHistoryOrigin(next, targetSession.sessionId, page.entry.id);
@@ -3554,10 +3576,7 @@ export function useWebConsoleController() {
           threadId: result.session.threadId
         });
       }
-      historyPageCacheRef.current.set(codexHistoryKey(result.history.entry), {
-        fetchedAt: Date.now(),
-        page: result.history
-      });
+      writeFreshHistoryPageCache(codexHistoryKey(result.history.entry), result.history);
       patchActiveWorkspace((workspace) => {
         let next = upsertSessionInWorkspace(workspace, result.session);
         next = rememberSessionHistoryOrigin(
@@ -3723,10 +3742,7 @@ export function useWebConsoleController() {
           threadId: result.session.threadId
         });
       }
-      historyPageCacheRef.current.set(codexHistoryKey(result.history.entry), {
-        fetchedAt: Date.now(),
-        page: result.history
-      });
+      writeFreshHistoryPageCache(codexHistoryKey(result.history.entry), result.history);
       patchActiveWorkspace((workspace) => {
         let next = upsertSessionInWorkspace(workspace, result.session);
         next = rememberSessionHistoryOrigin(
