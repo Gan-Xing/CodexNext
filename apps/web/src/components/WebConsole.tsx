@@ -82,17 +82,45 @@ function summarizeSidebarIssue(message: string): string {
 
 type MobileConsoleScreen = "directory" | "chat";
 
+const mobileScreenStorageKey = "codexnext.mobileScreen.v1";
+
 function isMobileConsoleViewport(): boolean {
   return typeof window !== "undefined" && window.matchMedia("(max-width: 900px)").matches;
 }
 
+function readMobileScreenPreference(): MobileConsoleScreen | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const value = window.sessionStorage.getItem(mobileScreenStorageKey);
+    return value === "chat" || value === "directory" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeMobileScreenPreference(screen: MobileConsoleScreen): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.sessionStorage.setItem(mobileScreenStorageKey, screen);
+  } catch {
+    // Session storage is a best-effort guard for dev remounts.
+  }
+}
+
 export function WebConsole() {
-  const [mobileScreen, setMobileScreen] = useState<MobileConsoleScreen>("directory");
+  const [mobileScreen, setMobileScreen] = useState<MobileConsoleScreen>(
+    () => readMobileScreenPreference() ?? "directory"
+  );
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const [sidebarQuery, setSidebarQuery] = useState("");
   const sidebarSearchInputRef = useRef<HTMLInputElement | null>(null);
   const restoredMobileSessionRef = useRef<string | null>(null);
+  const mobileScreenTouchedRef = useRef(false);
   const {
     activeMenu,
     activeSheet,
@@ -269,21 +297,31 @@ export function WebConsole() {
   useEffect(() => {
     if (currentSession && restoredMobileSessionRef.current === null) {
       restoredMobileSessionRef.current = currentSession.sessionId;
-      setMobileScreen("chat");
+      if (!mobileScreenTouchedRef.current && readMobileScreenPreference() === "chat") {
+        setMobileScreen("chat");
+      }
     }
   }, [currentSession?.sessionId]);
 
   function showMobileChat() {
+    mobileScreenTouchedRef.current = true;
+    writeMobileScreenPreference("chat");
     setMobileScreen("chat");
     if (isMobileConsoleViewport()) {
+      setMobileSearchOpen(false);
+      setSidebarQuery("");
       setSidebarCollapsed(true);
     }
   }
 
   function showMobileDirectory() {
+    mobileScreenTouchedRef.current = true;
+    writeMobileScreenPreference("directory");
     clearThreadHoverPreview();
     setMobileScreen("directory");
     if (isMobileConsoleViewport()) {
+      setMobileSearchOpen(false);
+      setSidebarQuery("");
       setSidebarCollapsed(false);
     }
   }

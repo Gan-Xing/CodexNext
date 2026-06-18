@@ -208,8 +208,17 @@ export function ProjectThreadGroup(props: {
       }
       setProjectMenuOpen(false);
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setProjectMenuOpen(false);
+      }
+    };
     window.addEventListener("pointerdown", handlePointerDown);
-    return () => window.removeEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, [projectMenuOpen]);
 
   return (

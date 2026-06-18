@@ -2423,6 +2423,7 @@ export function useWebConsoleController() {
     const directoryPathHint = restoredWorkspace
       ? resolvePreferredWorkspaceCwd(restoredWorkspace) || undefined
       : undefined;
+    const replayAfter = restoredWorkspace?.events.at(-1)?.seq ?? 0;
 
     startTransition(() => {
       patchDeviceWorkspace(device.id, (workspace) => ({
@@ -2437,7 +2438,7 @@ export function useWebConsoleController() {
       }));
     });
 
-    const replayPromise = replayEvents(deviceConnection, 0).then((replay) => {
+    const replayPromise = replayEvents(deviceConnection, replayAfter).then((replay) => {
       if (!isCurrentDeviceHydration(device.id, hydrationVersion)) {
         return replay;
       }
@@ -2464,7 +2465,7 @@ export function useWebConsoleController() {
           return next;
         });
       });
-      openDeviceStream(device.id, deviceConnection, replay.events.at(-1)?.seq ?? 0, status);
+      openDeviceStream(device.id, deviceConnection, replay.events.at(-1)?.seq ?? replayAfter, status);
       return replay;
     });
 
