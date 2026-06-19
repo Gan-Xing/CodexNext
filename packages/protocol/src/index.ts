@@ -1369,6 +1369,7 @@ export interface LocalSessionSummary {
   threadId?: string;
   currentTurnId?: string;
   activeTurnId?: string;
+  queuedMessages: LocalQueuedMessage[];
   status: LocalSessionStatus;
   cwd: string;
   title?: string | null;
@@ -1383,11 +1384,28 @@ export interface LocalSessionSummary {
   updatedAt: number;
 }
 
+export interface LocalQueuedMessage {
+  clientMessageId: string;
+  createdAt: number;
+  order: number;
+  text: string;
+  updatedAt: number;
+}
+
+export const LocalQueuedMessageSchema = z.object({
+  clientMessageId: z.string().min(1),
+  createdAt: z.number(),
+  order: z.number().int().positive(),
+  text: z.string(),
+  updatedAt: z.number()
+});
+
 export const LocalSessionSummarySchema = z.object({
   sessionId: z.string().min(1),
   threadId: z.string().min(1).optional(),
   currentTurnId: z.string().min(1).optional(),
   activeTurnId: z.string().min(1).optional(),
+  queuedMessages: z.array(LocalQueuedMessageSchema).default([]),
   status: LocalSessionStatusSchema,
   cwd: z.string().min(1),
   title: z.string().nullable().optional(),
@@ -1484,6 +1502,39 @@ export const LocalSendMessageResponseSchema = z.discriminatedUnion("mode", [
 ]);
 
 export type LocalSendMessageResponse = z.infer<typeof LocalSendMessageResponseSchema>;
+
+export const LocalQueueActionSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("clear")
+  }),
+  z.object({
+    action: z.literal("delete"),
+    clientMessageId: z.string().min(1)
+  }),
+  z.object({
+    action: z.literal("edit"),
+    clientMessageId: z.string().min(1),
+    text: z.string().min(1)
+  }),
+  z.object({
+    action: z.literal("reorder"),
+    clientMessageIds: z.array(z.string().min(1))
+  }),
+  z.object({
+    action: z.literal("steer"),
+    clientMessageId: z.string().min(1)
+  })
+]);
+
+export type LocalQueueActionInput = z.infer<typeof LocalQueueActionSchema>;
+
+export const LocalQueueActionResponseSchema = z.object({
+  session: LocalSessionSummarySchema
+});
+
+export interface LocalQueueActionResponse {
+  session: LocalSessionSummary;
+}
 
 export const LocalInterruptResponseSchema = z.object({
   turnId: z.string().min(1)
@@ -1868,6 +1919,7 @@ export const RelayMethod = {
   SessionsList: "sessions.list",
   SessionsCreate: "sessions.create",
   SessionsMessage: "sessions.message",
+  SessionsQueueAction: "sessions.queue.action",
   SessionsGoalGet: "sessions.goal.get",
   SessionsGoalSet: "sessions.goal.set",
   SessionsGoalClear: "sessions.goal.clear",

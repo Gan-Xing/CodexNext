@@ -287,6 +287,7 @@ function liveSession(overrides: Partial<LocalSessionSummary> = {}): LocalSession
     approvalPolicy: "on-request",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    queuedMessages: [],
     goal: null,
     createdAt: 10,
     updatedAt: 20,

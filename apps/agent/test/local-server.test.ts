@@ -237,6 +237,79 @@ describe("SessionManager messages", () => {
     ).toHaveLength(1);
   });
 
+  it("updates queued messages and steers a queued item into the active turn", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    const session = await manager.startSession({
+      cwd: process.cwd(),
+      permissionMode: "request-approval"
+    });
+    await manager.sendMessage(session.sessionId, { text: "first" });
+    await manager.sendMessage(session.sessionId, {
+      text: "second",
+      clientMessageId: "msg_a",
+      submitMode: "queue"
+    });
+    await manager.sendMessage(session.sessionId, {
+      text: "third",
+      clientMessageId: "msg_b",
+      submitMode: "queue"
+    });
+
+    let result = await manager.updateQueuedMessages(session.sessionId, {
+      action: "reorder",
+      clientMessageIds: ["msg_b", "msg_a"]
+    });
+    expect(result.session.queuedMessages.map((message) => message.clientMessageId)).toEqual([
+      "msg_b",
+      "msg_a"
+    ]);
+
+    result = await manager.updateQueuedMessages(session.sessionId, {
+      action: "edit",
+      clientMessageId: "msg_b",
+      text: "edited third"
+    });
+    expect(result.session.queuedMessages[0]).toMatchObject({
+      clientMessageId: "msg_b",
+      text: "edited third"
+    });
+
+    result = await manager.updateQueuedMessages(session.sessionId, {
+      action: "delete",
+      clientMessageId: "msg_a"
+    });
+    expect(result.session.queuedMessages.map((message) => message.clientMessageId)).toEqual([
+      "msg_b"
+    ]);
+
+    result = await manager.updateQueuedMessages(session.sessionId, {
+      action: "steer",
+      clientMessageId: "msg_b"
+    });
+
+    expect(result.session.queuedMessages).toEqual([]);
+    expect(fake.turnStartCalls).toBe(1);
+    expect(fake.turnSteerCalls).toBe(1);
+    expect(fake.turnSteerParams[0]).toMatchObject({
+      threadId: "thread_1",
+      input: [
+        {
+          type: "text",
+          text: "edited third"
+        }
+      ]
+    });
+  });
+
   it("accepts clientMessageId in the local send schema", () => {
     const parsed = LocalSendMessageSchema.parse({
       text: "hello",
@@ -1237,6 +1310,7 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
   public threadReadParams: unknown[] = [];
   public threadTurnsListParams: unknown[] = [];
   public turnStartParams: unknown[] = [];
+  public turnSteerParams: unknown[] = [];
   public failNextResumeAsArchived = false;
   public failNextArchiveAsMissingRollout = false;
   public failNextTurnStart: Error | null = null;
@@ -1378,7 +1452,10 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
     return { turn: { id: "turn_1", status: "inProgress" as const } };
   };
 
-  public turnSteer = async () => {
+  public turnSteer = async (
+    params: Parameters<ManagedCodexClient["turnSteer"]>[0]
+  ) => {
+    this.turnSteerParams.push(params);
     this.turnSteerCalls += 1;
     if (this.failNextTurnSteer) {
       const error = this.failNextTurnSteer;

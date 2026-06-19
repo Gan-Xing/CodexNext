@@ -57,6 +57,7 @@ function makeSession(input: Partial<LocalSessionSummary> = {}): LocalSessionSumm
     approvalPolicy: input.approvalPolicy ?? "on-request",
     approvalsReviewer: input.approvalsReviewer ?? "user",
     sandbox: input.sandbox ?? "workspace-write",
+    queuedMessages: input.queuedMessages ?? [],
     goal: input.goal ?? null,
     createdAt: input.createdAt ?? 1,
     updatedAt: input.updatedAt ?? 2
@@ -265,7 +266,7 @@ describe("chat state", () => {
     });
   });
 
-  it("keeps queued chat.user echoes in queued state", () => {
+  it("keeps queued chat.user echoes out of rendered turn items", () => {
     const workspace = addOptimisticUserMessage(makeWorkspace(), {
       sessionId: "session_1",
       clientMessageId: "msg_queued",
@@ -291,14 +292,65 @@ describe("chat state", () => {
       { selectSessions: true }
     );
 
-    const users = next.chatItems.filter((item) => item.role === "user");
-    expect(users).toHaveLength(1);
-    expect(users[0]).toMatchObject({
-      clientMessageId: "msg_queued",
+    const normalizedItems = Object.values(next.conversations).flatMap((conversation) =>
+      Object.values(conversation.turns).flatMap((turn) => Object.values(turn.items))
+    );
+    expect(normalizedItems.some((item) => item.clientMessageId === "msg_queued")).toBe(false);
+    expect(next.outbox.msg_queued).toMatchObject({
       status: "queued",
       text: "second"
     });
-    expect(next.chatItems.some((item) => item.meta?.kind === "queued")).toBe(true);
+    expect(next.chatItems.filter((item) => item.role === "user")).toHaveLength(0);
+    expect(next.chatItems.some((item) => item.meta?.kind === "queued")).toBe(false);
+  });
+
+  it("renders a queued message once after it drains into a real turn", () => {
+    const workspace = addOptimisticUserMessage(makeWorkspace(), {
+      sessionId: "session_1",
+      clientMessageId: "msg_queued",
+      text: "second",
+      status: "queued"
+    });
+
+    const next = ingestEventsIntoWorkspace(
+      workspace,
+      [
+        makeEvent({
+          seq: 1,
+          type: "chat.user",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          payload: {
+            text: "second",
+            clientMessageId: "msg_queued",
+            mode: "queued"
+          }
+        }),
+        makeEvent({
+          seq: 2,
+          type: "chat.user",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          turnId: "turn_drained",
+          payload: {
+            text: "second",
+            clientMessageId: "msg_queued",
+            mode: "turn-start"
+          }
+        })
+      ],
+      { selectSessions: true }
+    );
+
+    const users = next.chatItems.filter(
+      (item) => item.role === "user" && item.clientMessageId === "msg_queued"
+    );
+    expect(users).toHaveLength(1);
+    expect(users[0]).toMatchObject({
+      status: "sent",
+      text: "second",
+      turnId: "turn_drained"
+    });
   });
 
   it("does not re-apply the same chat.user event twice", () => {

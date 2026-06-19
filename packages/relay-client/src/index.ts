@@ -10,6 +10,7 @@ import type {
   LocalHealthResponse,
   LocalInterruptResponse,
   LocalLoadedThreadsResponse,
+  LocalQueueActionResponse,
   LocalResumeSessionResponse,
   LocalSendMessageResponse,
   LocalSessionsResponse,
@@ -27,6 +28,7 @@ import {
   LocalHealthResponseSchema,
   LocalInterruptResponseSchema,
   LocalLoadedThreadsResponseSchema,
+  LocalQueueActionResponseSchema,
   LocalResumeSessionResponseSchema,
   LocalSendMessageResponseSchema,
   LocalSessionsResponseSchema,
@@ -103,6 +105,16 @@ export function buildSessionMessageUrl(
   return buildRelayDeviceApiUrl(
     connection,
     `/sessions/${encodeURIComponent(sessionId)}/messages`
+  );
+}
+
+export function buildSessionQueueUrl(
+  connection: Pick<RelayClientConnection, "deviceId" | "relayUrl">,
+  sessionId: string
+): URL {
+  return buildRelayDeviceApiUrl(
+    connection,
+    `/sessions/${encodeURIComponent(sessionId)}/queue`
   );
 }
 
@@ -278,6 +290,16 @@ export function parseLocalInterruptResponse(
     payload,
     "turn interrupt"
   ) as LocalInterruptResponse;
+}
+
+export function parseLocalQueueActionResponse(
+  payload: unknown
+): LocalQueueActionResponse {
+  return parseRelayResponse(
+    LocalQueueActionResponseSchema,
+    payload,
+    "session queue action"
+  ) as LocalQueueActionResponse;
 }
 
 export function parseCodexHistoryResponse(

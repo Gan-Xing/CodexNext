@@ -20,6 +20,7 @@ function makeSession(overrides: Partial<LocalSessionSummary> = {}): LocalSession
     approvalPolicy: "on-request",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    queuedMessages: [],
     goal: null,
     createdAt: 1,
     updatedAt: 1,

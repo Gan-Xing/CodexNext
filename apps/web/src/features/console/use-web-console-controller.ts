@@ -20,6 +20,7 @@ import {
   resolveApproval,
   resumeCodexHistory,
   sendSessionMessage,
+  updateSessionQueue,
   updateRelaySidebarPrefs,
   type AgentConnection
 } from "../../lib/api";
@@ -43,6 +44,7 @@ import type {
   LocalEvent,
   LocalHealthResponse,
   LocalPermissionMode,
+  LocalQueueActionInput,
   LocalSessionSummary,
   PendingApprovalView
 } from "../../lib/types";
@@ -278,6 +280,7 @@ interface PendingSessionQueuedMessage {
   clientMessageId: string;
   context: SubmitTraceContext;
   message: string;
+  submitMode?: LocalMessageSubmitMode | undefined;
 }
 
 function applyLoadedThreadState(
@@ -1190,6 +1193,73 @@ export function useWebConsoleController() {
     });
   }
 
+  function updatePendingSessionMessageQueue(
+    pendingSessionIdValue: string,
+    input: LocalQueueActionInput
+  ) {
+    const queued = pendingSessionMessageQueuesRef.current.get(pendingSessionIdValue) ?? [];
+    if (queued.length === 0) {
+      return;
+    }
+    if (input.action === "clear") {
+      pendingSessionMessageQueuesRef.current.delete(pendingSessionIdValue);
+      return;
+    }
+    if (input.action === "reorder") {
+      const byId = new Map(queued.map((message) => [message.clientMessageId, message]));
+      const ordered = [
+        ...input.clientMessageIds.flatMap((clientMessageId) => {
+          const message = byId.get(clientMessageId);
+          return message ? [message] : [];
+        }),
+        ...queued.filter(
+          (message) => !input.clientMessageIds.includes(message.clientMessageId)
+        )
+      ];
+      pendingSessionMessageQueuesRef.current.set(pendingSessionIdValue, ordered);
+      return;
+    }
+    if (input.action === "delete") {
+      const remaining = queued.filter(
+        (message) => message.clientMessageId !== input.clientMessageId
+      );
+      if (remaining.length) {
+        pendingSessionMessageQueuesRef.current.set(pendingSessionIdValue, remaining);
+      } else {
+        pendingSessionMessageQueuesRef.current.delete(pendingSessionIdValue);
+      }
+      return;
+    }
+    if (input.action === "edit") {
+      pendingSessionMessageQueuesRef.current.set(
+        pendingSessionIdValue,
+        queued.map((message) =>
+          message.clientMessageId === input.clientMessageId
+            ? {
+                ...message,
+                context: {
+                  ...message.context,
+                  textLength: input.text.length
+                },
+                message: input.text
+              }
+            : message
+        )
+      );
+      return;
+    }
+    const selected = queued.find(
+      (message) => message.clientMessageId === input.clientMessageId
+    );
+    if (!selected) {
+      return;
+    }
+    pendingSessionMessageQueuesRef.current.set(pendingSessionIdValue, [
+      { ...selected, submitMode: "steer" },
+      ...queued.filter((message) => message.clientMessageId !== input.clientMessageId)
+    ]);
+  }
+
   function failPendingSessionMessageQueue(
     pendingSessionIdValue: string,
     error: unknown
@@ -1236,6 +1306,7 @@ export function useWebConsoleController() {
         count: queued.length
       });
       for (const queuedMessage of queued) {
+        const pendingSubmitMode = queuedMessage.submitMode ?? "queue";
         const context =
           updateSubmitTrace(queuedMessage.clientMessageId, {
             sessionId: input.sessionId
@@ -1245,13 +1316,13 @@ export function useWebConsoleController() {
           pendingSessionId: input.pendingSessionIdValue,
           sessionId: input.sessionId,
           threadId: input.threadId ?? null,
-          activeSubmitMode: "queue"
+          activeSubmitMode: pendingSubmitMode
         });
         try {
           const result = await sendSessionMessage(input.connection, input.sessionId, {
             text: queuedMessage.message,
             clientMessageId: queuedMessage.clientMessageId,
-            submitMode: "queue"
+            submitMode: pendingSubmitMode
           });
           if (result.mode === "queued") {
             traceSubmitStep("console.submit.ack", context, {
@@ -4313,8 +4384,8 @@ export function useWebConsoleController() {
 
     // The active turn belongs to the backend's current run; new user input stays local
     // until the RPC ack returns the authoritative turnId.
-    patchActiveWorkspace((workspace) =>
-      addOptimisticUserMessage(workspace, {
+    patchActiveWorkspace((workspace) => {
+      let next = addOptimisticUserMessage(workspace, {
         sessionId: targetSessionId,
         clientMessageId,
         text: message,
@@ -4324,8 +4395,40 @@ export function useWebConsoleController() {
               includeThinking: true
             }
           : {})
-      })
-    );
+      });
+      if (activeSubmitMode === "queue" && realCurrentSession) {
+        const queuedMessages = realCurrentSession.queuedMessages ?? [];
+        next = upsertSessionInWorkspace(next, {
+          ...realCurrentSession,
+          queuedMessages: [
+            ...queuedMessages.filter((item) => item.clientMessageId !== clientMessageId),
+            {
+              clientMessageId,
+              createdAt: submitStartedAt,
+              order: queuedMessages.length + 1,
+              text: message,
+              updatedAt: submitStartedAt
+            }
+          ]
+        });
+      } else if (pendingCurrentSessionId && currentSession) {
+        const queuedMessages = currentSession.queuedMessages ?? [];
+        next = upsertSessionInWorkspace(next, {
+          ...currentSession,
+          queuedMessages: [
+            ...queuedMessages.filter((item) => item.clientMessageId !== clientMessageId),
+            {
+              clientMessageId,
+              createdAt: submitStartedAt,
+              order: queuedMessages.length + 1,
+              text: message,
+              updatedAt: submitStartedAt
+            }
+          ]
+        });
+      }
+      return next;
+    });
     traceSubmitStep("console.submit.queued", submitContext, {
       targetSessionId,
       hasCurrentSession: Boolean(realCurrentSession),
@@ -4533,6 +4636,9 @@ export function useWebConsoleController() {
       });
 
       patchActiveWorkspace((workspace) => {
+        const pendingQueuedMessages =
+          workspace.sessions.find((session) => session.sessionId === pendingSession.sessionId)
+            ?.queuedMessages ?? [];
         let next = reassignSessionChatItems(workspace, pendingSession.sessionId, result.session.sessionId);
         next = markOptimisticMessageSent(next, clientMessageId, {
           sessionId: result.session.sessionId,
@@ -4541,7 +4647,21 @@ export function useWebConsoleController() {
             ? { turnId: result.session.currentTurnId ?? result.session.activeTurnId }
             : {})
         });
-        next = upsertSessionInWorkspace(next, result.session);
+        const serverQueuedMessageIds = new Set(
+          result.session.queuedMessages.map((message) => message.clientMessageId)
+        );
+        next = upsertSessionInWorkspace(next, {
+          ...result.session,
+          queuedMessages: [
+            ...result.session.queuedMessages,
+            ...pendingQueuedMessages.filter(
+              (message) => !serverQueuedMessageIds.has(message.clientMessageId)
+            )
+          ].map((message, index) => ({
+            ...message,
+            order: index + 1
+          }))
+        });
         return {
           ...next,
           currentSessionId: result.session.sessionId,
@@ -4901,6 +5021,131 @@ export function useWebConsoleController() {
     setAttachments((previous) => previous.filter((item) => item !== attachment));
   }
 
+  function queuedMessageClientId(input: LocalQueueActionInput): string | null {
+    return "clientMessageId" in input ? input.clientMessageId : null;
+  }
+
+  function findQueuedMessageOwner(input: LocalQueueActionInput): LocalSessionSummary | null {
+    const clientMessageId = queuedMessageClientId(input);
+    if (clientMessageId) {
+      return (
+        sessions.find((session) =>
+          session.queuedMessages.some((message) => message.clientMessageId === clientMessageId)
+        ) ?? currentSession
+      );
+    }
+    if (currentSession?.queuedMessages.length) {
+      return currentSession;
+    }
+    return currentSession;
+  }
+
+  function applyOptimisticQueueAction(
+    session: LocalSessionSummary,
+    input: LocalQueueActionInput
+  ): LocalSessionSummary {
+    const now = Date.now();
+    const reorder = (messages: LocalSessionSummary["queuedMessages"]) =>
+      messages.map((message, index) => ({
+        ...message,
+        order: index + 1
+      }));
+    if (input.action === "clear") {
+      return { ...session, queuedMessages: [] };
+    }
+    if (input.action === "reorder") {
+      const byId = new Map(
+        session.queuedMessages.map((message) => [message.clientMessageId, message])
+      );
+      return {
+        ...session,
+        queuedMessages: reorder([
+          ...input.clientMessageIds.flatMap((clientMessageId) => {
+            const message = byId.get(clientMessageId);
+            return message ? [message] : [];
+          }),
+          ...session.queuedMessages.filter(
+            (message) => !input.clientMessageIds.includes(message.clientMessageId)
+          )
+        ])
+      };
+    }
+    if (input.action === "delete" || input.action === "steer") {
+      return {
+        ...session,
+        queuedMessages: reorder(
+          session.queuedMessages.filter(
+            (message) => message.clientMessageId !== input.clientMessageId
+          )
+        )
+      };
+    }
+    return {
+      ...session,
+      queuedMessages: reorder(
+        session.queuedMessages.map((message) =>
+          message.clientMessageId === input.clientMessageId
+            ? {
+                ...message,
+                text: input.text,
+                updatedAt: now
+              }
+            : message
+        )
+      )
+    };
+  }
+
+  async function updateCurrentSessionQueue(input: LocalQueueActionInput) {
+    const ownerSession = findQueuedMessageOwner(input);
+    if (!connection || !ownerSession) {
+      return;
+    }
+    patchActiveWorkspace((workspace) =>
+      upsertSessionInWorkspace(workspace, applyOptimisticQueueAction(ownerSession, input))
+    );
+    if (isPendingSessionId(ownerSession.sessionId)) {
+      updatePendingSessionMessageQueue(ownerSession.sessionId, input);
+      webDevTrace("console.queue.action.skipped", {
+        action: input.action,
+        reason: "pending_session",
+        sessionId: ownerSession.sessionId,
+        clientMessageId: queuedMessageClientId(input)
+      });
+      return;
+    }
+    try {
+      const result = await updateSessionQueue(connection, ownerSession.sessionId, input);
+      patchActiveWorkspace((workspace) => upsertSessionInWorkspace(workspace, result.session));
+    } catch (err) {
+      setError(formatConsoleError(err));
+    }
+  }
+
+  function handleQueuedMessageDelete(clientMessageId: string) {
+    void updateCurrentSessionQueue({ action: "delete", clientMessageId });
+  }
+
+  function handleQueuedMessageEdit(clientMessageId: string, text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return;
+    }
+    void updateCurrentSessionQueue({ action: "edit", clientMessageId, text: trimmed });
+  }
+
+  function handleQueuedMessageReorder(clientMessageIds: string[]) {
+    void updateCurrentSessionQueue({ action: "reorder", clientMessageIds });
+  }
+
+  function handleQueuedMessageSteer(clientMessageId: string) {
+    void updateCurrentSessionQueue({ action: "steer", clientMessageId });
+  }
+
+  function handleQueuedMessagesClear() {
+    void updateCurrentSessionQueue({ action: "clear" });
+  }
+
   function dismissMigrationNotice() {
     setMigrationNotice(null);
   }
@@ -4947,6 +5192,11 @@ export function useWebConsoleController() {
     handlePauseGoal,
     handleRefreshGoal,
     handleRemoveAttachment,
+    handleQueuedMessageDelete,
+    handleQueuedMessageEdit,
+    handleQueuedMessageReorder,
+    handleQueuedMessageSteer,
+    handleQueuedMessagesClear,
     handleResumeGoal,
     handleSetGoal,
     handleTogglePlanMode,

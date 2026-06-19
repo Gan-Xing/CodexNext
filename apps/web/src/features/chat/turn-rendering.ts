@@ -155,6 +155,9 @@ function turnGroupItemToChatRenderItem(
   group: TurnGroup,
   item: TurnGroupItem
 ): ChatRenderItem | null {
+  if (item.status === "queued" || item.metaKind === "queued") {
+    return null;
+  }
   if (!item.role || item.text.trim().length === 0) {
     return null;
   }

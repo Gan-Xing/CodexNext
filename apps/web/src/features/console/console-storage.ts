@@ -7,6 +7,7 @@ import {
 } from "../devices/device-utils";
 import type {
   LocalCodexHistoryEntry,
+  LocalQueuedMessage,
   LocalSessionSummary
 } from "../../lib/types";
 import type { OutboxEntry, OutboxStatus } from "../chat/chat-state";
@@ -519,10 +520,38 @@ function sanitizeSessionSummaryForStorage(
       ? value.approvalsReviewer
       : null,
     sandbox: isSandboxMode(value.sandbox) ? value.sandbox : null,
+    queuedMessages: sanitizeQueuedMessages(value.queuedMessages),
     goal: null,
     createdAt: createdAt ?? updatedAt,
     updatedAt
   };
+}
+
+function sanitizeQueuedMessages(value: unknown): LocalQueuedMessage[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item, index): LocalQueuedMessage | null => {
+      if (!isRecord(item)) {
+        return null;
+      }
+      const clientMessageId = safeSnapshotText(item.clientMessageId);
+      const text = typeof item.text === "string" ? item.text.slice(0, 24_000) : null;
+      if (!clientMessageId || text === null) {
+        return null;
+      }
+      const createdAt = finiteTimestamp(item.createdAt) ?? Date.now();
+      return {
+        clientMessageId,
+        createdAt,
+        order: Math.max(1, Math.trunc(finiteTimestamp(item.order) ?? index + 1)),
+        text,
+        updatedAt: finiteTimestamp(item.updatedAt) ?? createdAt
+      };
+    })
+    .filter((item): item is LocalQueuedMessage => Boolean(item))
+    .sort((a, b) => a.order - b.order);
 }
 
 function sanitizeHistoryEntryForStorage(

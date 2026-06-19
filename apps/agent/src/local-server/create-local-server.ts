@@ -9,6 +9,7 @@ import type {
 } from "@codexnext/protocol";
 import {
   LocalApprovalDecisionSchema,
+  LocalQueueActionSchema,
   LocalResumeSessionSchema,
   LocalSendMessageSchema,
   LocalSetGoalSchema,
@@ -182,6 +183,15 @@ async function handleRequest(
         sendJson(response, 200, result);
         return;
       }
+      case "sessions.queue.action": {
+        const body = LocalQueueActionSchema.parse(await readJson(request));
+        const result = await runtime.sessionManager.updateQueuedMessages(
+          route.params.sessionId,
+          body
+        );
+        sendJson(response, 200, result);
+        return;
+      }
       case "sessions.turn.create": {
         const body = LocalSendMessageSchema.parse(await readJson(request));
         const turnId = await runtime.sessionManager.startTurn(
@@ -269,6 +279,7 @@ type Route =
   | { name: "sessions.list"; public: false; params: Record<string, never> }
   | { name: "sessions.create"; public: false; params: Record<string, never> }
   | { name: "sessions.message"; public: false; params: { sessionId: string } }
+  | { name: "sessions.queue.action"; public: false; params: { sessionId: string } }
   | { name: "sessions.turn.create"; public: false; params: { sessionId: string } }
   | {
       name: "sessions.turn.steer";
@@ -355,6 +366,9 @@ function matchRoute(method: string, pathname: string): Route | null {
     const sessionId = decodeURIComponent(parts[2] ?? "");
     if (method === "POST" && parts.length === 4 && parts[3] === "messages") {
       return { name: "sessions.message", public: false, params: { sessionId } };
+    }
+    if (method === "POST" && parts.length === 4 && parts[3] === "queue") {
+      return { name: "sessions.queue.action", public: false, params: { sessionId } };
     }
     if (parts.length === 4 && parts[3] === "goal") {
       if (method === "GET") {

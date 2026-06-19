@@ -19,6 +19,7 @@ function makeSession(input: Partial<LocalSessionSummary> = {}): LocalSessionSumm
     approvalPolicy: "on-request",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    queuedMessages: [],
     createdAt: startedAt - 60_000,
     updatedAt: startedAt,
     ...input

@@ -22,6 +22,8 @@ export type CodexUiIconName =
   | "github"
   | "gmail"
   | "googleDrive"
+  | "drag"
+  | "guide"
   | "hand"
   | "imageSquare"
   | "phone"
@@ -30,6 +32,7 @@ export type CodexUiIconName =
   | "notion"
   | "plug"
   | "plus"
+  | "queued"
   | "search"
   | "settings"
   | "shield"
@@ -79,6 +82,7 @@ const codexUiIconSpecs = {
   collapse: { svg: inlineSvgByName.collapse },
   compose: { asset: "compose-bhtlanqm" },
   document: { asset: "document-search-c-kua6rp" },
+  drag: { asset: "drag-chnn4bz7" },
   edit: { asset: "edit-b9jltkkg" },
   folder: { asset: "folder-bpwd3kcz" },
   folderPlus: { asset: "add-project-menu-items-cy9ai-pb" },
@@ -87,6 +91,7 @@ const codexUiIconSpecs = {
   github: { asset: "github-mark-dzuhu9c1" },
   gmail: { asset: "known-app-icon-bei7oxdu--09" },
   googleDrive: { asset: "google-drive-cc-egn92" },
+  guide: { asset: "queued-message-list-dc3hkad2--02" },
   hand: { svg: inlineSvgByName.hand },
   imageSquare: { asset: "image-square-cpvm9cik" },
   more: { asset: "three-dots-c-3fbqw8" },
@@ -95,6 +100,7 @@ const codexUiIconSpecs = {
   pin: { asset: "local-conversation-background-terminals-model-cpnrd5q0" },
   plug: { asset: "apps-dbd5dyzg" },
   plus: { asset: "plus-d3dp-dmx" },
+  queued: { asset: "queued-message-list-dc3hkad2--01" },
   search: { asset: "search-c0nm-ej1" },
   settings: { asset: "settings-cog-mjpuk5w" },
   shield: { svg: inlineSvgByName.shield },

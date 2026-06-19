@@ -14,6 +14,7 @@ import type {
   CodexThread,
   CodexThreadItem,
   CodexThreadTurn,
+  LocalQueueActionInput,
   LocalSendMessageInput,
   LocalPermissionMode,
   LocalResumeSessionInput,
@@ -121,9 +122,10 @@ interface PendingUserInputRecord {
 }
 
 interface QueuedMessageRecord {
-  clientMessageId?: string | undefined;
+  clientMessageId: string;
   createdAt: number;
   text: string;
+  updatedAt: number;
 }
 
 type PermissionInput = Pick<
@@ -864,10 +866,13 @@ export class SessionManager {
     input: LocalSendMessageInput,
     startedAt: number
   ): { mode: "queued"; queuePosition: number } {
+    const clientMessageId = input.clientMessageId ?? randomUUID();
+    const createdAt = Date.now();
     const queued: QueuedMessageRecord = {
-      clientMessageId: input.clientMessageId,
-      createdAt: Date.now(),
-      text: input.text
+      clientMessageId,
+      createdAt,
+      text: input.text,
+      updatedAt: createdAt
     };
     session.queuedMessages.push(queued);
     const queuePosition = session.queuedMessages.length;
@@ -877,12 +882,12 @@ export class SessionManager {
       activeTurnId: session.activeTurnId,
       mode: "queued",
       queuePosition,
-      clientMessageId: input.clientMessageId
+      clientMessageId
     });
     this.emitChatUser(session, {
       text: input.text,
       mode: "queued",
-      ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {})
+      clientMessageId
     });
     touch(session, "running");
     this.emitSessionUpdated(session);
@@ -912,10 +917,11 @@ export class SessionManager {
             remaining: session.queuedMessages.length,
             clientMessageId: next.clientMessageId
           });
+          this.emitSessionUpdated(session);
           try {
             const turnId = await this.startTurn(session.sessionId, {
               text: next.text,
-              ...(next.clientMessageId ? { clientMessageId: next.clientMessageId } : {})
+              clientMessageId: next.clientMessageId
             });
             devTrace("session.queue.drain_started", {
               sessionId: session.sessionId,
@@ -938,6 +944,106 @@ export class SessionManager {
         session.drainingQueue = false;
       }
     })();
+  }
+
+  public async updateQueuedMessages(
+    sessionId: string,
+    input: LocalQueueActionInput
+  ): Promise<{ session: LocalSessionSummary }> {
+    const startedAt = Date.now();
+    const session = this.requireSession(sessionId);
+    devTrace("session.queue.action.begin", {
+      sessionId,
+      threadId: session.threadId,
+      action: input.action,
+      queuedCount: session.queuedMessages.length
+    });
+
+    if (input.action === "clear") {
+      session.queuedMessages = [];
+      touch(session, session.activeTurnId ? "running" : session.status);
+      this.emitSessionUpdated(session);
+      return { session: toSummary(session) };
+    }
+
+    if (input.action === "reorder") {
+      const byId = new Map(
+        session.queuedMessages.map((message) => [message.clientMessageId, message])
+      );
+      const ordered = input.clientMessageIds
+        .map((clientMessageId) => byId.get(clientMessageId))
+        .filter((message): message is QueuedMessageRecord => Boolean(message));
+      const orderedIds = new Set(ordered.map((message) => message.clientMessageId));
+      session.queuedMessages = [
+        ...ordered,
+        ...session.queuedMessages.filter(
+          (message) => !orderedIds.has(message.clientMessageId)
+        )
+      ];
+      touch(session, session.activeTurnId ? "running" : session.status);
+      this.emitSessionUpdated(session);
+      return { session: toSummary(session) };
+    }
+
+    const index = session.queuedMessages.findIndex(
+      (message) => message.clientMessageId === input.clientMessageId
+    );
+    if (index < 0) {
+      throw new Error(`Queued message ${input.clientMessageId} was not found`);
+    }
+
+    if (input.action === "delete") {
+      session.queuedMessages.splice(index, 1);
+      touch(session, session.activeTurnId ? "running" : session.status);
+      this.emitSessionUpdated(session);
+      return { session: toSummary(session) };
+    }
+
+    if (input.action === "edit") {
+      session.queuedMessages[index] = {
+        ...session.queuedMessages[index]!,
+        text: input.text,
+        updatedAt: Date.now()
+      };
+      touch(session, session.activeTurnId ? "running" : session.status);
+      this.emitSessionUpdated(session);
+      return { session: toSummary(session) };
+    }
+
+    const queued = session.queuedMessages.splice(index, 1)[0];
+    if (!queued) {
+      throw new Error(`Queued message ${input.clientMessageId} was not found`);
+    }
+    this.emitSessionUpdated(session);
+    if (!session.activeTurnId) {
+      const turnId = await this.startTurn(session.sessionId, {
+        text: queued.text,
+        clientMessageId: queued.clientMessageId
+      });
+      devTrace("session.queue.action.end", {
+        sessionId,
+        threadId: session.threadId,
+        action: input.action,
+        mode: "turn-start",
+        turnId,
+        durationMs: durationMs(startedAt)
+      });
+      return { session: toSummary(session) };
+    }
+    await this.steerTurn(session.sessionId, session.activeTurnId, {
+      text: queued.text,
+      clientMessageId: queued.clientMessageId,
+      submitMode: "steer"
+    });
+    devTrace("session.queue.action.end", {
+      sessionId,
+      threadId: session.threadId,
+      action: input.action,
+      mode: "steer",
+      turnId: session.activeTurnId,
+      durationMs: durationMs(startedAt)
+    });
+    return { session: toSummary(session) };
   }
 
   public async startTurn(
@@ -2314,6 +2420,13 @@ function toSummary(session: LocalSession): LocalSessionSummary {
     threadId: session.threadId,
     ...(session.currentTurnId ? { currentTurnId: session.currentTurnId } : {}),
     ...(session.activeTurnId ? { activeTurnId: session.activeTurnId } : {}),
+    queuedMessages: session.queuedMessages.map((message, index) => ({
+      clientMessageId: message.clientMessageId,
+      createdAt: message.createdAt,
+      order: index + 1,
+      text: message.text,
+      updatedAt: message.updatedAt
+    })),
     status: session.status,
     cwd: session.cwd,
     title: session.title ?? null,

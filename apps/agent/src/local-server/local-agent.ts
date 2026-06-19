@@ -25,6 +25,7 @@ import {
   deriveCodexConversationTitle,
   deriveCodexGeneratedTitle,
   LocalApprovalDecisionSchema,
+  LocalQueueActionSchema,
   LocalResumeSessionSchema,
   LocalSendMessageSchema,
   LocalSetGoalSchema,
@@ -115,6 +116,11 @@ export function createLocalAgentRuntime(
             const payload = parseSessionScopedParams(params);
             const body = LocalSendMessageSchema.parse(payload.body);
             return sessionManager.sendMessage(payload.sessionId, body);
+          }
+          case RelayMethodValue.SessionsQueueAction: {
+            const payload = parseSessionScopedParams(params);
+            const body = LocalQueueActionSchema.parse(payload.body);
+            return sessionManager.updateQueuedMessages(payload.sessionId, body);
           }
           case RelayMethodValue.SessionsGoalGet: {
             const payload = parseSessionScopedParams(params);

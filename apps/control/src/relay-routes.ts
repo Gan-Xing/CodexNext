@@ -22,6 +22,7 @@ import {
   LocalHealthResponseSchema,
   LocalInterruptResponseSchema,
   LocalLoadedThreadsResponseSchema,
+  LocalQueueActionResponseSchema,
   LocalResumeSessionResponseSchema,
   LocalSendMessageResponseSchema,
   LocalSessionsResponseSchema,
@@ -121,6 +122,20 @@ export function registerRelayRoutes(input: RelayRouteDependencies): void {
         method: RelayMethodValue.SessionsMessage,
         params: { sessionId: params.sessionId, body: request.body },
         resultSchema: LocalSendMessageResponseSchema,
+        timeoutMs: input.rpcTimeoutMs
+      });
+    }
+  );
+
+  input.app.post(
+    "/api/relay/devices/:deviceId/sessions/:sessionId/queue",
+    async (request, reply) => {
+      const params = request.params as { sessionId: string };
+      return handleRpcRequest(request, reply, {
+        ...input,
+        method: RelayMethodValue.SessionsQueueAction,
+        params: { sessionId: params.sessionId, body: request.body },
+        resultSchema: LocalQueueActionResponseSchema,
         timeoutMs: input.rpcTimeoutMs
       });
     }

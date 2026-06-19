@@ -11,6 +11,8 @@ import type {
   LocalEvent,
   LocalHealthResponse,
   LocalInterruptResponse,
+  LocalQueueActionInput,
+  LocalQueueActionResponse,
   LocalPermissionMode,
   LocalReasoningEffort,
   LocalResumeSessionResponse,
@@ -36,6 +38,7 @@ import {
   buildRelayAuthorizationHeaders,
   buildRelayDevicesUrl,
   buildSessionMessageUrl,
+  buildSessionQueueUrl,
   buildTurnInterruptUrl,
   buildLoadedCodexHistoryUrl,
   parseCodexHistoryArchiveResponse,
@@ -47,6 +50,7 @@ import {
   parseLocalEventReplayResponse,
   parseLocalHealthResponse,
   parseLocalInterruptResponse,
+  parseLocalQueueActionResponse,
   parseResumeSessionResponse,
   parseLocalSendMessageResponse,
   parseLocalSessionsResponse,
@@ -297,6 +301,17 @@ export function sendSessionMessage(
     method: "POST",
     body: JSON.stringify(input)
   }).then(parseLocalSendMessageResponse);
+}
+
+export function updateSessionQueue(
+  connection: AgentConnection,
+  sessionId: string,
+  input: LocalQueueActionInput
+): Promise<LocalQueueActionResponse> {
+  return agentFetchJson(connection, pathAndSearch(buildSessionQueueUrl(connection, sessionId)), {
+    method: "POST",
+    body: JSON.stringify(input)
+  }).then(parseLocalQueueActionResponse);
 }
 
 export function interruptSessionTurn(

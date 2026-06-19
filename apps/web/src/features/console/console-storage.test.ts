@@ -168,6 +168,7 @@ describe("console localStorage helpers", () => {
             approvalPolicy: "on-request",
             approvalsReviewer: "user",
             sandbox: "workspace-write",
+            queuedMessages: [],
             goal: {
               objective: "should not persist",
               status: "active"
@@ -212,6 +213,7 @@ describe("console localStorage helpers", () => {
             approvalPolicy: "on-request",
             approvalsReviewer: "user",
             sandbox: "workspace-write",
+            queuedMessages: [],
             goal: null,
             createdAt: 1,
             updatedAt: 2

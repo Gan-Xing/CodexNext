@@ -9,7 +9,11 @@ import {
   type RefObject
 } from "react";
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
-import type { LocalPermissionMode, LocalReasoningEffort } from "../../lib/types";
+import type {
+  LocalPermissionMode,
+  LocalQueuedMessage,
+  LocalReasoningEffort
+} from "../../lib/types";
 import type { AttachmentDraft } from "../../features/chat/chat-state";
 import { CodexIcon, type CodexIconName } from "../DesignLab";
 
@@ -48,6 +52,7 @@ export function LiveComposer(props: {
   planMode: boolean;
   reasoningEffort: LocalReasoningEffort;
   reasoningOptions: ReasoningOption[];
+  queuedMessages: LocalQueuedMessage[];
   selectedModel: ModelOption;
   selectedPermission: PermissionOption;
   selectedReasoning: ReasoningOption;
@@ -60,6 +65,11 @@ export function LiveComposer(props: {
   onInterrupt: () => void;
   onOpenMenu: (menu: ComposerMenu) => void;
   onRemoveAttachment: (attachment: AttachmentDraft) => void;
+  onQueuedMessageDelete: (clientMessageId: string) => void;
+  onQueuedMessageEdit: (clientMessageId: string, text: string) => void;
+  onQueuedMessageReorder: (clientMessageIds: string[]) => void;
+  onQueuedMessageSteer: (clientMessageId: string) => void;
+  onQueuedMessagesClear: () => void;
   onSelectModel: (value: string) => void;
   onSelectPermission: (value: LocalPermissionMode) => void;
   onSelectReasoning: (value: LocalReasoningEffort) => void;
@@ -74,11 +84,16 @@ export function LiveComposer(props: {
   const permissionButtonRef = useRef<HTMLButtonElement | null>(null);
   const modelButtonRef = useRef<HTMLButtonElement | null>(null);
   const [menuStyle, setMenuStyle] = useState<CSSProperties>();
+  const [draggingQueuedId, setDraggingQueuedId] = useState<string | null>(null);
+  const [editingQueuedId, setEditingQueuedId] = useState<string | null>(null);
+  const [editingQueuedText, setEditingQueuedText] = useState("");
+  const [queuedMenuId, setQueuedMenuId] = useState<string | null>(null);
   const composerDisabled = Boolean(props.disabledReason);
   const hasDraft = props.draft.trim().length > 0;
   const showInterrupt = props.activeTurn && !hasDraft && !composerDisabled;
   const showGuideSubmit = props.activeTurn && hasDraft && !composerDisabled && !props.goalMode;
   const showGoalPill = props.goalMode || props.hasGoal;
+  const showQueuedMessages = props.queuedMessages.length > 0;
   const placeholder = props.disabledReason
     ? props.disabledReason
     : props.goalMode
@@ -117,6 +132,45 @@ export function LiveComposer(props: {
   function openFilePicker() {
     closeMenuAfterSelect();
     props.fileInputRef.current?.click();
+  }
+
+  function reorderQueuedMessage(sourceId: string, targetId: string) {
+    if (sourceId === targetId) {
+      return;
+    }
+    const ids = props.queuedMessages.map((message) => message.clientMessageId);
+    const sourceIndex = ids.indexOf(sourceId);
+    const targetIndex = ids.indexOf(targetId);
+    if (sourceIndex < 0 || targetIndex < 0) {
+      return;
+    }
+    ids.splice(sourceIndex, 1);
+    ids.splice(targetIndex, 0, sourceId);
+    props.onQueuedMessageReorder(ids);
+  }
+
+  function beginEditQueuedMessage(message: LocalQueuedMessage) {
+    setQueuedMenuId(null);
+    setEditingQueuedId(message.clientMessageId);
+    setEditingQueuedText(message.text);
+  }
+
+  function commitQueuedMessageEdit() {
+    if (!editingQueuedId) {
+      return;
+    }
+    const text = editingQueuedText.trim();
+    const id = editingQueuedId;
+    setEditingQueuedId(null);
+    setEditingQueuedText("");
+    if (text) {
+      props.onQueuedMessageEdit(id, text);
+    }
+  }
+
+  function cancelQueuedMessageEdit() {
+    setEditingQueuedId(null);
+    setEditingQueuedText("");
   }
 
   function togglePlanMode() {
@@ -287,6 +341,122 @@ export function LiveComposer(props: {
           .join(" ")
       }
     >
+      {showQueuedMessages ? (
+        <div className="cn-queued-composer-list" aria-label="排队消息">
+          {props.queuedMessages.map((message) => {
+            const editing = editingQueuedId === message.clientMessageId;
+            const menuOpen = queuedMenuId === message.clientMessageId;
+            return (
+              <div
+                key={message.clientMessageId}
+                className={[
+                  "cn-queued-composer-item",
+                  draggingQueuedId === message.clientMessageId ? "dragging" : ""
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const sourceId =
+                    event.dataTransfer.getData("text/plain") || draggingQueuedId;
+                  if (sourceId) {
+                    reorderQueuedMessage(sourceId, message.clientMessageId);
+                  }
+                  setDraggingQueuedId(null);
+                }}
+              >
+                <button
+                  className="cn-queued-drag-handle"
+                  type="button"
+                  title="拖动排序"
+                  draggable
+                  onDragStart={(event) => {
+                    setDraggingQueuedId(message.clientMessageId);
+                    event.dataTransfer.setData("text/plain", message.clientMessageId);
+                    event.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragEnd={() => setDraggingQueuedId(null)}
+                >
+                  <CodexIcon name="drag" />
+                  <CodexIcon name="queued" />
+                </button>
+                {editing ? (
+                  <input
+                    className="cn-queued-edit-input"
+                    value={editingQueuedText}
+                    autoFocus
+                    onChange={(event) => setEditingQueuedText(event.target.value)}
+                    onBlur={commitQueuedMessageEdit}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        commitQueuedMessageEdit();
+                      }
+                      if (event.key === "Escape") {
+                        cancelQueuedMessageEdit();
+                      }
+                    }}
+                  />
+                ) : (
+                  <span className="cn-queued-message-text">{message.text}</span>
+                )}
+                <div className="cn-queued-actions">
+                  <button
+                    className="cn-queued-action guide"
+                    type="button"
+                    title="引导当前回复"
+                    onClick={() => props.onQueuedMessageSteer(message.clientMessageId)}
+                  >
+                    <CodexIcon name="guide" />
+                    <span>引导</span>
+                  </button>
+                  <button
+                    className="cn-queued-action"
+                    type="button"
+                    title="删除这条排队消息"
+                    onClick={() => props.onQueuedMessageDelete(message.clientMessageId)}
+                  >
+                    <CodexIcon name="trash" />
+                  </button>
+                  <button
+                    className="cn-queued-action more"
+                    type="button"
+                    title="更多"
+                    onClick={() =>
+                      setQueuedMenuId(menuOpen ? null : message.clientMessageId)
+                    }
+                  >
+                    <CodexIcon name="more" />
+                  </button>
+                  {menuOpen ? (
+                    <div className="cn-queued-menu">
+                      <button
+                        type="button"
+                        onClick={() => beginEditQueuedMessage(message)}
+                      >
+                        <CodexIcon name="edit" />
+                        编辑消息
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQueuedMenuId(null);
+                          props.onQueuedMessagesClear();
+                        }}
+                      >
+                        <CodexIcon name="queued" />
+                        关闭排队
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
       {props.disabledReason ? (
         <div className="cn-history-locked-composer" role="status">
           <div>
@@ -382,7 +552,7 @@ export function LiveComposer(props: {
             title="把这条消息发送到当前正在回复的对话中"
             onClick={props.onSubmitGuide}
           >
-            <CodexIcon name="hand" />
+            <CodexIcon name="guide" />
             引导对话
           </button>
         ) : null}

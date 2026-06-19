@@ -156,6 +156,11 @@ export function WebConsole() {
     handleInterrupt,
     handleLoadDirectories,
     handleRemoveAttachment,
+    handleQueuedMessageDelete,
+    handleQueuedMessageEdit,
+    handleQueuedMessageReorder,
+    handleQueuedMessageSteer,
+    handleQueuedMessagesClear,
     handleTogglePlanMode,
     hasCurrentGoal,
     healthStatus,
@@ -675,6 +680,7 @@ export function WebConsole() {
             permissionMode={permissionMode}
             permissionOptions={permissionOptions}
             planMode={planModeEnabled}
+            queuedMessages={currentSession?.queuedMessages ?? []}
             reasoningEffort={reasoningEffort}
             reasoningOptions={reasoningOptions}
             selectedModel={selectedModel}
@@ -688,6 +694,11 @@ export function WebConsole() {
             onDraftChange={setDraft}
             onInterrupt={() => void handleInterrupt()}
             onOpenMenu={(menu) => setActiveMenu(activeMenu === menu ? null : menu)}
+            onQueuedMessageDelete={handleQueuedMessageDelete}
+            onQueuedMessageEdit={handleQueuedMessageEdit}
+            onQueuedMessageReorder={handleQueuedMessageReorder}
+            onQueuedMessageSteer={handleQueuedMessageSteer}
+            onQueuedMessagesClear={handleQueuedMessagesClear}
             onRemoveAttachment={handleRemoveAttachment}
             onSelectModel={setModel}
             onSelectPermission={setPermissionMode}

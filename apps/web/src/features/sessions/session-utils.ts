@@ -261,6 +261,7 @@ export function makeHistoryPreviewSession(
     approvalPolicy: "on-request",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    queuedMessages: [],
     goal: null,
     createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
     updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now()
@@ -287,6 +288,7 @@ export function makePendingSession(input: {
     approvalPolicy: null,
     approvalsReviewer: null,
     sandbox: null,
+    queuedMessages: [],
     goal: null,
     createdAt: now,
     updatedAt: now

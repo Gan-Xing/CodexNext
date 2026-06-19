@@ -1246,6 +1246,9 @@ function normalizedTurnItemToChatItem(
   item: NormalizedConversationTurnItem,
   sessionId: string | undefined
 ): ChatItem | null {
+  if (item.status === "queued" || item.metaKind === "queued") {
+    return null;
+  }
   if (!item.role || item.text.trim().length === 0) {
     return null;
   }
@@ -1822,6 +1825,34 @@ function remapPendingTurnToServerTurn(
   });
 }
 
+function removePendingTurnForClientMessage(
+  workspace: DeviceWorkspace,
+  clientMessageId: string
+): DeviceWorkspace {
+  const pendingTurnId = pendingTurnIdForClientMessage(clientMessageId);
+  let changed = false;
+  const conversations = Object.fromEntries(
+    Object.entries(workspace.conversations).map(([key, conversation]) => {
+      if (!conversation.turns[pendingTurnId]) {
+        return [key, conversation] as const;
+      }
+      changed = true;
+      const turns = { ...conversation.turns };
+      delete turns[pendingTurnId];
+      return [
+        key,
+        {
+          ...conversation,
+          turnOrder: conversation.turnOrder.filter((turnId) => turnId !== pendingTurnId),
+          turns,
+          updatedAt: Date.now()
+        }
+      ] as const;
+    })
+  );
+  return changed ? materializeWorkspace({ ...workspace, conversations }) : workspace;
+}
+
 function findTurnItemByClientMessageId(
   turn: NormalizedConversationTurn | undefined,
   clientMessageId: string,
@@ -1881,6 +1912,9 @@ export function addOptimisticUserMessage(
   });
   const status = input.status ?? "pending";
   const includeThinking = input.includeThinking ?? true;
+  if (status === "queued") {
+    return materializeWorkspace(next);
+  }
   return upsertLocalTurnItems(next, {
     key,
     sessionId: input.sessionId,
@@ -1894,15 +1928,10 @@ export function addOptimisticUserMessage(
       }),
       ...(includeThinking
         ? [
-            status === "queued"
-              ? localQueuedTurnItem({
-                  clientMessageId: input.clientMessageId,
-                  createdAt
-                })
-              : localThinkingTurnItem({
-                  clientMessageId: input.clientMessageId,
-                  createdAt
-                })
+            localThinkingTurnItem({
+              clientMessageId: input.clientMessageId,
+              createdAt
+            })
           ]
         : [])
     ],
@@ -1945,6 +1974,10 @@ export function markOptimisticMessageSent(
   }
   const turnId = input?.turnId ?? outboxEntry?.turnId ?? pendingTurnIdForClientMessage(clientMessageId);
   const conversation = next.conversations[canonicalConversationKey(next, finalKey)];
+  const wasQueued = outboxEntry?.status === "queued";
+  if (wasQueued) {
+    next = removePendingTurnForClientMessage(next, clientMessageId);
+  }
   const existingTurn = conversation?.turns[turnId];
   if (outboxEntry?.status === "complete" || existingTurn?.status === "completed") {
     return markOptimisticMessageComplete(next, clientMessageId, input);
@@ -2015,33 +2048,7 @@ export function markOptimisticMessageQueued(
     threadId: input?.threadId
   });
   const finalKey = canonicalConversationKey(next, input?.threadId ?? input?.sessionId ?? key);
-  const turnId = outboxEntry?.turnId ?? pendingTurnIdForClientMessage(clientMessageId);
-  const conversation = next.conversations[canonicalConversationKey(next, finalKey)];
-  const existingUser = findTurnItemByClientMessageId(
-    conversation?.turns[turnId],
-    clientMessageId,
-    "user"
-  );
-  next = upsertLocalTurnItems(next, {
-    key: finalKey,
-    sessionId: input?.sessionId ?? outboxEntry?.sessionId,
-    threadId: input?.threadId ?? outboxEntry?.threadId,
-    turnId,
-    items: [
-      localUserTurnItem({
-        id: input?.eventId ?? existingUser?.id,
-        clientMessageId,
-        text: existingUser?.text ?? outboxEntry?.text ?? "",
-        status: "queued",
-        createdAt: existingUser?.createdAt ?? outboxEntry?.createdAt ?? Date.now()
-      }),
-      localQueuedTurnItem({
-        clientMessageId,
-        createdAt: outboxEntry?.createdAt ?? Date.now()
-      })
-    ],
-    turnStatus: "inProgress"
-  });
+  next = removePendingTurnForClientMessage(next, clientMessageId);
   next = updateOutboxEntry(next, clientMessageId, (entry) => ({
     ...entry,
     conversationKey: finalKey,
