@@ -1452,13 +1452,10 @@ export function useWebConsoleController() {
           workspace.codexHistory.find((item) => item.id === historyThreadId) ??
           null;
         const cacheKey = entry ? codexHistoryKey(entry) : `${historyThreadId}::${session.cwd}`;
-        const cachedPage = historyPageCacheRef.current.get(cacheKey)?.page;
-        const page =
-          cachedPage ??
-          (await getCodexHistoryTurns(workspace.connection, {
-            id: historyThreadId,
-            cwd: entry?.cwd ?? session.cwd
-          }));
+        const page = await getCodexHistoryTurns(workspace.connection, {
+          id: historyThreadId,
+          cwd: entry?.cwd ?? session.cwd
+        });
         writeFreshHistoryPageCache(cacheKey, page);
         patchDeviceWorkspace(deviceId, (currentWorkspace) => {
           const hasHistory = selectSessionHistoryHydrated(currentWorkspace, sessionId);
