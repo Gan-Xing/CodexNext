@@ -7,6 +7,7 @@ ENV_DIR="/etc/codexnext"
 INSTALL_USER="${SUDO_USER:-$USER}"
 ROLES=(control web agent)
 START_AFTER_INSTALL=1
+RUNTIME_PATH=""
 
 usage() {
   cat <<'EOF'
@@ -104,13 +105,43 @@ install_unit() {
   rm -f "$rendered"
 }
 
+install_runtime_override() {
+  local role="$1"
+  local override_dir="/etc/systemd/system/${SERVICE_PREFIX}-${role}.service.d"
+  local target="$override_dir/10-runtime-path.conf"
+  local rendered
+  rendered="$(mktemp)"
+  cat >"$rendered" <<EOF
+[Service]
+Environment=PATH=$RUNTIME_PATH
+EOF
+  $sudo_cmd mkdir -p "$override_dir"
+  $sudo_cmd install -m 644 "$rendered" "$target"
+  rm -f "$rendered"
+}
+
 $sudo_cmd mkdir -p "$ENV_DIR"
 
 selected_units=()
+normalized_roles=()
 for role in "${ROLES[@]}"; do
   normalized_role="$(normalize_role "$role")"
+  normalized_roles+=("$normalized_role")
+done
+
+detect_args=(--print-runtime-path --user "$INSTALL_USER")
+for role in "${normalized_roles[@]}"; do
+  if [[ "$role" == "agent" ]]; then
+    detect_args+=(--require-node-sqlite)
+    break
+  fi
+done
+RUNTIME_PATH="$("$ROOT_DIR/scripts/ops/detect-node-bin.sh" "${detect_args[@]}")"
+
+for normalized_role in "${normalized_roles[@]}"; do
   install_env_file "$normalized_role"
   install_unit "$normalized_role"
+  install_runtime_override "$normalized_role"
   selected_units+=("${SERVICE_PREFIX}-${normalized_role}.service")
 done
 
@@ -126,6 +157,7 @@ Installed roles: ${ROLES[*]}
 User: $INSTALL_USER
 Repo root: $ROOT_DIR
 Env dir: $ENV_DIR
+Runtime PATH: $RUNTIME_PATH
 
 Check status with:
   sudo systemctl status ${selected_units[*]}

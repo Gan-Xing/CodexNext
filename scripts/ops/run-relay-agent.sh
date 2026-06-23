@@ -3,6 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+if ! "$ROOT_DIR/scripts/ops/detect-node-bin.sh" --check-current --require-node-sqlite >/dev/null 2>&1; then
+  export PATH="$("$ROOT_DIR/scripts/ops/detect-node-bin.sh" --print-runtime-path --require-node-sqlite)"
+fi
+
 : "${CODEXNEXT_RELAY_URL:?CODEXNEXT_RELAY_URL is required}"
 
 DEVICE_NAME="${CODEXNEXT_DEVICE_NAME:-}"

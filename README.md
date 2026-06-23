@@ -314,7 +314,9 @@ macOS agent install example:
 ./scripts/ops/install-macos-agent.sh
 ```
 
-The agent startup helpers auto-discover a usable `codex` binary from common locations such as `PATH`, `~/.local/bin`, `~/bin`, and `~/.nvm/versions/node/*/bin`.
+The Linux `systemd` installer auto-detects a compatible Node + pnpm runtime path for the service user and writes it into the installed units. If `agent` is among the selected roles, the detected runtime must also support `node:sqlite`.
+
+The startup helpers also self-heal PATH on launch: if the current environment does not provide a compatible Node + pnpm runtime, they probe common locations such as `PATH`, `~/.local/share/pnpm`, `~/.local/bin`, `~/bin`, and `~/.nvm/versions/node/*/bin`. The agent helper continues to auto-discover a usable `codex` binary from common locations such as `PATH`, `~/.local/bin`, `~/bin`, and `~/.nvm/versions/node/*/bin`.
 
 ## Diagnostics
 

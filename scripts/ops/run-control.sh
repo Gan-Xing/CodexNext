@@ -3,6 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+if ! "$ROOT_DIR/scripts/ops/detect-node-bin.sh" --check-current >/dev/null 2>&1; then
+  export PATH="$("$ROOT_DIR/scripts/ops/detect-node-bin.sh" --print-runtime-path)"
+fi
+
 : "${CODEXNEXT_OWNER_TOKEN:?CODEXNEXT_OWNER_TOKEN is required}"
 
 HOST="${CODEXNEXT_CONTROL_HOST:-0.0.0.0}"

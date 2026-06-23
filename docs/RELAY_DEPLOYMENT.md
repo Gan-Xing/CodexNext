@@ -106,6 +106,8 @@ Linux `systemd` helper:
 ./scripts/ops/install-linux-services.sh --roles control,web
 ```
 
+The Linux installer auto-detects a compatible Node + pnpm runtime path for the selected service user and writes it into a `systemd` drop-in. If `agent` is among the selected roles, the detected runtime must also support `node:sqlite`.
+
 macOS `launchd` helper for the outbound relay agent:
 
 ```bash
@@ -132,6 +134,7 @@ Templates and scripts:
 - [scripts/ops/run-web.sh](../scripts/ops/run-web.sh)
 - [scripts/ops/run-relay-agent.sh](../scripts/ops/run-relay-agent.sh)
 - [scripts/ops/build-web.sh](../scripts/ops/build-web.sh)
+- [scripts/ops/detect-node-bin.sh](../scripts/ops/detect-node-bin.sh)
 - [scripts/test-winsw-templates.mjs](../scripts/test-winsw-templates.mjs)
 
 ## Deploy Order
@@ -165,6 +168,8 @@ export CODEXNEXT_WEB_SESSION_SECRET=<long-random-session-secret>
 ```
 
 5. Start services through `systemd`, `launchd`, or your process manager.
+
+The shipped `run-control.sh`, `run-web.sh`, and `run-relay-agent.sh` startup helpers also self-heal PATH on launch. If the current environment does not already provide a compatible Node + pnpm runtime, they probe the same common locations and switch to a compatible runtime before invoking `pnpm`. The agent startup path additionally requires `node:sqlite`.
 
 6. Pair each controllable machine:
 
