@@ -256,6 +256,7 @@ export function makeHistoryPreviewSession(
     cwd: entry.cwd,
     title: entry.title,
     model: null,
+    serviceTier: null,
     reasoningEffort: null,
     permissionMode: "request-approval",
     approvalPolicy: "on-request",
@@ -273,6 +274,7 @@ export function makePendingSession(input: {
   cwd: string;
   model?: string | null;
   permissionMode: LocalPermissionMode;
+  serviceTier?: string | null;
   reasoningEffort?: LocalReasoningEffort | null;
 }): LocalSessionSummary {
   const now = Date.now();
@@ -283,6 +285,7 @@ export function makePendingSession(input: {
     cwd: input.cwd,
     title: null,
     model: input.model ?? null,
+    serviceTier: input.serviceTier ?? null,
     reasoningEffort: input.reasoningEffort ?? null,
     permissionMode: input.permissionMode,
     approvalPolicy: null,

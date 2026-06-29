@@ -33,6 +33,11 @@ import {
   webErrorSummary
 } from "../../lib/dev-trace";
 import {
+  FAST_SERVICE_TIER,
+  resolveSubmittedSlashCommand,
+  type SlashCommandId
+} from "../../lib/slash-commands";
+import {
   requestRelaySession,
   resolveDefaultRelayUrl
 } from "../../lib/relay";
@@ -280,6 +285,7 @@ interface PendingSessionQueuedMessage {
   clientMessageId: string;
   context: SubmitTraceContext;
   message: string;
+  serviceTier?: string | null;
   submitMode?: LocalMessageSubmitMode | undefined;
 }
 
@@ -551,6 +557,7 @@ export function useWebConsoleController() {
   const [deviceWorkspaces, setDeviceWorkspaces] = useState<Record<string, DeviceWorkspace>>({});
   const [localStorageReady, setLocalStorageReady] = useState(false);
   const [model, setModel] = useState("gpt-5.5");
+  const [serviceTier, setServiceTier] = useState<string | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<LocalReasoningEffort>("xhigh");
   const [permissionMode, setPermissionMode] = useState<LocalPermissionMode>("request-approval");
   const [draft, setDraft] = useState("");
@@ -1322,6 +1329,7 @@ export function useWebConsoleController() {
           const result = await sendSessionMessage(input.connection, input.sessionId, {
             text: queuedMessage.message,
             clientMessageId: queuedMessage.clientMessageId,
+            serviceTier: queuedMessage.serviceTier ?? serviceTier,
             submitMode: pendingSubmitMode
           });
           if (result.mode === "queued") {
@@ -3781,6 +3789,7 @@ export function useWebConsoleController() {
         id: entry.id,
         cwd: entry.cwd,
         model,
+        serviceTier,
         permissionMode,
         reasoningEffort
       });
@@ -3841,7 +3850,8 @@ export function useWebConsoleController() {
       }
       const sent = await sendSessionMessage(connection, result.session.sessionId, {
         text: message,
-        clientMessageId
+        clientMessageId,
+        serviceTier
       });
       if (sent.mode === "queued") {
         throw new Error("恢复会话后消息被排队，请稍后重试。");
@@ -3949,6 +3959,7 @@ export function useWebConsoleController() {
         id: entry.id,
         cwd: entry.cwd,
         model,
+        serviceTier,
         permissionMode,
         reasoningEffort
       });
@@ -4051,6 +4062,25 @@ export function useWebConsoleController() {
     }
   }
 
+  function runSlashCommand(commandId: SlashCommandId) {
+    if (commandId !== "fast") {
+      return;
+    }
+
+    setServiceTier(FAST_SERVICE_TIER);
+    setDraft("");
+    setActiveMenu(null);
+    setError(null);
+    webDevTrace("console.slash_command.applied", {
+      commandId,
+      serviceTier: FAST_SERVICE_TIER
+    });
+  }
+
+  function clearServiceTier() {
+    setServiceTier(null);
+  }
+
   async function submitComposer(submitMode?: LocalMessageSubmitMode) {
     const submitStartedAt = Date.now();
     const submitTraceId = createClientId("submit");
@@ -4078,6 +4108,16 @@ export function useWebConsoleController() {
         reason: "empty_text",
         durationMs: traceDurationMs(submitStartedAt)
       });
+      return;
+    }
+    const submittedSlashCommand = resolveSubmittedSlashCommand(draft);
+    if (submittedSlashCommand) {
+      webDevTrace("console.submit.slash_command", {
+        submitTraceId,
+        commandId: submittedSlashCommand.id,
+        durationMs: traceDurationMs(submitStartedAt)
+      });
+      runSlashCommand(submittedSlashCommand.id);
       return;
     }
     if (!connected) {
@@ -4242,6 +4282,7 @@ export function useWebConsoleController() {
           cwd: cwd.trim(),
           model,
           permissionMode,
+          serviceTier,
           reasoningEffort
         });
         patchActiveWorkspace((workspace) =>
@@ -4272,6 +4313,7 @@ export function useWebConsoleController() {
         const result = await createSession(connection, {
           cwd: cwd.trim(),
           model,
+          serviceTier,
           reasoningEffort,
           permissionMode,
           tokenBudget: initialTokenBudget ? Number(initialTokenBudget) : null,
@@ -4403,6 +4445,7 @@ export function useWebConsoleController() {
               clientMessageId,
               createdAt: submitStartedAt,
               order: queuedMessages.length + 1,
+              serviceTier,
               text: message,
               updatedAt: submitStartedAt
             }
@@ -4418,6 +4461,7 @@ export function useWebConsoleController() {
               clientMessageId,
               createdAt: submitStartedAt,
               order: queuedMessages.length + 1,
+              serviceTier,
               text: message,
               updatedAt: submitStartedAt
             }
@@ -4440,7 +4484,8 @@ export function useWebConsoleController() {
         enqueuePendingSessionMessage(pendingCurrentSessionId, {
           clientMessageId,
           context: submitContext,
-          message
+          message,
+          serviceTier
         });
         webDevTrace("console.submit.message.end", {
           submitTraceId,
@@ -4501,6 +4546,7 @@ export function useWebConsoleController() {
         const result = await sendSessionMessage(connection, realCurrentSession.sessionId, {
           text: message,
           clientMessageId,
+          serviceTier,
           ...(activeSubmitMode ? { submitMode: activeSubmitMode } : {})
         });
         if (result.mode === "queued") {
@@ -4582,6 +4628,7 @@ export function useWebConsoleController() {
         cwd: cwd.trim(),
         model,
         permissionMode,
+        serviceTier,
         reasoningEffort
       });
       patchActiveWorkspace((workspace) =>
@@ -4613,6 +4660,7 @@ export function useWebConsoleController() {
       const result = await createSession(connection, {
         cwd: cwd.trim(),
         model,
+        serviceTier,
         reasoningEffort,
         permissionMode,
         tokenBudget: initialTokenBudget ? Number(initialTokenBudget) : null,
@@ -5194,6 +5242,7 @@ export function useWebConsoleController() {
     handleQueuedMessageReorder,
     handleQueuedMessageSteer,
     handleQueuedMessagesClear,
+    clearServiceTier,
     handleResumeGoal,
     handleSetGoal,
     handleTogglePlanMode,
@@ -5225,9 +5274,11 @@ export function useWebConsoleController() {
     relayEnabled,
     relayConnectionInfo,
     resetSidebarWidth,
+    runSlashCommand,
     savedDevices,
     refreshRelayDevices,
     startProjectSession,
+    serviceTier,
     selectCwd,
     selectHistory,
     selectSession,

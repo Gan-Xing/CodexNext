@@ -507,6 +507,9 @@ function sanitizeSessionSummaryForStorage(
     cwd,
     ...(typeof value.title === "string" ? { title: value.title } : {}),
     ...(typeof value.model === "string" ? { model: value.model } : {}),
+    ...(typeof value.serviceTier === "string"
+      ? { serviceTier: value.serviceTier }
+      : { serviceTier: null }),
     ...(isReasoningEffort(value.reasoningEffort)
       ? { reasoningEffort: value.reasoningEffort }
       : { reasoningEffort: null }),
@@ -546,6 +549,9 @@ function sanitizeQueuedMessages(value: unknown): LocalQueuedMessage[] {
         clientMessageId,
         createdAt,
         order: Math.max(1, Math.trunc(finiteTimestamp(item.order) ?? index + 1)),
+        ...(typeof item.serviceTier === "string"
+          ? { serviceTier: item.serviceTier }
+          : {}),
         text,
         updatedAt: finiteTimestamp(item.updatedAt) ?? createdAt
       };

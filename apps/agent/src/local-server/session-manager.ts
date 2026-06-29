@@ -96,6 +96,7 @@ interface LocalSession {
   cwd: string;
   title?: string | null;
   model?: string | null;
+  serviceTier?: string | null;
   reasoningEffort?: LocalReasoningEffort | null;
   permissionMode: LocalPermissionMode;
   approvalPolicy: AskForApproval | null;
@@ -124,6 +125,7 @@ interface PendingUserInputRecord {
 interface QueuedMessageRecord {
   clientMessageId: string;
   createdAt: number;
+  serviceTier?: string | null;
   text: string;
   updatedAt: number;
 }
@@ -412,6 +414,7 @@ export class SessionManager {
       sessionId,
       cwd,
       model: input.model ?? null,
+      serviceTier: input.serviceTier ?? null,
       reasoningEffort: input.reasoningEffort ?? null,
       permissionMode: input.permissionMode,
       hasInitialMessage: Boolean(input.initialMessage?.trim()),
@@ -460,12 +463,14 @@ export class SessionManager {
         approvalPolicy: permissions.approvalPolicy,
         approvalsReviewer: permissions.approvalsReviewer,
         sandbox: permissions.sandbox,
-        model: input.model ?? null
+        model: input.model ?? null,
+        serviceTier: input.serviceTier ?? null
       });
       const thread = await client.threadStart({
         cwd,
         runtimeWorkspaceRoots: [cwd],
         model: input.model ?? null,
+        serviceTier: input.serviceTier ?? null,
         ...permissions.threadParams,
         ephemeral: false,
         serviceName: "codexnext"
@@ -488,6 +493,7 @@ export class SessionManager {
           deriveCodexGeneratedTitle(initialMessage) ??
           deriveCodexConversationTitle(asCodexThread(thread.thread, cwd)),
         model: input.model ?? null,
+        serviceTier: thread.serviceTier ?? input.serviceTier ?? null,
         reasoningEffort: input.reasoningEffort ?? null,
         permissionMode: permissions.permissionMode,
         approvalPolicy: permissions.approvalPolicy,
@@ -546,7 +552,8 @@ export class SessionManager {
           });
           await this.startTurn(sessionId, {
             text: initialMessage,
-            clientMessageId: input.clientMessageId
+            clientMessageId: input.clientMessageId,
+            serviceTier: input.serviceTier ?? null
           });
           devTrace("session.start.initial_message.end", {
             sessionId,
@@ -640,6 +647,7 @@ export class SessionManager {
       threadId: input.threadId,
       cwd,
       model: input.model ?? null,
+      serviceTier: input.serviceTier ?? null,
       reasoningEffort: input.reasoningEffort ?? null,
       permissionMode: input.permissionMode
     });
@@ -689,6 +697,7 @@ export class SessionManager {
           itemsView: "summary" as const
         },
         model: input.model ?? null,
+        serviceTier: input.serviceTier ?? null,
         ...permissions.threadParams
       };
       let thread: ThreadResumeResponse;
@@ -701,7 +710,8 @@ export class SessionManager {
           approvalPolicy: permissions.approvalPolicy,
           approvalsReviewer: permissions.approvalsReviewer,
           sandbox: permissions.sandbox,
-          model: input.model ?? null
+          model: input.model ?? null,
+          serviceTier: input.serviceTier ?? null
         });
         thread = await client.threadResume(resumeParams);
       } catch (error) {
@@ -741,6 +751,7 @@ export class SessionManager {
         cwd: extractThreadCwd(thread) ?? cwd,
         title: sessionTitle,
         model: thread.model ?? input.model ?? null,
+        serviceTier: thread.serviceTier ?? input.serviceTier ?? null,
         reasoningEffort: input.reasoningEffort ?? null,
         permissionMode: permissions.permissionMode,
         approvalPolicy: permissions.approvalPolicy,
@@ -809,10 +820,14 @@ export class SessionManager {
     devTrace("session.message.begin", {
       sessionId,
       clientMessageId: input.clientMessageId,
-      textLength: input.text.length
+      textLength: input.text.length,
+      serviceTier: input.serviceTier ?? null
     });
     try {
       const session = this.requireSession(sessionId);
+      if ("serviceTier" in input && input.submitMode !== "queue") {
+        session.serviceTier = input.serviceTier ?? null;
+      }
       if (session.activeTurnId) {
         if (input.submitMode === "queue") {
           return this.queueMessage(session, input, startedAt);
@@ -871,6 +886,7 @@ export class SessionManager {
     const queued: QueuedMessageRecord = {
       clientMessageId,
       createdAt,
+      serviceTier: input.serviceTier ?? null,
       text: input.text,
       updatedAt: createdAt
     };
@@ -921,7 +937,8 @@ export class SessionManager {
           try {
             const turnId = await this.startTurn(session.sessionId, {
               text: next.text,
-              clientMessageId: next.clientMessageId
+              clientMessageId: next.clientMessageId,
+              serviceTier: next.serviceTier ?? session.serviceTier ?? null
             });
             devTrace("session.queue.drain_started", {
               sessionId: session.sessionId,
@@ -1018,7 +1035,8 @@ export class SessionManager {
     if (!session.activeTurnId) {
       const turnId = await this.startTurn(session.sessionId, {
         text: queued.text,
-        clientMessageId: queued.clientMessageId
+        clientMessageId: queued.clientMessageId,
+        serviceTier: queued.serviceTier ?? session.serviceTier ?? null
       });
       devTrace("session.queue.action.end", {
         sessionId,
@@ -1033,6 +1051,7 @@ export class SessionManager {
     await this.steerTurn(session.sessionId, session.activeTurnId, {
       text: queued.text,
       clientMessageId: queued.clientMessageId,
+      serviceTier: queued.serviceTier ?? session.serviceTier ?? null,
       submitMode: "steer"
     });
     devTrace("session.queue.action.end", {
@@ -1057,6 +1076,9 @@ export class SessionManager {
       textLength: input.text.length
     });
     const session = this.requireSession(sessionId);
+    if ("serviceTier" in input) {
+      session.serviceTier = input.serviceTier ?? null;
+    }
     if (session.activeTurnId) {
       devTrace("session.turn.start.rejected", {
         sessionId,
@@ -1076,7 +1098,8 @@ export class SessionManager {
       threadId: session.threadId,
       clientMessageId: input.clientMessageId,
       textLength: input.text.length,
-      model: session.model ?? null
+      model: session.model ?? null,
+      serviceTier: session.serviceTier ?? null
     });
     recordUserInput(session, {
       text: input.text,
@@ -1091,6 +1114,7 @@ export class SessionManager {
         clientMessageId: input.clientMessageId,
         cwd: session.cwd,
         model: session.model ?? null,
+        serviceTier: session.serviceTier ?? null,
         approvalPolicy: session.approvalPolicy,
         approvalsReviewer: session.approvalsReviewer
       });
@@ -1100,6 +1124,7 @@ export class SessionManager {
         cwd: session.cwd,
         runtimeWorkspaceRoots: [session.cwd],
         model: session.model ?? null,
+        serviceTier: session.serviceTier ?? null,
         ...(session.approvalPolicy ? { approvalPolicy: session.approvalPolicy } : {}),
         ...(session.approvalsReviewer
           ? { approvalsReviewer: session.approvalsReviewer }
@@ -2425,12 +2450,14 @@ function toSummary(session: LocalSession): LocalSessionSummary {
       createdAt: message.createdAt,
       order: index + 1,
       text: message.text,
-      updatedAt: message.updatedAt
+      updatedAt: message.updatedAt,
+      ...(message.serviceTier ? { serviceTier: message.serviceTier } : {})
     })),
     status: session.status,
     cwd: session.cwd,
     title: session.title ?? null,
     model: session.model ?? null,
+    serviceTier: session.serviceTier ?? null,
     reasoningEffort: session.reasoningEffort ?? null,
     permissionMode: session.permissionMode,
     approvalPolicy: session.approvalPolicy,
@@ -2451,6 +2478,7 @@ function localSessionTraceFields(session: LocalSession): Record<string, unknown>
     status: session.status,
     cwd: session.cwd,
     model: session.model ?? null,
+    serviceTier: session.serviceTier ?? null,
     reasoningEffort: session.reasoningEffort ?? null,
     permissionMode: session.permissionMode,
     approvalPolicy: session.approvalPolicy,
@@ -2473,6 +2501,7 @@ function sessionSummaryTraceFields(
     status: session.status,
     cwd: session.cwd,
     model: session.model ?? null,
+    serviceTier: session.serviceTier ?? null,
     reasoningEffort: session.reasoningEffort ?? null,
     permissionMode: session.permissionMode,
     hasGoal: Boolean(session.goal),

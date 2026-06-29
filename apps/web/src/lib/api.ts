@@ -272,6 +272,7 @@ export function resumeCodexHistory(
     id: string;
     cwd?: string;
     model?: string | null;
+    serviceTier?: string | null;
     permissionMode: LocalPermissionMode;
     reasoningEffort?: LocalReasoningEffort | null;
   }

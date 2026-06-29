@@ -150,6 +150,7 @@ export function WebConsole() {
     handleActivateGoalComposer,
     handleAttachFiles,
     handleClearGoal,
+    clearServiceTier,
     handleConnect,
     handleDismissComposerGoal,
     dismissMigrationNotice,
@@ -181,6 +182,7 @@ export function WebConsole() {
     projectGroups,
     reasoningEffort,
     resetSidebarWidth,
+    runSlashCommand,
     relayEnabled,
     relayConnectionInfo,
     refreshRelayDevices,
@@ -189,6 +191,7 @@ export function WebConsole() {
     archiveProject,
     removeProject,
     savedDevices,
+    serviceTier,
     startProjectSession,
     selectCwd,
     selectHistory,
@@ -686,9 +689,11 @@ export function WebConsole() {
             selectedModel={selectedModel}
             selectedPermission={selectedPermission}
             selectedReasoning={selectedReasoning}
+            serviceTier={serviceTier}
             onActivateGoalMode={handleActivateGoalComposer}
             onAttachFiles={(files) => void handleAttachFiles(files)}
             onClearGoal={() => void handleClearGoal()}
+            onClearServiceTier={clearServiceTier}
             onCloseMenu={() => setActiveMenu(null)}
             onDismissGoalMode={handleDismissComposerGoal}
             onDraftChange={setDraft}
@@ -703,6 +708,7 @@ export function WebConsole() {
             onSelectModel={setModel}
             onSelectPermission={setPermissionMode}
             onSelectReasoning={setReasoningEffort}
+            onRunSlashCommand={runSlashCommand}
             onSubmit={() => void submitComposer()}
             onSubmitGuide={() => void submitComposer("steer")}
             onTogglePlanMode={handleTogglePlanMode}

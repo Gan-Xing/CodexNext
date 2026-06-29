@@ -588,6 +588,44 @@ describe("SessionManager messages", () => {
     expect(fake.turnStartParams[0]).toMatchObject({ model: "gpt-5.5" });
   });
 
+  it("keeps fast service tier separate from model and reasoning", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    const session = await manager.startSession({
+      cwd: process.cwd(),
+      permissionMode: "request-approval",
+      model: "gpt-5.5",
+      reasoningEffort: "xhigh",
+      serviceTier: "priority"
+    });
+    await manager.startTurn(session.sessionId, {
+      text: "hello",
+      serviceTier: "priority"
+    });
+
+    expect(session).toMatchObject({
+      model: "gpt-5.5",
+      reasoningEffort: "xhigh",
+      serviceTier: "priority"
+    });
+    expect(fake.threadStartParams[0]).toMatchObject({
+      model: "gpt-5.5",
+      serviceTier: "priority"
+    });
+    expect(fake.turnStartParams[0]).toMatchObject({
+      model: "gpt-5.5",
+      serviceTier: "priority"
+    });
+  });
+
   it("stores app-server semantic item and reasoning events", async () => {
     const store = new EventStore();
     const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
@@ -1354,7 +1392,8 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
   ) => {
     this.threadStartParams.push(params);
     return {
-      thread: { id: "thread_1" }
+      thread: { id: "thread_1" },
+      serviceTier: params?.serviceTier ?? null
     };
   };
 
@@ -1372,6 +1411,7 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
       thread: { id: params.threadId },
       model: params.model ?? "gpt-5.5",
       modelProvider: "openai",
+      serviceTier: params.serviceTier ?? null,
       cwd: params.cwd ?? process.cwd(),
       initialTurnsPage:
         params.initialTurnsPage == null ? null : this.threadTurnsListResponse

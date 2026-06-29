@@ -3,6 +3,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -15,6 +16,13 @@ import type {
   LocalReasoningEffort
 } from "../../lib/types";
 import type { AttachmentDraft } from "../../features/chat/chat-state";
+import {
+  FAST_SERVICE_TIER,
+  filterSlashCommands,
+  resolveSlashCommandContext,
+  type SlashCommand,
+  type SlashCommandId
+} from "../../lib/slash-commands";
 import { CodexIcon, type CodexIconName } from "../DesignLab";
 
 interface ReasoningOption {
@@ -56,9 +64,11 @@ export function LiveComposer(props: {
   selectedModel: ModelOption;
   selectedPermission: PermissionOption;
   selectedReasoning: ReasoningOption;
+  serviceTier: string | null;
   onActivateGoalMode: () => void;
   onAttachFiles: (files: FileList | null) => void;
   onClearGoal: () => void;
+  onClearServiceTier: () => void;
   onCloseMenu: () => void;
   onDismissGoalMode: () => void;
   onDraftChange: (value: string) => void;
@@ -73,6 +83,7 @@ export function LiveComposer(props: {
   onSelectModel: (value: string) => void;
   onSelectPermission: (value: LocalPermissionMode) => void;
   onSelectReasoning: (value: LocalReasoningEffort) => void;
+  onRunSlashCommand: (commandId: SlashCommandId) => void;
   onSubmit: () => void;
   onSubmitGuide: () => void;
   onTogglePlanMode: () => void;
@@ -88,11 +99,16 @@ export function LiveComposer(props: {
   const [editingQueuedId, setEditingQueuedId] = useState<string | null>(null);
   const [editingQueuedText, setEditingQueuedText] = useState("");
   const [queuedMenuId, setQueuedMenuId] = useState<string | null>(null);
+  const [slashCursor, setSlashCursor] = useState(props.draft.length);
+  const [slashDismissedKey, setSlashDismissedKey] = useState<string | null>(null);
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
+  const [textareaFocused, setTextareaFocused] = useState(false);
   const composerDisabled = Boolean(props.disabledReason);
   const hasDraft = props.draft.trim().length > 0;
   const showInterrupt = props.activeTurn && !hasDraft && !composerDisabled;
   const showGuideSubmit = props.activeTurn && hasDraft && !composerDisabled && !props.goalMode;
   const showGoalPill = props.goalMode || props.hasGoal;
+  const showFastPill = props.serviceTier === FAST_SERVICE_TIER;
   const showQueuedMessages = props.queuedMessages.length > 0;
   const placeholder = props.disabledReason
     ? props.disabledReason
@@ -103,6 +119,22 @@ export function LiveComposer(props: {
       : props.planMode
         ? "先描述你想让我规划什么"
         : "发消息...";
+  const slashContext = resolveSlashCommandContext(props.draft, slashCursor);
+  const slashQuery = slashContext?.query ?? "";
+  const slashOptions = useMemo(
+    () => (slashContext ? filterSlashCommands(slashQuery) : []),
+    [slashContext, slashQuery]
+  );
+  const slashKey = slashContext ? `${props.draft}:${slashCursor}:${slashQuery}` : "";
+  const showSlashPopup =
+    textareaFocused &&
+    !composerDisabled &&
+    !props.activeMenu &&
+    Boolean(slashContext) &&
+    slashOptions.length > 0 &&
+    slashDismissedKey !== slashKey;
+  const selectedSlashCommand =
+    slashOptions[Math.min(slashSelectedIndex, Math.max(slashOptions.length - 1, 0))];
 
   function closeMenuAfterSelect() {
     props.onCloseMenu();
@@ -127,6 +159,20 @@ export function LiveComposer(props: {
   function selectPermission(value: LocalPermissionMode) {
     props.onSelectPermission(value);
     closeMenuAfterSelect();
+  }
+
+  function syncSlashCursor(textarea: HTMLTextAreaElement | null = textareaRef.current) {
+    setSlashCursor(textarea?.selectionStart ?? props.draft.length);
+  }
+
+  function runSlashCommand(command: SlashCommand | undefined) {
+    if (!command) {
+      return;
+    }
+    setSlashDismissedKey(null);
+    setSlashSelectedIndex(0);
+    props.onRunSlashCommand(command.id);
+    focusTextarea();
   }
 
   function openFilePicker() {
@@ -200,6 +246,14 @@ export function LiveComposer(props: {
     }
     event.preventDefault();
     action();
+  }
+
+  function handleSlashCommandPointerAction(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    command: SlashCommand
+  ) {
+    event.preventDefault();
+    runSlashCommand(command);
   }
 
   function resolveMenuStyle(menu: ComposerMenu): CSSProperties | undefined {
@@ -327,6 +381,14 @@ export function LiveComposer(props: {
     textarea.style.height = `${nextHeight}px`;
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [props.draft, props.goalMode, props.planMode]);
+
+  useEffect(() => {
+    syncSlashCursor();
+  }, [props.draft]);
+
+  useEffect(() => {
+    setSlashSelectedIndex(0);
+  }, [slashQuery, slashOptions.length]);
 
   return (
     <footer
@@ -472,8 +534,42 @@ export function LiveComposer(props: {
         name="composer_message"
         placeholder={placeholder}
         value={props.draft}
-        onChange={(event) => props.onDraftChange(event.target.value)}
+        onBlur={() => setTextareaFocused(false)}
+        onChange={(event) => {
+          setSlashDismissedKey(null);
+          props.onDraftChange(event.target.value);
+          syncSlashCursor(event.currentTarget);
+        }}
+        onClick={(event) => syncSlashCursor(event.currentTarget)}
+        onFocus={(event) => {
+          setTextareaFocused(true);
+          syncSlashCursor(event.currentTarget);
+        }}
         onKeyDown={(event) => {
+          if (showSlashPopup && !event.nativeEvent.isComposing) {
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              setSlashSelectedIndex((index) => (index + 1) % slashOptions.length);
+              return;
+            }
+            if (event.key === "ArrowUp") {
+              event.preventDefault();
+              setSlashSelectedIndex(
+                (index) => (index - 1 + slashOptions.length) % slashOptions.length
+              );
+              return;
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setSlashDismissedKey(slashKey);
+              return;
+            }
+            if (event.key === "Enter" || event.key === "Tab") {
+              event.preventDefault();
+              runSlashCommand(selectedSlashCommand);
+              return;
+            }
+          }
           if (
             !composerDisabled &&
             (event.metaKey || event.ctrlKey) &&
@@ -483,6 +579,8 @@ export function LiveComposer(props: {
             props.onSubmit();
           }
         }}
+        onKeyUp={(event) => syncSlashCursor(event.currentTarget)}
+        onSelect={(event) => syncSlashCursor(event.currentTarget)}
       />
       {props.attachments.length > 0 ? (
         <div className="cn-attachment-row">
@@ -545,6 +643,13 @@ export function LiveComposer(props: {
             onClick={activateGoalMode}
           />
         ) : null}
+        {showFastPill ? (
+          <ComposerModePill
+            icon="terminal"
+            label="Fast"
+            onClear={props.onClearServiceTier}
+          />
+        ) : null}
         {showGuideSubmit ? (
           <button
             className="cn-composer-pill cn-guide-submit-pill"
@@ -571,11 +676,50 @@ export function LiveComposer(props: {
           type="button"
           disabled={composerDisabled || (!hasDraft && !showInterrupt)}
           onClick={showInterrupt ? props.onInterrupt : props.onSubmit}
+          onPointerDown={showSlashPopup ? (event) => event.preventDefault() : undefined}
           title={props.disabledReason ?? (showInterrupt ? "打断当前运行" : props.activeTurn ? "排队发送" : "发送")}
         >
           <CodexIcon name={showInterrupt ? "stop" : "arrowUp"} />
         </button>
       </div>
+
+      {showSlashPopup ? (
+        <div
+          className="cn-popover slash cn-live-popover"
+          role="listbox"
+          aria-label="斜杠菜单"
+        >
+          {slashOptions.map((command, index) => (
+            <button
+              key={command.id}
+              className={
+                index === slashSelectedIndex
+                  ? "cn-menu-row with-icon selected"
+                  : "cn-menu-row with-icon"
+              }
+              type="button"
+              role="option"
+              aria-selected={index === slashSelectedIndex}
+              onMouseEnter={() => setSlashSelectedIndex(index)}
+              onPointerDown={(event) => handleSlashCommandPointerAction(event, command)}
+              onClick={(event) =>
+                handleMenuKeyboardClick(event, () => runSlashCommand(command))
+              }
+            >
+              <CodexIcon name="terminal" />
+              <span>
+                <strong>/{command.name} · {command.label}</strong>
+                <small>{command.description}</small>
+              </span>
+              {index === slashSelectedIndex ? (
+                <em>
+                  <CodexIcon name="check" />
+                </em>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {props.activeMenu === "plus" ? (
         <div ref={menuPanelRef} className="cn-popover plus cn-live-popover" style={menuStyle}>

@@ -2535,6 +2535,15 @@ summary {
   width: 560px;
 }
 
+.cn-live-popover.slash {
+  bottom: calc(100% + 0.5rem);
+  left: 1rem;
+  max-height: min(42dvh, 280px);
+  padding: 0.45rem;
+  right: auto;
+  width: min(420px, calc(100% - 2rem));
+}
+
 .cn-live-popover .cn-menu-column {
   flex: 0 0 auto;
   min-height: 0;
@@ -7923,6 +7932,13 @@ summary {
     overflow: hidden auto;
   }
 
+  .cn-live-popover.slash {
+    bottom: calc(100% + 0.45rem);
+    left: 0.5rem;
+    right: auto;
+    width: calc(100% - 1rem);
+  }
+
   .cn-summary-popover {
     max-height: min(72dvh, 560px);
     right: 0.75rem;
@@ -8180,6 +8196,13 @@ summary {
     bottom: 5rem;
     max-height: 60dvh;
     overflow: hidden auto;
+  }
+
+  .cn-live-console .cn-live-popover.slash {
+    bottom: calc(100% + 0.45rem);
+    left: 0.5rem;
+    right: auto;
+    width: calc(100% - 1rem);
   }
 
   .cn-live-console .cn-summary-popover {

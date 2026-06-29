@@ -319,6 +319,7 @@ export const LocalReasoningEffortSchema = z.enum([
 export interface ThreadStartParams {
   model?: string | null;
   modelProvider?: string | null;
+  serviceTier?: string | null;
   cwd?: string | null;
   runtimeWorkspaceRoots?: string[] | null;
   approvalPolicy?: AskForApproval | null;
@@ -332,6 +333,7 @@ export const ThreadStartParamsSchema = z
   .object({
     model: z.string().nullable().optional(),
     modelProvider: z.string().nullable().optional(),
+    serviceTier: z.string().nullable().optional(),
     cwd: z.string().nullable().optional(),
     runtimeWorkspaceRoots: z.array(z.string()).nullable().optional(),
     approvalPolicy: AskForApprovalSchema.nullable().optional(),
@@ -349,6 +351,10 @@ export interface ThreadStartResponse {
     cwd?: string;
     [key: string]: unknown;
   };
+  model?: string;
+  modelProvider?: string;
+  serviceTier?: string | null;
+  cwd?: string;
 }
 
 export const ThreadStartResponseSchema = z.object({
@@ -356,7 +362,11 @@ export const ThreadStartResponseSchema = z.object({
     id: z.string().min(1),
     status: z.unknown().optional(),
     cwd: z.string().optional()
-  }).passthrough()
+  }).passthrough(),
+  model: z.string().optional(),
+  modelProvider: z.string().optional(),
+  serviceTier: z.string().nullable().optional(),
+  cwd: z.string().optional()
 });
 
 export interface ThreadResumeParams {
@@ -875,6 +885,7 @@ export interface TurnStartParams {
   approvalPolicy?: AskForApproval | null;
   approvalsReviewer?: ApprovalsReviewer | null;
   model?: string | null;
+  serviceTier?: string | null;
 }
 
 export const TurnStartParamsSchema = z
@@ -885,7 +896,8 @@ export const TurnStartParamsSchema = z
     runtimeWorkspaceRoots: z.array(z.string()).nullable().optional(),
     approvalPolicy: AskForApprovalSchema.nullable().optional(),
     approvalsReviewer: ApprovalsReviewerSchema.nullable().optional(),
-    model: z.string().nullable().optional()
+    model: z.string().nullable().optional(),
+    serviceTier: z.string().nullable().optional()
   })
   .strict();
 
@@ -1374,6 +1386,7 @@ export interface LocalSessionSummary {
   cwd: string;
   title?: string | null;
   model?: string | null;
+  serviceTier?: string | null;
   reasoningEffort?: LocalReasoningEffort | null;
   permissionMode: LocalPermissionMode;
   approvalPolicy: AskForApproval | null;
@@ -1388,6 +1401,7 @@ export interface LocalQueuedMessage {
   clientMessageId: string;
   createdAt: number;
   order: number;
+  serviceTier?: string | null;
   text: string;
   updatedAt: number;
 }
@@ -1396,6 +1410,7 @@ export const LocalQueuedMessageSchema = z.object({
   clientMessageId: z.string().min(1),
   createdAt: z.number(),
   order: z.number().int().positive(),
+  serviceTier: z.string().nullable().optional(),
   text: z.string(),
   updatedAt: z.number()
 });
@@ -1410,6 +1425,7 @@ export const LocalSessionSummarySchema = z.object({
   cwd: z.string().min(1),
   title: z.string().nullable().optional(),
   model: z.string().nullable().optional(),
+  serviceTier: z.string().nullable().optional(),
   reasoningEffort: LocalReasoningEffortSchema.nullable().optional(),
   permissionMode: LocalPermissionModeSchema,
   approvalPolicy: AskForApprovalSchema.nullable(),
@@ -1447,6 +1463,7 @@ export type LocalApprovalDecision = z.infer<
 export const LocalStartSessionSchema = z.object({
   cwd: z.string().min(1),
   model: z.string().min(1).nullable().optional(),
+  serviceTier: z.string().min(1).nullable().optional(),
   permissionMode: LocalPermissionModeSchema.default("request-approval"),
   approvalPolicy: AskForApprovalSchema.nullable().optional(),
   reasoningEffort: LocalReasoningEffortSchema.nullable().optional(),
@@ -1465,6 +1482,7 @@ export const LocalResumeSessionSchema = z.object({
   cwd: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
   model: z.string().min(1).nullable().optional(),
+  serviceTier: z.string().min(1).nullable().optional(),
   permissionMode: LocalPermissionModeSchema.default("request-approval"),
   approvalPolicy: AskForApprovalSchema.nullable().optional(),
   reasoningEffort: LocalReasoningEffortSchema.nullable().optional(),
@@ -1481,6 +1499,7 @@ export type LocalMessageSubmitMode = z.infer<typeof LocalMessageSubmitModeSchema
 export const LocalSendMessageSchema = z.object({
   text: z.string().min(1),
   clientMessageId: z.string().min(1).optional(),
+  serviceTier: z.string().min(1).nullable().optional(),
   submitMode: LocalMessageSubmitModeSchema.optional()
 });
 

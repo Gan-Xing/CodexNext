@@ -353,6 +353,7 @@ describe("relay protocol schemas", () => {
     expect(
       LocalStartSessionSchema.parse({
         cwd: "/repo",
+        serviceTier: "priority",
         permissionMode: "request-approval",
         initialMessage: "hello",
         clientMessageId: "msg_1"
@@ -366,6 +367,7 @@ describe("relay protocol schemas", () => {
       LocalResumeSessionSchema.parse({
         id: "thread_1",
         cwd: "/repo",
+        serviceTier: "priority",
         permissionMode: "full-access"
       })
     ).toMatchObject({
@@ -376,7 +378,8 @@ describe("relay protocol schemas", () => {
     expect(
       LocalSendMessageSchema.parse({
         text: "continue",
-        clientMessageId: "msg_2"
+        clientMessageId: "msg_2",
+        serviceTier: "priority"
       })
     ).toMatchObject({ text: "continue" });
 
@@ -667,6 +670,7 @@ describe("relay protocol schemas", () => {
       ThreadStartParamsSchema.parse({
         cwd: "/repo",
         runtimeWorkspaceRoots: ["/repo"],
+        serviceTier: "priority",
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandbox: "workspace-write"
@@ -676,6 +680,7 @@ describe("relay protocol schemas", () => {
     expect(
       ThreadResumeParamsSchema.parse({
         threadId: "thread_1",
+        serviceTier: "priority",
         initialTurnsPage: {
           limit: 20,
           sortDirection: "desc",
@@ -737,6 +742,7 @@ describe("relay protocol schemas", () => {
     expect(
       TurnStartParamsSchema.parse({
         threadId: "thread_1",
+        serviceTier: "priority",
         input: [makeTextInput("continue")]
       })
     ).toMatchObject({ threadId: "thread_1" });
@@ -915,6 +921,7 @@ describe("relay protocol schemas", () => {
       cwd: "/repo",
       title: "Implement feature",
       model: "gpt-5",
+      serviceTier: "priority",
       reasoningEffort: "medium",
       permissionMode: "request-approval",
       approvalPolicy: "on-request",
@@ -974,9 +981,11 @@ describe("relay protocol schemas", () => {
     ).toEqual({ mode: "steer", turnId: "turn_1" });
     expect(LocalSendMessageSchema.parse({
       text: "queue this",
+      serviceTier: "priority",
       submitMode: "queue"
     })).toEqual({
       text: "queue this",
+      serviceTier: "priority",
       submitMode: "queue"
     });
     expect(
