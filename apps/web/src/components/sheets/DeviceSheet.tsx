@@ -95,6 +95,16 @@ export function DeviceSheet(props: {
   const pairCodeValue = formatRelayPairCode(relayPairCode);
   const relayPairingVisible = relayPairMode || waitingForRelayDevice;
   const relayPairCommand = relayUrl ? `codexnext pair --relay ${relayUrl}` : "";
+  const onlineDeviceCount = props.savedDevices.filter(isSavedDeviceOnline).length;
+  const deviceSummaryLabel =
+    props.savedDevices.length === 0
+      ? "暂无设备"
+      : `${props.savedDevices.length} 台设备 · ${onlineDeviceCount} 在线`;
+  const headerStatusLabel = relayPairingVisible
+    ? "配对中"
+    : draftOnline
+      ? "在线"
+      : "离线";
 
   useEffect(() => {
     if (
@@ -209,6 +219,18 @@ export function DeviceSheet(props: {
     }
   }
 
+  function isSavedDeviceOnline(device: SavedDevice): boolean {
+    const presence = props.devicePresence[device.id];
+    const connection = connectionFromSavedDevice(
+      device,
+      props.relayConnectionInfo?.accessToken ?? null
+    );
+    return Boolean(
+      presence?.status === "online" ||
+        (props.connected && connection && isSameAgentConnection(connection, props.connection))
+    );
+  }
+
   return (
     <div className="cn-overlay-panel device cn-live-overlay">
       <div
@@ -220,17 +242,34 @@ export function DeviceSheet(props: {
       >
         <div className="cn-device-sheet-header">
           <div className="cn-device-sheet-copy">
+            <span className="cn-device-sheet-kicker">设备桥接</span>
             <h2>连接设备</h2>
+            <p>{relayPairingVisible ? "通过 Relay 接入新的 Codex 运行环境" : deviceSummaryLabel}</p>
           </div>
-          <button className="cn-close-button" type="button" onClick={props.onClose}>
-            <CodexIcon name="x" />
-          </button>
+          <div className="cn-device-sheet-header-actions">
+            <div
+              className={
+                draftOnline && !relayPairingVisible
+                  ? "cn-device-sheet-state online"
+                  : "cn-device-sheet-state"
+              }
+            >
+              <span />
+              <strong>{headerStatusLabel}</strong>
+            </div>
+            <button className="cn-close-button" type="button" onClick={props.onClose}>
+              <CodexIcon name="x" />
+            </button>
+          </div>
         </div>
 
         <div className="cn-device-manager">
           <section className="cn-device-library" aria-label="已接入设备">
             <div className="cn-device-library-header">
-              <strong>设备</strong>
+              <div>
+                <strong>设备</strong>
+                <span>{deviceSummaryLabel}</span>
+              </div>
               <button
                 className="cn-add-mini-button"
                 type="button"
@@ -256,29 +295,25 @@ export function DeviceSheet(props: {
 
             <div className="cn-saved-device-list">
               {props.savedDevices.length === 0 ? (
-                <div className="cn-empty-device-list">还没有设备，先接入一台。</div>
+                <div className="cn-empty-device-list">
+                  <CodexIcon name="terminal" />
+                  <strong>没有已接入设备</strong>
+                  <span>运行配对命令后输入 6 位码。</span>
+                </div>
               ) : null}
               {props.savedDevices.map((device) => {
                 const selected = draft.selectedDeviceId === device.id && !relayPairMode;
-                const presence = props.devicePresence[device.id];
-                const online =
-                  presence?.status === "online" ||
-                  (props.connected &&
-                    connectionFromSavedDevice(
-                      device,
-                      props.relayConnectionInfo?.accessToken ?? null
-                    ) &&
-                    isSameAgentConnection(
-                      connectionFromSavedDevice(
-                        device,
-                        props.relayConnectionInfo?.accessToken ?? null
-                      )!,
-                      props.connection
-                    ));
+                const online = isSavedDeviceOnline(device);
                 return (
                   <article
                     key={device.id}
-                    className={selected ? "cn-saved-device-card selected" : "cn-saved-device-card"}
+                    className={[
+                      "cn-saved-device-card",
+                      selected ? "selected" : "",
+                      online ? "online" : "offline"
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
                   >
                     <button
                       className="cn-saved-device-main"
@@ -294,8 +329,11 @@ export function DeviceSheet(props: {
                       title={`${device.name} · ${savedDeviceAddressLabel(device)}`}
                     >
                       <span className={online ? "online" : ""} />
-                      <strong>{device.name}</strong>
-                      <small>{savedDeviceAddressLabel(device)}</small>
+                      <div className="cn-saved-device-copy">
+                        <strong>{device.name}</strong>
+                        <small>{savedDeviceAddressLabel(device)}</small>
+                      </div>
+                      <em>{online ? "在线" : "离线"}</em>
                     </button>
                     <button
                       className="cn-device-delete-button"
@@ -327,6 +365,7 @@ export function DeviceSheet(props: {
                       <small>{relayUrl ? `Relay ${relayUrl}` : "当前 relay 地址不可用"}</small>
                     </div>
                   </div>
+                  <span className="cn-device-preview-pill">Relay</span>
                 </div>
                 <div className="cn-relay-pair-flow">
                   <div className="cn-relay-pair-step">
@@ -352,20 +391,36 @@ export function DeviceSheet(props: {
                           placeholder="123-456"
                           aria-label="配对码"
                         />
-                        <button type="button" onClick={() => void lookupRelayPairing()}>
-                          查找配对码
+                        <button
+                          className="cn-secondary-button"
+                          type="button"
+                          disabled={relayPairStatus === "loading"}
+                          onClick={() => void lookupRelayPairing()}
+                        >
+                          {relayPairStatus === "loading" ? "查找中" : "查找配对码"}
                         </button>
                       </div>
                     </div>
                   </div>
                 </div>
                 {relayPairMessage ? (
-                  <p className={relayPairStatus === "error" ? "cn-relay-pair-error" : "cn-relay-pair-hint"}>
+                  <p
+                    className={
+                      relayPairStatus === "error"
+                        ? "cn-relay-pair-error"
+                        : "cn-relay-pair-hint"
+                    }
+                    role={relayPairStatus === "error" ? "alert" : "status"}
+                  >
                     {relayPairMessage}
                   </p>
                 ) : null}
                 {relayPairRequest ? (
                   <div className="cn-relay-pair-request-card">
+                    <div className="cn-relay-pair-request-title">
+                      <strong>待接入设备</strong>
+                      <span>{pairingStatusLabel(relayPairRequest.status)}</span>
+                    </div>
                     <div>
                       <span>设备</span>
                       <strong>{relayPairRequest.deviceName}</strong>
@@ -391,7 +446,7 @@ export function DeviceSheet(props: {
                     <small>{pairingExpiryLabel(relayPairRequest)}</small>
                   </div>
                 ) : null}
-                <div className="cn-device-actions sticky">
+                <div className="cn-device-actions cn-sheet-actions cn-device-sheet-actions sticky">
                   <button
                     className="cn-secondary-button"
                     type="button"
@@ -420,33 +475,50 @@ export function DeviceSheet(props: {
                     <div>
                       <strong>{draftDisplayName}</strong>
                       <small>
-                        {draftOnline ? "online" : "disconnected"}
-                        {draftPresence?.codexVersion ? ` · ${draftPresence.codexVersion}` : ""}
+                        {relaySelectedDevice
+                          ? savedDeviceAddressLabel(relaySelectedDevice)
+                          : "未选择设备"}
                       </small>
                     </div>
                   </div>
+                  <span
+                    className={
+                      draftOnline ? "cn-device-preview-pill online" : "cn-device-preview-pill"
+                    }
+                  >
+                    {draftOnline ? "在线" : "离线"}
+                  </span>
                 </div>
 
-                <label className="cn-field">
-                  <span>设备名称</span>
-                  <input
-                    value={draft.name}
-                    onChange={(event) =>
-                      setDraft((previous) => ({ ...previous, name: event.target.value }))
-                    }
-                    placeholder="给这台设备起个名字"
-                  />
-                </label>
+                <div className="cn-device-form-fields">
+                  <label className="cn-field">
+                    <span>设备名称</span>
+                    <input
+                      value={draft.name}
+                      onChange={(event) =>
+                        setDraft((previous) => ({ ...previous, name: event.target.value }))
+                      }
+                      placeholder="给这台设备起个名字"
+                    />
+                  </label>
 
-                <label className="cn-field readonly">
-                  <span>地址</span>
-                  <input value={relaySelectedDevice ? savedDeviceAddressLabel(relaySelectedDevice) : ""} readOnly />
-                </label>
+                  <label className="cn-field readonly cn-device-field-url">
+                    <span>地址</span>
+                    <input
+                      value={relaySelectedDevice ? savedDeviceAddressLabel(relaySelectedDevice) : ""}
+                      readOnly
+                    />
+                  </label>
+                </div>
 
                 <div className="cn-device-status-grid">
                   <div>
                     <span>连接状态</span>
-                    <strong>{props.connected && draftConnected ? "已连接" : props.streamStatus}</strong>
+                    <strong>
+                      {props.connected && draftConnected
+                        ? "已连接"
+                        : connectionStatusLabel(props.streamStatus)}
+                    </strong>
                   </div>
                   <div>
                     <span>Codex</span>
@@ -454,7 +526,7 @@ export function DeviceSheet(props: {
                   </div>
                 </div>
 
-                <div className="cn-device-actions sticky">
+                <div className="cn-device-actions cn-sheet-actions cn-device-sheet-actions sticky">
                   <button className="cn-secondary-button" type="button" onClick={props.onClose}>
                     取消
                   </button>
@@ -544,4 +616,23 @@ function pairingStatusLabel(status: PairingRequestView["status"]): string {
 
 function pairingExpiryLabel(request: PairingRequestView): string {
   return `有效期至 ${new Date(request.expiresAt).toLocaleString()}`;
+}
+
+function connectionStatusLabel(status: string): string {
+  switch (status.toLowerCase()) {
+    case "connected":
+    case "online":
+      return "已连接";
+    case "connecting":
+      return "连接中";
+    case "reconnecting":
+      return "重连中";
+    case "disconnected":
+    case "offline":
+      return "未连接";
+    case "error":
+      return "异常";
+    default:
+      return status;
+  }
 }
