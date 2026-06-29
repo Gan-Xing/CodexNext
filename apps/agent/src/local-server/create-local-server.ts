@@ -9,6 +9,7 @@ import type {
 } from "@codexnext/protocol";
 import {
   LocalApprovalDecisionSchema,
+  LocalProviderCatalogResponseSchema,
   LocalQueueActionSchema,
   LocalResumeSessionSchema,
   LocalSendMessageSchema,
@@ -23,6 +24,7 @@ import {
   type LocalAgentRuntime
 } from "./local-agent.js";
 import type { CodexClientFactory } from "./session-manager.js";
+import type { ProviderRuntimeManager } from "./provider-runtime-manager.js";
 
 export interface LocalServerOptions {
   host: string;
@@ -33,6 +35,7 @@ export interface LocalServerOptions {
   codexBin: string;
   eventLimit?: number;
   clientFactory?: CodexClientFactory;
+  providerRuntimeManager?: ProviderRuntimeManager;
   historySource?: "auto" | "disabled";
   historySessionsRoot?: string;
   historyStateDbPath?: string;
@@ -54,6 +57,9 @@ export function createLocalServer(options: LocalServerOptions): LocalServerHandl
     codexBin: options.codexBin,
     ...(options.eventLimit !== undefined ? { eventLimit: options.eventLimit } : {}),
     ...(options.clientFactory ? { clientFactory: options.clientFactory } : {}),
+    ...(options.providerRuntimeManager
+      ? { providerRuntimeManager: options.providerRuntimeManager }
+      : {}),
     ...(options.historySource ? { historySource: options.historySource } : {}),
     ...(options.historySessionsRoot
       ? { historySessionsRoot: options.historySessionsRoot }
@@ -121,6 +127,9 @@ async function handleRequest(
     switch (route.name) {
       case "health":
         sendJson(response, 200, await runtime.health());
+        return;
+      case "providers.catalog":
+        sendJson(response, 200, LocalProviderCatalogResponseSchema.parse(await runtime.providers()));
         return;
       case "sessions.list":
         sendJson(response, 200, await runtime.invoke(RelayMethod.SessionsList));
@@ -269,6 +278,7 @@ async function handleRequest(
 
 type Route =
   | { name: "health"; public: true; params: Record<string, never> }
+  | { name: "providers.catalog"; public: false; params: Record<string, never> }
   | { name: "directories.list"; public: false; params: Record<string, never> }
   | { name: "codex-history.list"; public: false; params: Record<string, never> }
   | { name: "codex-history.loaded"; public: false; params: Record<string, never> }
@@ -311,6 +321,9 @@ function matchRoute(method: string, pathname: string): Route | null {
 
   if (method === "GET" && pathname === "/api/health") {
     return { name: "health", public: true, params: {} };
+  }
+  if (method === "GET" && pathname === "/api/providers") {
+    return { name: "providers.catalog", public: false, params: {} };
   }
   if (method === "GET" && pathname === "/api/sessions") {
     return { name: "sessions.list", public: false, params: {} };

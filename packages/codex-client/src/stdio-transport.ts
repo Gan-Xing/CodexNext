@@ -38,7 +38,7 @@ export class StdioCodexTransport extends EventEmitter {
     });
     devTrace("stdio.spawn", {
       binary: command,
-      args,
+      args: redactCommandArgs(args),
       cwd: this.options.cwd,
       pid: this.child.pid
     });
@@ -150,4 +150,13 @@ export class StdioCodexTransport extends EventEmitter {
       }, closeGraceMs * 2);
     });
   }
+}
+
+export function redactCommandArgs(args: string[]): string[] {
+  return args.map((arg) =>
+    arg.replace(
+      /(experimental_bearer_token|api_key|apikey|token|secret|password)=((?:"[^"]*")|(?:'[^']*')|(?:[^,\s]+))/giu,
+      "$1=[redacted]"
+    )
+  );
 }

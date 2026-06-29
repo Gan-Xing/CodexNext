@@ -22,6 +22,7 @@ import {
   LocalHealthResponseSchema,
   LocalInterruptResponseSchema,
   LocalLoadedThreadsResponseSchema,
+  LocalProviderCatalogResponseSchema,
   LocalQueueActionResponseSchema,
   LocalResumeSessionResponseSchema,
   LocalSendMessageResponseSchema,
@@ -89,6 +90,16 @@ export function registerRelayRoutes(input: RelayRouteDependencies): void {
       method: RelayMethodValue.AgentHealth,
       params: undefined,
       resultSchema: LocalHealthResponseSchema,
+      timeoutMs: input.rpcTimeoutMs
+    })
+  );
+
+  input.app.get("/api/relay/devices/:deviceId/providers", async (request, reply) =>
+    handleRpcRequest(request, reply, {
+      ...input,
+      method: RelayMethodValue.ProviderCatalog,
+      params: undefined,
+      resultSchema: LocalProviderCatalogResponseSchema,
       timeoutMs: input.rpcTimeoutMs
     })
   );

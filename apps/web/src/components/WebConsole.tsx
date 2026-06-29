@@ -171,6 +171,15 @@ export function WebConsole() {
     initialGoal,
     initialTokenBudget,
     model,
+    activeModelLabel,
+    providerApiKey,
+    providerApiKeyEnv,
+    providerBaseUrl,
+    providerLabel,
+    providerModel,
+    providerModelOptions,
+    providerOptions,
+    providerProfileId,
     openDeviceSheet,
     openSummarySheet,
     openNewSessionSetup,
@@ -200,6 +209,7 @@ export function WebConsole() {
     selectedHistoryEntry,
     selectedModel,
     selectedPermission,
+    selectedProviderModel,
     selectedReasoning,
     sessionSidebarRef,
     setActiveMenu,
@@ -208,6 +218,12 @@ export function WebConsole() {
     setInitialTokenBudget,
     setModel,
     setPermissionMode,
+    setProviderApiKey,
+    setProviderApiKeyEnv,
+    setProviderBaseUrl,
+    setProviderLabel,
+    setProviderModel,
+    setProviderProfileId,
     setReasoningEffort,
     setSidebarCollapsed,
     showThreadHoverPreview,
@@ -662,7 +678,7 @@ export function WebConsole() {
               connected={connected}
               cwd={cwd}
               deviceName={deviceDisplayName}
-              modelLabel={selectedModel.label}
+              modelLabel={activeModelLabel}
               permissionLabel={selectedPermission.label}
               pinnedCount={pinnedThreadItems.length}
               projectCount={projectGroups.length}
@@ -679,15 +695,20 @@ export function WebConsole() {
             fileInputRef={fileInputRef}
             goalMode={goalComposerMode}
             hasGoal={hasCurrentGoal}
+            activeModelLabel={activeModelLabel}
             modelOptions={modelOptions}
             permissionMode={permissionMode}
             permissionOptions={permissionOptions}
             planMode={planModeEnabled}
+            providerModelOptions={providerModelOptions}
+            providerOptions={providerOptions}
+            providerProfileId={providerProfileId}
             queuedMessages={currentSession?.queuedMessages ?? []}
-            reasoningEffort={reasoningEffort}
+            reasoningEffort={currentSession?.reasoningEffort ?? reasoningEffort}
             reasoningOptions={reasoningOptions}
             selectedModel={selectedModel}
             selectedPermission={selectedPermission}
+            selectedProviderModel={selectedProviderModel}
             selectedReasoning={selectedReasoning}
             serviceTier={serviceTier}
             onActivateGoalMode={handleActivateGoalComposer}
@@ -707,6 +728,8 @@ export function WebConsole() {
             onRemoveAttachment={handleRemoveAttachment}
             onSelectModel={setModel}
             onSelectPermission={setPermissionMode}
+            onSelectProviderModel={setProviderModel}
+            onSelectProviderProfile={setProviderProfileId}
             onSelectReasoning={setReasoningEffort}
             onRunSlashCommand={runSlashCommand}
             onSubmit={() => void submitComposer()}
@@ -750,6 +773,14 @@ export function WebConsole() {
             modelOptions={modelOptions}
             permissionMode={permissionMode}
             permissionOptions={permissionOptions}
+            providerApiKey={providerApiKey}
+            providerApiKeyEnv={providerApiKeyEnv}
+            providerBaseUrl={providerBaseUrl}
+            providerLabel={providerLabel}
+            providerModel={providerModel}
+            providerModelOptions={providerModelOptions}
+            providerOptions={providerOptions}
+            providerProfileId={providerProfileId}
             reasoningEffort={reasoningEffort}
             reasoningOptions={reasoningOptions}
             streamStatus={streamStatus}
@@ -761,6 +792,12 @@ export function WebConsole() {
             onSelectCwd={selectCwd}
             onSelectModel={setModel}
             onSelectPermission={setPermissionMode}
+            onSelectProviderProfile={setProviderProfileId}
+            onProviderApiKeyChange={setProviderApiKey}
+            onProviderApiKeyEnvChange={setProviderApiKeyEnv}
+            onProviderBaseUrlChange={setProviderBaseUrl}
+            onProviderLabelChange={setProviderLabel}
+            onProviderModelChange={setProviderModel}
             onSelectReasoning={setReasoningEffort}
           />
         ) : null}

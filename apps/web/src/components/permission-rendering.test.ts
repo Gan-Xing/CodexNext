@@ -40,6 +40,10 @@ const reasoningOptions = [
   { label: "Medium", value: "medium" as const }
 ];
 
+const providerOptions = [
+  { label: "Codex 默认", preset: null, value: "" }
+];
+
 const noop = () => {};
 
 describe("rendered permission filtering", () => {
@@ -65,6 +69,14 @@ describe("rendered permission filtering", () => {
         modelOptions,
         permissionMode: "request-approval",
         permissionOptions,
+        providerApiKey: "",
+        providerApiKeyEnv: "",
+        providerBaseUrl: "",
+        providerLabel: "",
+        providerModel: "",
+        providerModelOptions: [],
+        providerOptions,
+        providerProfileId: "",
         reasoningEffort: "medium",
         reasoningOptions,
         streamStatus: "idle",
@@ -76,6 +88,12 @@ describe("rendered permission filtering", () => {
         onSelectCwd: noop,
         onSelectModel: noop,
         onSelectPermission: noop,
+        onSelectProviderProfile: noop,
+        onProviderApiKeyChange: noop,
+        onProviderApiKeyEnvChange: noop,
+        onProviderBaseUrlChange: noop,
+        onProviderLabelChange: noop,
+        onProviderModelChange: noop,
         onSelectReasoning: noop
       })
     );
@@ -102,15 +120,20 @@ describe("rendered permission filtering", () => {
         fileInputRef: createRef<HTMLInputElement>(),
         goalMode: false,
         hasGoal: false,
+        activeModelLabel: "GPT-5",
         modelOptions,
         permissionMode: "request-approval",
         permissionOptions,
         planMode: false,
+        providerModelOptions: [],
+        providerOptions,
+        providerProfileId: "",
         queuedMessages: [],
         reasoningEffort: "medium",
         reasoningOptions,
         selectedModel: modelOptions[0]!,
         selectedPermission: permissionOptions[0]!,
+        selectedProviderModel: null,
         selectedReasoning: reasoningOptions[0]!,
         serviceTier: null,
         onActivateGoalMode: noop,
@@ -130,6 +153,8 @@ describe("rendered permission filtering", () => {
         onRemoveAttachment: noop,
         onSelectModel: noop,
         onSelectPermission: noop,
+        onSelectProviderModel: noop,
+        onSelectProviderProfile: noop,
         onSelectReasoning: noop,
         onRunSlashCommand: noop,
         onSubmit: noop,

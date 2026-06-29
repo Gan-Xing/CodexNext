@@ -16,6 +16,7 @@ import type {
   LocalEvent,
   LocalHealthResponse,
   LocalLoadedThreadsResponse,
+  LocalProviderCatalogResponse,
   LocalResumeSessionResponse,
   LocalSessionSummary,
   RelayMethod,
@@ -39,6 +40,7 @@ import {
   SessionManager,
   type CodexClientFactory
 } from "./session-manager.js";
+import type { ProviderRuntimeManager } from "./provider-runtime-manager.js";
 import { devTrace, durationMs, errorSummary, payloadSummary } from "../dev-trace.js";
 
 export interface LocalAgentRuntimeOptions {
@@ -48,6 +50,7 @@ export interface LocalAgentRuntimeOptions {
   codexBin: string;
   eventLimit?: number;
   clientFactory?: CodexClientFactory;
+  providerRuntimeManager?: ProviderRuntimeManager;
   historySource?: "auto" | "disabled";
   historySessionsRoot?: string;
   historyStateDbPath?: string;
@@ -61,6 +64,7 @@ export interface LocalAgentRuntime {
   directories(path?: string): Promise<LocalDirectoryListResponse>;
   health(): Promise<LocalHealthResponse>;
   invoke(method: RelayMethod, params?: unknown): Promise<unknown>;
+  providers(): Promise<LocalProviderCatalogResponse>;
   replayEvents(after?: number): { events: LocalEvent[] };
 }
 
@@ -87,7 +91,8 @@ export function createLocalAgentRuntime(
     eventStore,
     approvalBridge,
     codexBin: options.codexBin,
-    clientFactory: options.clientFactory
+    clientFactory: options.clientFactory,
+    providerRuntimeManager: options.providerRuntimeManager
   });
 
   return {
@@ -100,11 +105,14 @@ export function createLocalAgentRuntime(
     },
     directories: (requestedPath?: string) => listDirectories(requestedPath),
     health: async () => health(options),
+    providers: async () => sessionManager.providerCatalog(),
     invoke: async (method, params) =>
       traceRuntimeInvoke(method, params, async () => {
         switch (method) {
           case RelayMethodValue.AgentHealth:
             return health(options);
+          case RelayMethodValue.ProviderCatalog:
+            return sessionManager.providerCatalog();
           case RelayMethodValue.SessionsList:
             return { sessions: sessionManager.summaries() };
           case RelayMethodValue.SessionsCreate: {

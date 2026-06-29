@@ -22,7 +22,15 @@ import { isAllowedOrigin, isAuthorized } from "../src/local-server/auth.js";
 import { ApprovalBridge } from "../src/local-server/approval-bridge.js";
 import { createLocalServer, listen } from "../src/local-server/create-local-server.js";
 import { EventStore } from "../src/local-server/event-store.js";
-import { SessionManager, type ManagedCodexClient } from "../src/local-server/session-manager.js";
+import {
+  SessionManager,
+  type CodexClientFactory,
+  type ManagedCodexClient
+} from "../src/local-server/session-manager.js";
+import type {
+  ProviderRuntimeManager,
+  ProviderRuntimeSessionState
+} from "../src/local-server/provider-runtime-manager.js";
 import { goalSmokeExitCode } from "../src/commands/goal-smoke.js";
 
 describe("local auth helpers", () => {
@@ -144,6 +152,75 @@ describe("ApprovalBridge", () => {
 });
 
 describe("SessionManager messages", () => {
+  it("injects provider runtime args when starting a provider session", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    const providerState: ProviderRuntimeSessionState = {
+      codexCliArgs: ["-c", "model_provider=\"openrouter\""],
+      model: "deepseek/deepseek-chat",
+      modelProvider: "openrouter",
+      providerProfileId: "openrouter",
+      provider: {
+        preset: "openrouter",
+        providerLabel: "openrouter",
+        providerName: "OpenRouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "deepseek/deepseek-chat",
+        profileMode: "mixed",
+        toolStrategy: "codex-local-first"
+      }
+    };
+    const providerRuntimeManager = {
+      resolveForSession: vi.fn(async () => providerState),
+      closeAll: vi.fn(async () => undefined)
+    } as unknown as ProviderRuntimeManager;
+    let clientFactoryInput: Parameters<CodexClientFactory>[0] | null = null;
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      providerRuntimeManager,
+      clientFactory: (input) => {
+        clientFactoryInput = input;
+        return fake;
+      }
+    });
+
+    const session = await manager.startSession({
+      cwd: process.cwd(),
+      model: "gpt-5.5",
+      providerProfileId: "openrouter",
+      provider: {
+        preset: "openrouter",
+        model: "deepseek/deepseek-chat",
+        apiKeyEnv: "OPENROUTER_API_KEY"
+      },
+      permissionMode: "request-approval"
+    });
+
+    expect(providerRuntimeManager.resolveForSession).toHaveBeenCalledWith({
+      model: "gpt-5.5",
+      providerProfileId: "openrouter",
+      provider: {
+        preset: "openrouter",
+        model: "deepseek/deepseek-chat",
+        apiKeyEnv: "OPENROUTER_API_KEY"
+      }
+    });
+    expect(clientFactoryInput).not.toBeNull();
+    const capturedClientFactoryInput =
+      clientFactoryInput as unknown as Parameters<CodexClientFactory>[0];
+    expect(capturedClientFactoryInput.providerCliArgs).toEqual(providerState.codexCliArgs);
+    expect(fake.threadStartParams[0]).toMatchObject({
+      model: "deepseek/deepseek-chat",
+      modelProvider: "openrouter"
+    });
+    expect(session.model).toBe("deepseek/deepseek-chat");
+    expect(session.providerProfileId).toBe("openrouter");
+    expect(session.provider?.providerLabel).toBe("openrouter");
+  });
+
   it("starts a turn when idle and steers when active", async () => {
     const store = new EventStore();
     const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });

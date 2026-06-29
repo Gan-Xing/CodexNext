@@ -7,6 +7,7 @@ import {
 } from "../devices/device-utils";
 import type {
   LocalCodexHistoryEntry,
+  LocalProviderSummary,
   LocalQueuedMessage,
   LocalSessionSummary
 } from "../../lib/types";
@@ -507,6 +508,10 @@ function sanitizeSessionSummaryForStorage(
     cwd,
     ...(typeof value.title === "string" ? { title: value.title } : {}),
     ...(typeof value.model === "string" ? { model: value.model } : {}),
+    ...(typeof value.providerProfileId === "string"
+      ? { providerProfileId: value.providerProfileId }
+      : { providerProfileId: null }),
+    provider: sanitizeProviderSummaryForStorage(value.provider),
     ...(typeof value.serviceTier === "string"
       ? { serviceTier: value.serviceTier }
       : { serviceTier: null }),
@@ -528,6 +533,54 @@ function sanitizeSessionSummaryForStorage(
     createdAt: createdAt ?? updatedAt,
     updatedAt
   };
+}
+
+function sanitizeProviderSummaryForStorage(
+  value: unknown
+): LocalProviderSummary | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const providerLabel = safeSnapshotText(record.providerLabel);
+  if (!providerLabel) {
+    return null;
+  }
+  const preset = safeSnapshotText(record.preset);
+  const profileMode = safeSnapshotText(record.profileMode);
+  return {
+    ...(isProviderPreset(preset) ? { preset } : {}),
+    providerLabel,
+    ...(safeSnapshotText(record.providerName)
+      ? { providerName: safeSnapshotText(record.providerName)! }
+      : {}),
+    ...(safeSnapshotText(record.baseUrl) ? { baseUrl: safeSnapshotText(record.baseUrl)! } : {}),
+    ...(safeSnapshotText(record.model) ? { model: safeSnapshotText(record.model)! } : {}),
+    ...(isProviderProfileMode(profileMode) ? { profileMode } : {}),
+    ...(safeSnapshotText(record.toolStrategy)
+      ? { toolStrategy: safeSnapshotText(record.toolStrategy)! }
+      : {})
+  };
+}
+
+function isProviderProfileMode(
+  value: string | null
+): value is NonNullable<LocalProviderSummary["profileMode"]> {
+  return value === "official" || value === "mixed" || value === "pure-api";
+}
+
+function isProviderPreset(
+  value: string | null
+): value is NonNullable<NonNullable<LocalSessionSummary["provider"]>["preset"]> {
+  return (
+    value === "openrouter" ||
+    value === "deepseek" ||
+    value === "dashscope-qwen" ||
+    value === "siliconflow" ||
+    value === "minimax" ||
+    value === "moonshot-kimi" ||
+    value === "custom"
+  );
 }
 
 function sanitizeQueuedMessages(value: unknown): LocalQueuedMessage[] {

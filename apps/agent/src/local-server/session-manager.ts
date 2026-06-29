@@ -17,6 +17,8 @@ import type {
   LocalQueueActionInput,
   LocalSendMessageInput,
   LocalPermissionMode,
+  LocalProviderCatalogResponse,
+  LocalProviderSummary,
   LocalResumeSessionInput,
   LocalReasoningEffort,
   LocalSessionSummary,
@@ -48,6 +50,10 @@ import {
 } from "@codexnext/protocol";
 import type { ApprovalBridge } from "./approval-bridge.js";
 import type { EventStore } from "./event-store.js";
+import {
+  ProviderRuntimeManager,
+  type ProviderRuntimeSessionState
+} from "./provider-runtime-manager.js";
 import { devTrace, durationMs, errorSummary, payloadSummary } from "../dev-trace.js";
 
 export interface ManagedCodexClient {
@@ -74,9 +80,10 @@ export interface ManagedCodexClient {
 export type CodexClientFactory = (input: {
   cwd: string;
   codexBin: string;
+  providerCliArgs?: string[] | null;
   reasoningEffort?: LocalReasoningEffort | null;
   onApprovalRequest: (request: ApprovalRequest) => Promise<ApprovalResponse>;
-}) => ManagedCodexClient;
+}) => ManagedCodexClient | Promise<ManagedCodexClient>;
 
 export interface SessionManagerOptions {
   eventStore: EventStore;
@@ -84,6 +91,7 @@ export interface SessionManagerOptions {
   codexBin: string;
   defaultTimeoutMs?: number;
   clientFactory?: CodexClientFactory | undefined;
+  providerRuntimeManager?: ProviderRuntimeManager | undefined;
 }
 
 interface LocalSession {
@@ -96,6 +104,8 @@ interface LocalSession {
   cwd: string;
   title?: string | null;
   model?: string | null;
+  providerProfileId?: string | null;
+  provider?: LocalProviderSummary | null;
   serviceTier?: string | null;
   reasoningEffort?: LocalReasoningEffort | null;
   permissionMode: LocalPermissionMode;
@@ -147,17 +157,23 @@ type ResumeSessionInput = Omit<LocalResumeSessionInput, "id" | "cwd"> & {
 export class SessionManager {
   private readonly sessions = new Map<string, LocalSession>();
   private readonly clientFactory: CodexClientFactory;
+  private readonly providerRuntimeManager: ProviderRuntimeManager;
   private metadataClientPromise: Promise<ManagedCodexClient> | null = null;
   private metadataClientQueue: Promise<void> = Promise.resolve();
 
   public constructor(private readonly options: SessionManagerOptions) {
+    this.providerRuntimeManager =
+      options.providerRuntimeManager ?? new ProviderRuntimeManager();
     this.clientFactory =
       options.clientFactory ??
       ((input) =>
         CodexAppServerClient.connectStdio(
           {
             command: input.codexBin,
-            args: appServerArgs(input.reasoningEffort),
+            args: appServerArgs({
+              providerCliArgs: input.providerCliArgs ?? null,
+              reasoningEffort: input.reasoningEffort
+            }),
             cwd: input.cwd,
             stderr: process.env.LOG_LEVEL === "debug" ? "emit" : "ignore"
           },
@@ -175,6 +191,10 @@ export class SessionManager {
       sessions: summaries.map(sessionSummaryTraceFields)
     });
     return summaries;
+  }
+
+  public providerCatalog(): Promise<LocalProviderCatalogResponse> {
+    return this.providerRuntimeManager.providerCatalog();
   }
 
   public get(sessionId: string): LocalSessionSummary {
@@ -405,6 +425,13 @@ export class SessionManager {
     const cwd = path.resolve(input.cwd);
     await assertDirectory(cwd);
     const permissions = resolvePermissions(input);
+    const providerState = await this.resolveProviderRuntime({
+      model: input.model ?? null,
+      provider: input.provider ?? null,
+      providerProfileId: input.providerProfileId ?? null
+    });
+    const effectiveModel = providerState?.model ?? input.model ?? null;
+    const effectiveModelProvider = providerState?.modelProvider ?? null;
 
     const sessionId = randomUUID();
     const now = Date.now();
@@ -413,7 +440,9 @@ export class SessionManager {
     devTrace("session.start.begin", {
       sessionId,
       cwd,
-      model: input.model ?? null,
+      model: effectiveModel,
+      providerProfileId: providerState?.providerProfileId ?? null,
+      providerLabel: providerState?.provider.providerLabel ?? null,
       serviceTier: input.serviceTier ?? null,
       reasoningEffort: input.reasoningEffort ?? null,
       permissionMode: input.permissionMode,
@@ -425,11 +454,14 @@ export class SessionManager {
       sessionId,
       cwd,
       codexBin: this.options.codexBin,
+      providerProfileId: providerState?.providerProfileId ?? null,
+      providerLabel: providerState?.provider.providerLabel ?? null,
       reasoningEffort: input.reasoningEffort ?? null
     });
-    const client = this.clientFactory({
+    const client = await this.clientFactory({
       cwd,
       codexBin: this.options.codexBin,
+      providerCliArgs: providerState?.codexCliArgs ?? null,
       reasoningEffort: input.reasoningEffort ?? null,
       onApprovalRequest: (request) =>
         this.options.approvalBridge.requestApproval({
@@ -463,13 +495,15 @@ export class SessionManager {
         approvalPolicy: permissions.approvalPolicy,
         approvalsReviewer: permissions.approvalsReviewer,
         sandbox: permissions.sandbox,
-        model: input.model ?? null,
+        model: effectiveModel,
+        modelProvider: effectiveModelProvider,
         serviceTier: input.serviceTier ?? null
       });
       const thread = await client.threadStart({
         cwd,
         runtimeWorkspaceRoots: [cwd],
-        model: input.model ?? null,
+        model: effectiveModel,
+        modelProvider: effectiveModelProvider,
         serviceTier: input.serviceTier ?? null,
         ...permissions.threadParams,
         ephemeral: false,
@@ -492,7 +526,9 @@ export class SessionManager {
         title:
           deriveCodexGeneratedTitle(initialMessage) ??
           deriveCodexConversationTitle(asCodexThread(thread.thread, cwd)),
-        model: input.model ?? null,
+        model: thread.model ?? effectiveModel,
+        providerProfileId: providerState?.providerProfileId ?? null,
+        provider: providerState?.provider ?? null,
         serviceTier: thread.serviceTier ?? input.serviceTier ?? null,
         reasoningEffort: input.reasoningEffort ?? null,
         permissionMode: permissions.permissionMode,
@@ -637,6 +673,13 @@ export class SessionManager {
     const cwd = path.resolve(input.cwd);
     await assertDirectory(cwd);
     const permissions = resolvePermissions(input);
+    const providerState = await this.resolveProviderRuntime({
+      model: input.model ?? null,
+      provider: input.provider ?? null,
+      providerProfileId: input.providerProfileId ?? null
+    });
+    const effectiveModel = providerState?.model ?? input.model ?? null;
+    const effectiveModelProvider = providerState?.modelProvider ?? null;
 
     const sessionId = randomUUID();
     const now = Date.now();
@@ -646,7 +689,9 @@ export class SessionManager {
       sessionId,
       threadId: input.threadId,
       cwd,
-      model: input.model ?? null,
+      model: effectiveModel,
+      providerProfileId: providerState?.providerProfileId ?? null,
+      providerLabel: providerState?.provider.providerLabel ?? null,
       serviceTier: input.serviceTier ?? null,
       reasoningEffort: input.reasoningEffort ?? null,
       permissionMode: input.permissionMode
@@ -656,11 +701,14 @@ export class SessionManager {
       sessionId,
       cwd,
       codexBin: this.options.codexBin,
+      providerProfileId: providerState?.providerProfileId ?? null,
+      providerLabel: providerState?.provider.providerLabel ?? null,
       reasoningEffort: input.reasoningEffort ?? null
     });
-    const client = this.clientFactory({
+    const client = await this.clientFactory({
       cwd,
       codexBin: this.options.codexBin,
+      providerCliArgs: providerState?.codexCliArgs ?? null,
       reasoningEffort: input.reasoningEffort ?? null,
       onApprovalRequest: (request) =>
         this.options.approvalBridge.requestApproval({
@@ -696,7 +744,8 @@ export class SessionManager {
           sortDirection: "desc" as const,
           itemsView: "summary" as const
         },
-        model: input.model ?? null,
+        model: effectiveModel,
+        modelProvider: effectiveModelProvider,
         serviceTier: input.serviceTier ?? null,
         ...permissions.threadParams
       };
@@ -710,7 +759,8 @@ export class SessionManager {
           approvalPolicy: permissions.approvalPolicy,
           approvalsReviewer: permissions.approvalsReviewer,
           sandbox: permissions.sandbox,
-          model: input.model ?? null,
+          model: effectiveModel,
+          modelProvider: effectiveModelProvider,
           serviceTier: input.serviceTier ?? null
         });
         thread = await client.threadResume(resumeParams);
@@ -750,7 +800,9 @@ export class SessionManager {
         status: "idle",
         cwd: extractThreadCwd(thread) ?? cwd,
         title: sessionTitle,
-        model: thread.model ?? input.model ?? null,
+        model: thread.model ?? effectiveModel,
+        providerProfileId: providerState?.providerProfileId ?? null,
+        provider: providerState?.provider ?? null,
         serviceTier: thread.serviceTier ?? input.serviceTier ?? null,
         reasoningEffort: input.reasoningEffort ?? null,
         permissionMode: permissions.permissionMode,
@@ -1434,6 +1486,7 @@ export class SessionManager {
     try {
       await Promise.all(sessions.map((session) => this.closeSession(session)));
       await this.closeMetadataClient();
+      await this.providerRuntimeManager.closeAll();
       devTrace("session.close_all.end", {
         count: sessions.length,
         durationMs: durationMs(startedAt)
@@ -1523,13 +1576,14 @@ export class SessionManager {
         cwd: os.homedir(),
         codexBin: this.options.codexBin
       });
-      const client = this.clientFactory({
-        cwd: os.homedir(),
-        codexBin: this.options.codexBin,
-        reasoningEffort: null,
-        onApprovalRequest: async () => ({ decision: "decline" })
-      });
       this.metadataClientPromise = (async () => {
+        const client = await this.clientFactory({
+          cwd: os.homedir(),
+          codexBin: this.options.codexBin,
+          providerCliArgs: null,
+          reasoningEffort: null,
+          onApprovalRequest: async () => ({ decision: "decline" })
+        });
         try {
           await client.initialize();
           devTrace("session.metadata.client.initialized_rpc", {
@@ -1554,6 +1608,33 @@ export class SessionManager {
       devTrace("session.metadata.client.reuse");
     }
     return this.metadataClientPromise;
+  }
+
+  private async resolveProviderRuntime(input: {
+    model?: string | null;
+    provider?: LocalStartSessionInput["provider"] | null;
+    providerProfileId?: string | null;
+  }): Promise<ProviderRuntimeSessionState | null> {
+    const startedAt = Date.now();
+    try {
+      const state = await this.providerRuntimeManager.resolveForSession(input);
+      if (state) {
+        devTrace("session.provider.resolve.end", {
+          providerProfileId: state.providerProfileId,
+          providerLabel: state.provider.providerLabel,
+          model: state.model,
+          durationMs: durationMs(startedAt)
+        });
+      }
+      return state;
+    } catch (error) {
+      devTrace("session.provider.resolve.error", {
+        providerProfileId: input.providerProfileId ?? null,
+        durationMs: durationMs(startedAt),
+        ...errorSummary(error)
+      });
+      throw error;
+    }
   }
 
   private async closeMetadataClient(): Promise<void> {
@@ -2457,6 +2538,8 @@ function toSummary(session: LocalSession): LocalSessionSummary {
     cwd: session.cwd,
     title: session.title ?? null,
     model: session.model ?? null,
+    providerProfileId: session.providerProfileId ?? null,
+    provider: session.provider ?? null,
     serviceTier: session.serviceTier ?? null,
     reasoningEffort: session.reasoningEffort ?? null,
     permissionMode: session.permissionMode,
@@ -2478,6 +2561,8 @@ function localSessionTraceFields(session: LocalSession): Record<string, unknown>
     status: session.status,
     cwd: session.cwd,
     model: session.model ?? null,
+    providerProfileId: session.providerProfileId ?? null,
+    providerLabel: session.provider?.providerLabel ?? null,
     serviceTier: session.serviceTier ?? null,
     reasoningEffort: session.reasoningEffort ?? null,
     permissionMode: session.permissionMode,
@@ -2501,6 +2586,8 @@ function sessionSummaryTraceFields(
     status: session.status,
     cwd: session.cwd,
     model: session.model ?? null,
+    providerProfileId: session.providerProfileId ?? null,
+    providerLabel: session.provider?.providerLabel ?? null,
     serviceTier: session.serviceTier ?? null,
     reasoningEffort: session.reasoningEffort ?? null,
     permissionMode: session.permissionMode,
@@ -2565,10 +2652,16 @@ function asCodexThread(
   return next;
 }
 
-function appServerArgs(reasoningEffort?: LocalReasoningEffort | null): string[] {
+function appServerArgs(input: {
+  providerCliArgs?: string[] | null;
+  reasoningEffort?: LocalReasoningEffort | null | undefined;
+}): string[] {
   const args = ["app-server"];
-  if (reasoningEffort) {
-    args.push("-c", `model_reasoning_effort="${reasoningEffort}"`);
+  if (input.providerCliArgs?.length) {
+    args.push(...input.providerCliArgs);
+  }
+  if (input.reasoningEffort) {
+    args.push("-c", `model_reasoning_effort="${input.reasoningEffort}"`);
   }
   args.push("--stdio");
   return args;

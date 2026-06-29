@@ -316,6 +316,85 @@ export const LocalReasoningEffortSchema = z.enum([
   "xhigh"
 ]);
 
+export const LocalProviderPresetSchema = z.enum([
+  "openrouter",
+  "deepseek",
+  "dashscope-qwen",
+  "siliconflow",
+  "minimax",
+  "moonshot-kimi",
+  "custom"
+]);
+
+export type LocalProviderPreset = z.infer<typeof LocalProviderPresetSchema>;
+
+export const LocalProviderConfigSchema = z
+  .object({
+    preset: LocalProviderPresetSchema.nullable().optional(),
+    providerLabel: z.string().min(1).nullable().optional(),
+    providerName: z.string().min(1).nullable().optional(),
+    baseUrl: z.string().min(1).nullable().optional(),
+    apiKey: z.string().min(1).nullable().optional(),
+    apiKeyEnv: z.string().min(1).nullable().optional(),
+    model: z.string().min(1).nullable().optional()
+  })
+  .strict();
+
+export type LocalProviderConfig = z.infer<typeof LocalProviderConfigSchema>;
+
+export const LocalProviderSummarySchema = z
+  .object({
+    preset: LocalProviderPresetSchema.nullable().optional(),
+    providerLabel: z.string().min(1),
+    providerName: z.string().min(1).nullable().optional(),
+    baseUrl: z.string().min(1).nullable().optional(),
+    model: z.string().min(1).nullable().optional(),
+    profileMode: z.enum(["official", "mixed", "pure-api"]).nullable().optional(),
+    toolStrategy: z.string().min(1).nullable().optional()
+  })
+  .strict();
+
+export type LocalProviderSummary = z.infer<typeof LocalProviderSummarySchema>;
+
+export const LocalProviderCatalogModelSchema = z
+  .object({
+    id: z.string().min(1),
+    label: z.string().min(1),
+    isDefault: z.boolean().optional(),
+    supportedReasoningEfforts: z.array(z.string().min(1)).default([]),
+    defaultReasoningEffort: z.string().min(1).nullable().optional()
+  })
+  .strict();
+
+export type LocalProviderCatalogModel = z.infer<
+  typeof LocalProviderCatalogModelSchema
+>;
+
+export const LocalProviderCatalogEntrySchema = z
+  .object({
+    preset: LocalProviderPresetSchema,
+    label: z.string().min(1),
+    providerLabel: z.string().min(1),
+    providerName: z.string().min(1).nullable().optional(),
+    baseUrl: z.string().min(1),
+    apiKeyEnv: z.string().min(1),
+    defaultModel: z.string().min(1),
+    models: z.array(LocalProviderCatalogModelSchema)
+  })
+  .strict();
+
+export type LocalProviderCatalogEntry = z.infer<
+  typeof LocalProviderCatalogEntrySchema
+>;
+
+export const LocalProviderCatalogResponseSchema = z.object({
+  providers: z.array(LocalProviderCatalogEntrySchema)
+});
+
+export interface LocalProviderCatalogResponse {
+  providers: LocalProviderCatalogEntry[];
+}
+
 export interface ThreadStartParams {
   model?: string | null;
   modelProvider?: string | null;
@@ -1386,6 +1465,8 @@ export interface LocalSessionSummary {
   cwd: string;
   title?: string | null;
   model?: string | null;
+  providerProfileId?: string | null;
+  provider?: LocalProviderSummary | null;
   serviceTier?: string | null;
   reasoningEffort?: LocalReasoningEffort | null;
   permissionMode: LocalPermissionMode;
@@ -1425,6 +1506,8 @@ export const LocalSessionSummarySchema = z.object({
   cwd: z.string().min(1),
   title: z.string().nullable().optional(),
   model: z.string().nullable().optional(),
+  providerProfileId: z.string().nullable().optional(),
+  provider: LocalProviderSummarySchema.nullable().optional(),
   serviceTier: z.string().nullable().optional(),
   reasoningEffort: LocalReasoningEffortSchema.nullable().optional(),
   permissionMode: LocalPermissionModeSchema,
@@ -1463,6 +1546,8 @@ export type LocalApprovalDecision = z.infer<
 export const LocalStartSessionSchema = z.object({
   cwd: z.string().min(1),
   model: z.string().min(1).nullable().optional(),
+  providerProfileId: z.string().min(1).nullable().optional(),
+  provider: LocalProviderConfigSchema.nullable().optional(),
   serviceTier: z.string().min(1).nullable().optional(),
   permissionMode: LocalPermissionModeSchema.default("request-approval"),
   approvalPolicy: AskForApprovalSchema.nullable().optional(),
@@ -1482,6 +1567,8 @@ export const LocalResumeSessionSchema = z.object({
   cwd: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
   model: z.string().min(1).nullable().optional(),
+  providerProfileId: z.string().min(1).nullable().optional(),
+  provider: LocalProviderConfigSchema.nullable().optional(),
   serviceTier: z.string().min(1).nullable().optional(),
   permissionMode: LocalPermissionModeSchema.default("request-approval"),
   approvalPolicy: AskForApprovalSchema.nullable().optional(),
@@ -1935,6 +2022,7 @@ export const RelaySessionResponseSchema = z.object({
 
 export const RelayMethod = {
   AgentHealth: "agent.health",
+  ProviderCatalog: "providers.catalog",
   SessionsList: "sessions.list",
   SessionsCreate: "sessions.create",
   SessionsMessage: "sessions.message",

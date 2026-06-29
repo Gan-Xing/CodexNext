@@ -36,6 +36,12 @@ interface ModelOption {
   value: string;
 }
 
+interface ProviderOption {
+  label: string;
+  preset: string | null;
+  value: string;
+}
+
 interface PermissionOption {
   description: string;
   icon: CodexIconName;
@@ -54,15 +60,20 @@ export function LiveComposer(props: {
   fileInputRef: RefObject<HTMLInputElement | null>;
   goalMode: boolean;
   hasGoal: boolean;
+  activeModelLabel: string;
   modelOptions: ModelOption[];
   permissionMode: LocalPermissionMode;
   permissionOptions: PermissionOption[];
   planMode: boolean;
+  providerModelOptions: ModelOption[];
+  providerOptions: ProviderOption[];
+  providerProfileId: string;
   reasoningEffort: LocalReasoningEffort;
   reasoningOptions: ReasoningOption[];
   queuedMessages: LocalQueuedMessage[];
   selectedModel: ModelOption;
   selectedPermission: PermissionOption;
+  selectedProviderModel: ModelOption | null;
   selectedReasoning: ReasoningOption;
   serviceTier: string | null;
   onActivateGoalMode: () => void;
@@ -82,6 +93,8 @@ export function LiveComposer(props: {
   onQueuedMessagesClear: () => void;
   onSelectModel: (value: string) => void;
   onSelectPermission: (value: LocalPermissionMode) => void;
+  onSelectProviderModel: (value: string) => void;
+  onSelectProviderProfile: (value: string) => void;
   onSelectReasoning: (value: LocalReasoningEffort) => void;
   onRunSlashCommand: (commandId: SlashCommandId) => void;
   onSubmit: () => void;
@@ -98,6 +111,7 @@ export function LiveComposer(props: {
   const [draggingQueuedId, setDraggingQueuedId] = useState<string | null>(null);
   const [editingQueuedId, setEditingQueuedId] = useState<string | null>(null);
   const [editingQueuedText, setEditingQueuedText] = useState("");
+  const [modelSearch, setModelSearch] = useState("");
   const [queuedMenuId, setQueuedMenuId] = useState<string | null>(null);
   const [slashCursor, setSlashCursor] = useState(props.draft.length);
   const [slashDismissedKey, setSlashDismissedKey] = useState<string | null>(null);
@@ -135,6 +149,14 @@ export function LiveComposer(props: {
     slashDismissedKey !== slashKey;
   const selectedSlashCommand =
     slashOptions[Math.min(slashSelectedIndex, Math.max(slashOptions.length - 1, 0))];
+  const activeModelOptions = props.providerProfileId ? props.providerModelOptions : props.modelOptions;
+  const activeModelValue = props.providerProfileId
+    ? props.selectedProviderModel?.value
+    : props.selectedModel.value;
+  const visibleModelOptions = useMemo(
+    () => filterModelOptions(activeModelOptions, modelSearch, activeModelValue),
+    [activeModelOptions, activeModelValue, modelSearch]
+  );
 
   function closeMenuAfterSelect() {
     props.onCloseMenu();
@@ -152,8 +174,16 @@ export function LiveComposer(props: {
   }
 
   function selectModel(value: string) {
-    props.onSelectModel(value);
+    if (props.providerProfileId) {
+      props.onSelectProviderModel(value);
+    } else {
+      props.onSelectModel(value);
+    }
     closeMenuAfterSelect();
+  }
+
+  function selectProvider(value: string) {
+    props.onSelectProviderProfile(value);
   }
 
   function selectPermission(value: LocalPermissionMode) {
@@ -275,7 +305,7 @@ export function LiveComposer(props: {
 
     const footerRect = footer.getBoundingClientRect();
     const triggerRect = trigger.getBoundingClientRect();
-    const widthCap = menu === "permission" ? 560 : menu === "model" ? 360 : 300;
+    const widthCap = menu === "permission" ? 560 : menu === "model" ? 520 : 300;
     const width = Math.min(widthCap, Math.max(footerRect.width - 24, 220));
     const maxLeft = Math.max(footerRect.width - width, 0);
     const maxHeight = Math.max(220, triggerRect.top - 22);
@@ -363,6 +393,16 @@ export function LiveComposer(props: {
       document.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [props.activeMenu, props.onCloseMenu]);
+
+  useEffect(() => {
+    if (props.activeMenu !== "model") {
+      setModelSearch("");
+    }
+  }, [props.activeMenu]);
+
+  useEffect(() => {
+    setModelSearch("");
+  }, [props.providerProfileId]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -668,7 +708,7 @@ export function LiveComposer(props: {
           disabled={composerDisabled}
           onClick={() => props.onOpenMenu("model")}
         >
-          {props.selectedModel.shortLabel} {props.selectedReasoning.label}
+          {props.activeModelLabel} · {props.selectedReasoning.label}
           <CodexIcon name="chevronDown" />
         </button>
         <button
@@ -787,27 +827,73 @@ export function LiveComposer(props: {
             ))}
           </div>
           <div className="cn-menu-divider" />
-          <div className="cn-menu-column">
-            <p>模型</p>
-            {props.modelOptions.map((option) => (
-              <button
-                key={option.value}
-                className={
-                  props.selectedModel.value === option.value
-                    ? "cn-menu-row selected compact"
-                    : "cn-menu-row compact"
-                }
-                type="button"
-                onClick={() => selectModel(option.value)}
-              >
-                <strong>{option.label}</strong>
-                {props.selectedModel.value === option.value ? (
-                  <em>
-                    <CodexIcon name="check" />
-                  </em>
-                ) : null}
-              </button>
-            ))}
+          <div className="cn-menu-column cn-model-menu-column">
+            <div className="cn-model-menu-head">
+              <p>模型</p>
+              <small>
+                {visibleModelOptions.length}/{activeModelOptions.length}
+              </small>
+            </div>
+            {props.providerOptions.length > 0 ? (
+              <div className="cn-provider-option-list">
+                {props.providerOptions.map((option) => (
+                  <button
+                    key={option.value || "default"}
+                    className={
+                      props.providerProfileId === option.value
+                        ? "cn-menu-row selected compact"
+                        : "cn-menu-row compact"
+                    }
+                    type="button"
+                    onClick={() => selectProvider(option.value)}
+                  >
+                    <strong>{option.label}</strong>
+                    {props.providerProfileId === option.value ? (
+                      <em>
+                        <CodexIcon name="check" />
+                      </em>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <input
+              aria-label="搜索模型"
+              className="cn-model-search-input"
+              placeholder="搜索模型"
+              type="search"
+              value={modelSearch}
+              onChange={(event) => setModelSearch(event.target.value)}
+            />
+            <div className="cn-model-option-list">
+              {visibleModelOptions.length > 0 ? (
+                visibleModelOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    className={
+                      activeModelValue === option.value
+                        ? "cn-menu-row selected compact"
+                        : "cn-menu-row compact"
+                    }
+                    type="button"
+                    onClick={() => selectModel(option.value)}
+                    title={option.value}
+                  >
+                    <span>
+                      <strong>{option.label}</strong>
+                      {option.value !== option.label ? <small>{option.value}</small> : null}
+                    </span>
+                    {activeModelValue === option.value ? (
+                      <em>
+                        <CodexIcon name="check" />
+                      </em>
+                    ) : null}
+                  </button>
+                ))
+              ) : (
+                <div className="cn-model-empty">没有匹配模型</div>
+              )}
+            </div>
           </div>
         </div>
       ) : null}
@@ -840,6 +926,32 @@ export function LiveComposer(props: {
       ) : null}
     </footer>
   );
+}
+
+function filterModelOptions(
+  options: ModelOption[],
+  query: string,
+  selectedValue: string | undefined
+): ModelOption[] {
+  const terms = query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/u)
+    .filter(Boolean);
+  const filtered = terms.length === 0
+    ? options
+    : options.filter((option) => {
+        const haystack = `${option.label} ${option.shortLabel} ${option.value}`.toLowerCase();
+        return terms.every((term) => haystack.includes(term));
+      });
+  if (!selectedValue || terms.length > 0) {
+    return filtered;
+  }
+  const selected = filtered.find((option) => option.value === selectedValue);
+  if (!selected) {
+    return filtered;
+  }
+  return [selected, ...filtered.filter((option) => option.value !== selectedValue)];
 }
 
 function ComposerModePill(props: {

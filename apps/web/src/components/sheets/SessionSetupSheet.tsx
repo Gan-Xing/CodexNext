@@ -1,4 +1,9 @@
-import type { LocalPermissionMode, LocalReasoningEffort, LocalDirectoryListResponse } from "../../lib/types";
+import type {
+  LocalDirectoryListResponse,
+  LocalPermissionMode,
+  LocalProviderPreset,
+  LocalReasoningEffort
+} from "../../lib/types";
 import type { CodexIconName } from "../DesignLab";
 import { CodexIcon } from "../DesignLab";
 
@@ -19,6 +24,12 @@ interface PermissionOption {
   mode: LocalPermissionMode;
 }
 
+interface ProviderOption {
+  label: string;
+  preset: LocalProviderPreset | null;
+  value: string;
+}
+
 export function SessionSetupSheet(props: {
   connected: boolean;
   cwd: string;
@@ -32,6 +43,14 @@ export function SessionSetupSheet(props: {
   modelOptions: ModelOption[];
   permissionMode: LocalPermissionMode;
   permissionOptions: PermissionOption[];
+  providerApiKey: string;
+  providerApiKeyEnv: string;
+  providerBaseUrl: string;
+  providerLabel: string;
+  providerModel: string;
+  providerModelOptions: ModelOption[];
+  providerOptions: ProviderOption[];
+  providerProfileId: string;
   reasoningEffort: LocalReasoningEffort;
   reasoningOptions: ReasoningOption[];
   streamStatus: string;
@@ -43,8 +62,16 @@ export function SessionSetupSheet(props: {
   onSelectCwd: (value: string) => void;
   onSelectModel: (value: string) => void;
   onSelectPermission: (value: LocalPermissionMode) => void;
+  onSelectProviderProfile: (value: string) => void;
+  onProviderApiKeyChange: (value: string) => void;
+  onProviderApiKeyEnvChange: (value: string) => void;
+  onProviderBaseUrlChange: (value: string) => void;
+  onProviderLabelChange: (value: string) => void;
+  onProviderModelChange: (value: string) => void;
   onSelectReasoning: (value: LocalReasoningEffort) => void;
 }) {
+  const providerEnabled = props.providerProfileId.length > 0;
+  const customProvider = props.providerProfileId === "custom";
   return (
     <div className="cn-overlay-panel project cn-live-overlay">
       <div className="cn-project-card cn-live-session-sheet">
@@ -151,6 +178,87 @@ export function SessionSetupSheet(props: {
               ))}
             </select>
           </label>
+          <label>
+            Provider
+            <select
+              name="session_provider"
+              value={props.providerProfileId}
+              onChange={(event) => props.onSelectProviderProfile(event.target.value)}
+            >
+              {props.providerOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {providerEnabled ? (
+            <>
+              <label>
+                Provider 模型
+                {customProvider || props.providerModelOptions.length === 0 ? (
+                  <input
+                    name="session_provider_model"
+                    value={props.providerModel}
+                    onChange={(event) => props.onProviderModelChange(event.target.value)}
+                    placeholder="deepseek/deepseek-chat"
+                  />
+                ) : (
+                  <select
+                    name="session_provider_model"
+                    value={props.providerModel}
+                    onChange={(event) => props.onProviderModelChange(event.target.value)}
+                  >
+                    {props.providerModelOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </label>
+              <details className="cn-goal-advanced">
+                <summary>Provider 高级设置</summary>
+                <label>
+                  Base URL
+                  <input
+                    name="session_provider_base_url"
+                    value={props.providerBaseUrl}
+                    onChange={(event) => props.onProviderBaseUrlChange(event.target.value)}
+                    placeholder={customProvider ? "https://api.example.com/v1" : "默认"}
+                  />
+                </label>
+                <label>
+                  Provider Label
+                  <input
+                    name="session_provider_label"
+                    value={props.providerLabel}
+                    onChange={(event) => props.onProviderLabelChange(event.target.value)}
+                    placeholder={customProvider ? "custom" : "默认"}
+                  />
+                </label>
+                <label>
+                  API Key
+                  <input
+                    name="session_provider_api_key"
+                    type="password"
+                    value={props.providerApiKey}
+                    onChange={(event) => props.onProviderApiKeyChange(event.target.value)}
+                    autoComplete="off"
+                  />
+                </label>
+                <label>
+                  API Key Env
+                  <input
+                    name="session_provider_api_key_env"
+                    value={props.providerApiKeyEnv}
+                    onChange={(event) => props.onProviderApiKeyEnvChange(event.target.value)}
+                    placeholder="OPENROUTER_API_KEY"
+                  />
+                </label>
+              </details>
+            </>
+          ) : null}
         </div>
 
         <div className="cn-permission-list-real">

@@ -256,6 +256,8 @@ export function makeHistoryPreviewSession(
     cwd: entry.cwd,
     title: entry.title,
     model: null,
+    providerProfileId: null,
+    provider: null,
     serviceTier: null,
     reasoningEffort: null,
     permissionMode: "request-approval",
@@ -273,6 +275,8 @@ export function makePendingSession(input: {
   sessionId: string;
   cwd: string;
   model?: string | null;
+  providerProfileId?: string | null;
+  provider?: LocalSessionSummary["provider"] | null;
   permissionMode: LocalPermissionMode;
   serviceTier?: string | null;
   reasoningEffort?: LocalReasoningEffort | null;
@@ -285,6 +289,8 @@ export function makePendingSession(input: {
     cwd: input.cwd,
     title: null,
     model: input.model ?? null,
+    providerProfileId: input.providerProfileId ?? null,
+    provider: input.provider ?? null,
     serviceTier: input.serviceTier ?? null,
     reasoningEffort: input.reasoningEffort ?? null,
     permissionMode: input.permissionMode,
@@ -422,7 +428,9 @@ function shortLogTitle(input: string): string | null {
 
 export function sessionSubtitle(session: LocalSessionSummary): string {
   const model = session.model ? session.model.replace("gpt-", "") : "default model";
-  return `${shortPath(session.cwd)} · ${model} · ${reasoningLabel(session.reasoningEffort)} · ${permissionLabel(session.permissionMode)}`;
+  const provider = session.provider?.providerLabel ?? session.providerProfileId ?? null;
+  const modelLabel = provider ? `${provider}/${model}` : model;
+  return `${shortPath(session.cwd)} · ${modelLabel} · ${reasoningLabel(session.reasoningEffort)} · ${permissionLabel(session.permissionMode)}`;
 }
 
 export function historySubtitle(entry: LocalCodexHistoryEntry): string {

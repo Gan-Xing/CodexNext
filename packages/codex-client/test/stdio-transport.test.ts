@@ -1,8 +1,35 @@
 import { once } from "node:events";
 import { describe, expect, it } from "vitest";
-import { StdioCodexTransport } from "../src/stdio-transport.js";
+import {
+  StdioCodexTransport,
+  redactCommandArgs
+} from "../src/stdio-transport.js";
 
 describe("StdioCodexTransport", () => {
+  it("redacts token-like app-server config args before tracing", () => {
+    expect(
+      redactCommandArgs([
+        "app-server",
+        "-c",
+        "model_providers.openrouter.experimental_bearer_token=\"secret-token\"",
+        "-c",
+        "provider.api_key=sk-secret",
+        "-c",
+        "provider.password='pw-secret'",
+        "--stdio"
+      ])
+    ).toEqual([
+      "app-server",
+      "-c",
+      "model_providers.openrouter.experimental_bearer_token=[redacted]",
+      "-c",
+      "provider.api_key=[redacted]",
+      "-c",
+      "provider.password=[redacted]",
+      "--stdio"
+    ]);
+  });
+
   it("parses stdout JSON messages and forwards stderr when configured", async () => {
     const transport = new StdioCodexTransport({
       command: process.execPath,

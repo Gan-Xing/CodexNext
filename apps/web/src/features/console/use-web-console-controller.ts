@@ -14,6 +14,7 @@ import {
   interruptSessionTurn,
   listCodexHistory,
   listDirectories,
+  listProviderCatalog,
   listRelayDevices,
   listSessions,
   replayEvents,
@@ -49,6 +50,9 @@ import type {
   LocalEvent,
   LocalHealthResponse,
   LocalPermissionMode,
+  LocalProviderCatalogResponse,
+  LocalProviderConfig,
+  LocalProviderPreset,
   LocalQueueActionInput,
   LocalSessionSummary,
   PendingApprovalView
@@ -182,6 +186,21 @@ export const modelOptions = [
   { label: "GPT-5.4", shortLabel: "5.4", value: "gpt-5.4" },
   { label: "GPT-5.4 Mini", shortLabel: "5.4 mini", value: "gpt-5.4-mini" },
   { label: "GPT-5.3 Codex Spark", shortLabel: "5.3 spark", value: "gpt-5.3-codex-spark" }
+];
+
+export const providerOptions: Array<{
+  label: string;
+  preset: LocalProviderPreset | null;
+  value: string;
+}> = [
+  { label: "Codex 默认", preset: null, value: "" },
+  { label: "OpenRouter", preset: "openrouter", value: "openrouter" },
+  { label: "DeepSeek", preset: "deepseek", value: "deepseek" },
+  { label: "Qwen", preset: "dashscope-qwen", value: "dashscope-qwen" },
+  { label: "SiliconFlow", preset: "siliconflow", value: "siliconflow" },
+  { label: "MiniMax", preset: "minimax", value: "minimax" },
+  { label: "Kimi", preset: "moonshot-kimi", value: "moonshot-kimi" },
+  { label: "自定义", preset: "custom", value: "custom" }
 ];
 
 export const reasoningOptions: Array<{ label: string; value: LocalReasoningEffort }> = [
@@ -557,6 +576,13 @@ export function useWebConsoleController() {
   const [deviceWorkspaces, setDeviceWorkspaces] = useState<Record<string, DeviceWorkspace>>({});
   const [localStorageReady, setLocalStorageReady] = useState(false);
   const [model, setModel] = useState("gpt-5.5");
+  const [providerProfileId, setProviderProfileId] = useState("");
+  const [providerModel, setProviderModel] = useState("");
+  const [providerBaseUrl, setProviderBaseUrl] = useState("");
+  const [providerLabel, setProviderLabel] = useState("");
+  const [providerApiKey, setProviderApiKey] = useState("");
+  const [providerApiKeyEnv, setProviderApiKeyEnv] = useState("");
+  const [providerCatalog, setProviderCatalog] = useState<LocalProviderCatalogResponse | null>(null);
   const [serviceTier, setServiceTier] = useState<string | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<LocalReasoningEffort>("xhigh");
   const [permissionMode, setPermissionMode] = useState<LocalPermissionMode>("request-approval");
@@ -698,8 +724,63 @@ export function useWebConsoleController() {
   const currentGoal = currentSession?.goal ?? null;
   const hasCurrentGoal = Boolean(currentGoal?.objective?.trim());
   const selectedModel = modelOptions.find((option) => option.value === model) ?? modelOptions[0]!;
+  const catalogProviderOptions = useMemo(
+    () =>
+      providerCatalog
+        ? [
+            providerOptions[0]!,
+            ...providerCatalog.providers.map((provider) => ({
+              label: provider.label,
+              preset: provider.preset,
+              value: provider.preset
+            }))
+          ]
+        : providerOptions,
+    [providerCatalog]
+  );
+  const selectedProviderOption =
+    catalogProviderOptions.find((option) => option.value === providerProfileId) ?? catalogProviderOptions[0]!;
+  const selectedProviderCatalog =
+    providerCatalog?.providers.find((provider) => provider.preset === providerProfileId) ?? null;
+  const providerModelOptions = selectedProviderCatalog?.models.map((entry) => ({
+    label: entry.label,
+    shortLabel: shortModelLabel(entry.label, entry.id),
+    value: entry.id
+  })) ?? [];
+  const selectedProviderModel =
+    providerModelOptions.find((option) => option.value === providerModel) ??
+    providerModelOptions.find((option) => option.value === selectedProviderCatalog?.defaultModel) ??
+    null;
+  const currentSessionModelLabel = currentSession
+    ? sessionActiveModelLabel(currentSession, providerCatalog)
+    : null;
+  const activeModelLabel =
+    currentSessionModelLabel ??
+    (selectedProviderOption.preset
+      ? `${selectedProviderOption.label} · ${selectedProviderModel?.label ?? providerModel ?? selectedProviderCatalog?.defaultModel ?? "模型"}`
+      : selectedModel.label);
+  const activeReasoningEffort = currentSession?.reasoningEffort ?? reasoningEffort;
+  const providerSessionRequest = useMemo(
+    () =>
+      buildProviderSessionRequest({
+        apiKey: providerApiKey,
+        apiKeyEnv: providerApiKeyEnv,
+        baseUrl: providerBaseUrl,
+        label: providerLabel,
+        model: providerModel,
+        option: selectedProviderOption
+      }),
+    [
+      providerApiKey,
+      providerApiKeyEnv,
+      providerBaseUrl,
+      providerLabel,
+      providerModel,
+      selectedProviderOption
+    ]
+  );
   const selectedReasoning =
-    reasoningOptions.find((option) => option.value === reasoningEffort) ?? reasoningOptions[3]!;
+    reasoningOptions.find((option) => option.value === activeReasoningEffort) ?? reasoningOptions[3]!;
   const activeThreadPrefs = getThreadSidebarPrefs(threadSidebarPrefs, sidebarPrefsScopeKey);
   const activeProjectPrefs = getProjectSidebarPrefs(projectSidebarPrefs, sidebarPrefsScopeKey);
   const relayEnabled =
@@ -713,6 +794,45 @@ export function useWebConsoleController() {
         relayFullAccessEnabled: RELAY_FULL_ACCESS_ENABLED
       }),
     [relayEnabled]
+  );
+
+  useEffect(() => {
+    if (!connected) {
+      return;
+    }
+    let cancelled = false;
+    void listProviderCatalog(connection)
+      .then((catalog) => {
+        if (!cancelled) {
+          setProviderCatalog(catalog);
+        }
+      })
+      .catch((err) => {
+        webDevTrace("console.providers.catalog.error", webErrorSummary(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connected, connection.deviceId, connection.relayUrl, connection.sessionToken]);
+
+  useEffect(() => {
+    if (!selectedProviderCatalog || providerModel) {
+      return;
+    }
+    setProviderModel(selectedProviderCatalog.defaultModel);
+    setProviderApiKeyEnv((value) => value || selectedProviderCatalog.apiKeyEnv);
+  }, [providerModel, selectedProviderCatalog]);
+
+  const selectProviderProfile = useCallback(
+    (value: string) => {
+      const catalogEntry = providerCatalog?.providers.find((provider) => provider.preset === value) ?? null;
+      setProviderProfileId(value);
+      setProviderModel(catalogEntry?.defaultModel ?? "");
+      setProviderApiKeyEnv(catalogEntry?.apiKeyEnv ?? "");
+      setProviderBaseUrl("");
+      setProviderLabel("");
+    },
+    [providerCatalog]
   );
   const selectedPermission =
     availablePermissionOptions.find((option) => option.mode === permissionMode) ??
@@ -3789,6 +3909,7 @@ export function useWebConsoleController() {
         id: entry.id,
         cwd: entry.cwd,
         model,
+        ...(providerSessionRequest ?? {}),
         serviceTier,
         permissionMode,
         reasoningEffort
@@ -3959,6 +4080,7 @@ export function useWebConsoleController() {
         id: entry.id,
         cwd: entry.cwd,
         model,
+        ...(providerSessionRequest ?? {}),
         serviceTier,
         permissionMode,
         reasoningEffort
@@ -4166,6 +4288,19 @@ export function useWebConsoleController() {
       await loadDirectories(undefined);
       return;
     }
+    if (!currentSession) {
+      const providerValidationError = validateProviderSessionRequest(providerSessionRequest);
+      if (providerValidationError) {
+        webDevTrace("console.submit.failed", {
+          submitTraceId,
+          reason: "invalid_provider_config",
+          durationMs: traceDurationMs(submitStartedAt)
+        });
+        setError(providerValidationError);
+        setActiveSheet("session");
+        return;
+      }
+    }
 
     if (goalComposerMode) {
       const clientMessageId = createClientId("goal");
@@ -4313,6 +4448,7 @@ export function useWebConsoleController() {
         const result = await createSession(connection, {
           cwd: cwd.trim(),
           model,
+          ...(providerSessionRequest ?? {}),
           serviceTier,
           reasoningEffort,
           permissionMode,
@@ -4660,6 +4796,7 @@ export function useWebConsoleController() {
       const result = await createSession(connection, {
         cwd: cwd.trim(),
         model,
+        ...(providerSessionRequest ?? {}),
         serviceTier,
         reasoningEffort,
         permissionMode,
@@ -5254,6 +5391,15 @@ export function useWebConsoleController() {
     initialGoal,
     initialTokenBudget,
     model,
+    providerApiKey,
+    providerApiKeyEnv,
+    providerBaseUrl,
+    providerCatalog,
+    providerLabel,
+    providerModel,
+    providerModelOptions,
+    providerOptions: catalogProviderOptions,
+    providerProfileId,
     openDeviceSheet,
     openSummarySheet,
     openGoalSheet,
@@ -5284,8 +5430,10 @@ export function useWebConsoleController() {
     selectSession,
     selectedDeviceId,
     selectedHistoryEntry,
+    activeModelLabel,
     selectedModel,
     selectedPermission,
+    selectedProviderModel,
     selectedReasoning,
     sessionSidebarRef,
     setActiveMenu,
@@ -5296,6 +5444,12 @@ export function useWebConsoleController() {
     setInitialTokenBudget,
     setModel,
     setPermissionMode,
+    setProviderApiKey,
+    setProviderApiKeyEnv,
+    setProviderBaseUrl,
+    setProviderLabel,
+    setProviderModel,
+    setProviderProfileId: selectProviderProfile,
     setReasoningEffort,
     setSidebarCollapsed,
     showThreadHoverPreview,
@@ -5539,6 +5693,84 @@ function summarizeLocalEventField(
         .filter((value): value is string => typeof value === "string" && value.length > 0)
     )
   ].sort();
+}
+
+function buildProviderSessionRequest(input: {
+  apiKey: string;
+  apiKeyEnv: string;
+  baseUrl: string;
+  label: string;
+  model: string;
+  option: {
+    preset: LocalProviderPreset | null;
+    value: string;
+  };
+}): { providerProfileId: string; provider: LocalProviderConfig } | null {
+  if (!input.option.value || !input.option.preset) {
+    return null;
+  }
+  const provider = compactProviderConfig({
+    preset: input.option.preset,
+    providerLabel: input.label,
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    apiKeyEnv: input.apiKeyEnv,
+    model: input.model
+  });
+  return {
+    providerProfileId: input.option.value,
+    provider
+  };
+}
+
+function validateProviderSessionRequest(
+  request: ReturnType<typeof buildProviderSessionRequest>
+): string | null {
+  if (!request || request.provider.preset !== "custom") {
+    return null;
+  }
+  if (!request.provider.baseUrl?.trim()) {
+    return "请填写自定义 Provider 的 Base URL";
+  }
+  if (!request.provider.model?.trim()) {
+    return "请填写自定义 Provider 的模型";
+  }
+  return null;
+}
+
+function shortModelLabel(label: string, fallback: string): string {
+  const trimmed = label.trim() || fallback.trim();
+  return trimmed.replace(/^DeepSeek /u, "DS ");
+}
+
+function sessionActiveModelLabel(
+  session: LocalSessionSummary,
+  catalog: LocalProviderCatalogResponse | null
+): string {
+  const model = session.provider?.model ?? session.model ?? "model";
+  const provider = session.provider?.providerLabel ?? session.providerProfileId ?? "";
+  if (!provider) {
+    return model;
+  }
+  const catalogProvider = catalog?.providers.find(
+    (entry) => entry.preset === session.providerProfileId || entry.providerLabel === provider
+  );
+  const modelLabel =
+    catalogProvider?.models.find((entry) => entry.id === model)?.label ?? model;
+  return `${catalogProvider?.label ?? provider} · ${modelLabel}`;
+}
+
+function compactProviderConfig(
+  input: Record<string, string | LocalProviderPreset | null>
+): LocalProviderConfig {
+  return Object.fromEntries(
+    Object.entries(input)
+      .map(([key, value]) => [
+        key,
+        typeof value === "string" ? value.trim() : value
+      ])
+      .filter(([, value]) => value !== null && value !== "")
+  ) as LocalProviderConfig;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

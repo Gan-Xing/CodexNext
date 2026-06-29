@@ -14,6 +14,7 @@ import type {
   LocalQueueActionInput,
   LocalQueueActionResponse,
   LocalPermissionMode,
+  LocalProviderCatalogResponse,
   LocalReasoningEffort,
   LocalResumeSessionResponse,
   LocalSendMessageResponse,
@@ -188,6 +189,12 @@ export function health(connection: AgentConnection): Promise<LocalHealthResponse
   return agentFetchJson(connection, "/api/health").then(parseLocalHealthResponse);
 }
 
+export function listProviderCatalog(
+  connection: AgentConnection
+): Promise<LocalProviderCatalogResponse> {
+  return agentFetch(connection, "/api/providers");
+}
+
 export function replayEvents(
   connection: AgentConnection,
   after = 0
@@ -272,6 +279,8 @@ export function resumeCodexHistory(
     id: string;
     cwd?: string;
     model?: string | null;
+    providerProfileId?: string | null;
+    provider?: LocalStartSessionInput["provider"] | null;
     serviceTier?: string | null;
     permissionMode: LocalPermissionMode;
     reasoningEffort?: LocalReasoningEffort | null;
@@ -342,6 +351,10 @@ export function resolveAgentUrl(connection: AgentConnection, path: string): URL 
   const prefix = `/api/relay/devices/${encodeURIComponent(connection.deviceId)}`;
   if (base.pathname === "/api/health") {
     return buildDeviceHealthUrl(connection);
+  }
+  if (base.pathname === "/api/providers") {
+    base.pathname = `${prefix}/providers`;
+    return base;
   }
   if (base.pathname === "/api/events") {
     return buildDeviceEventReplayUrl(
