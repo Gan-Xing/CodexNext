@@ -174,12 +174,15 @@ export function WebConsole() {
     activeModelLabel,
     providerApiKey,
     providerApiKeyEnv,
+    providerAvailable,
     providerBaseUrl,
+    providerCatalogLoading,
     providerLabel,
     providerModel,
     providerModelOptions,
     providerOptions,
     providerProfileId,
+    providerStatusMessage,
     openDeviceSheet,
     openSummarySheet,
     openNewSessionSetup,
@@ -775,12 +778,15 @@ export function WebConsole() {
             permissionOptions={permissionOptions}
             providerApiKey={providerApiKey}
             providerApiKeyEnv={providerApiKeyEnv}
+            providerAvailable={providerAvailable}
             providerBaseUrl={providerBaseUrl}
+            providerCatalogLoading={providerCatalogLoading}
             providerLabel={providerLabel}
             providerModel={providerModel}
             providerModelOptions={providerModelOptions}
             providerOptions={providerOptions}
             providerProfileId={providerProfileId}
+            providerStatusMessage={providerStatusMessage}
             reasoningEffort={reasoningEffort}
             reasoningOptions={reasoningOptions}
             streamStatus={streamStatus}

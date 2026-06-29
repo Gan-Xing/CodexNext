@@ -68,15 +68,38 @@ describe("ProviderRuntimeManager", () => {
     const catalog = await manager.providerCatalog();
     const openrouter = catalog.providers.find((provider) => provider.preset === "openrouter");
 
+    expect(catalog.available).toBe(true);
     expect(openrouter).toMatchObject({
       label: "OpenRouter",
       providerLabel: "openrouter",
       apiKeyEnv: "OPENROUTER_API_KEY",
+      apiKeyConfigured: true,
       defaultModel: "deepseek/deepseek-v4-pro"
     });
     expect(openrouter?.models.some((model) => model.id === "anthropic/claude-sonnet-4.5")).toBe(true);
     expect(core.catalogInputs[0]).toMatchObject({ apiKey: "upstream-secret" });
     expect(JSON.stringify(catalog)).not.toContain("upstream-secret");
+  });
+
+  it("reports unavailable catalog when CodexProvider core cannot load", async () => {
+    const manager = new ProviderRuntimeManager({
+      loadCore: async () => {
+        throw new Error("missing @codex-provider/core");
+      }
+    });
+
+    const catalog = await manager.providerCatalog();
+    const status = await manager.status();
+
+    expect(catalog).toEqual({
+      available: false,
+      error: "missing @codex-provider/core",
+      providers: []
+    });
+    expect(status).toEqual({
+      available: false,
+      error: "missing @codex-provider/core"
+    });
   });
 
   it("caps forwarded provider tools before upstream fetch", async () => {

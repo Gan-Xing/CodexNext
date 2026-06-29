@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
   LocalProviderCatalogEntry,
   LocalProviderCatalogModel,
   LocalProviderCatalogResponse,
   LocalProviderConfig,
   LocalProviderPreset,
+  LocalProviderRuntimeStatus,
   LocalProviderSummary
 } from "@codexnext/protocol";
 import { devTrace } from "../dev-trace.js";
@@ -129,18 +130,40 @@ export class ProviderRuntimeManager {
   }
 
   public async providerCatalog(): Promise<LocalProviderCatalogResponse> {
-    const core = await this.loadCoreFn();
-    const providers = await Promise.all(
-      PROVIDER_PRESET_IDS.map(async (preset) =>
-        providerCatalogEntry(
-          preset,
-          await resolveCorePresetCatalog(core, preset, this.env)
+    try {
+      const core = await this.loadCoreFn();
+      const providers = await Promise.all(
+        PROVIDER_PRESET_IDS.map(async (preset) =>
+          providerCatalogEntry(
+            preset,
+            await resolveCorePresetCatalog(core, preset, this.env),
+            this.env
+          )
         )
-      )
-    );
-    return {
-      providers
-    };
+      );
+      return {
+        available: true,
+        providers
+      };
+    } catch (error) {
+      return {
+        available: false,
+        error: formatProviderRuntimeError(error),
+        providers: []
+      };
+    }
+  }
+
+  public async status(): Promise<LocalProviderRuntimeStatus> {
+    try {
+      await this.loadCoreFn();
+      return { available: true };
+    } catch (error) {
+      return {
+        available: false,
+        error: formatProviderRuntimeError(error)
+      };
+    }
   }
 
   public async closeAll(): Promise<void> {
@@ -320,8 +343,10 @@ async function resolveCorePresetCatalog(
 
 function providerCatalogEntry(
   preset: Exclude<LocalProviderPreset, "custom">,
-  resolved: CodexProviderResolvedPresetLike
+  resolved: CodexProviderResolvedPresetLike,
+  env: NodeJS.ProcessEnv
 ): LocalProviderCatalogEntry {
+  const apiKeyEnv = requiredString(resolved.env?.apiKeyEnv, `${preset} apiKeyEnv`);
   return {
     preset,
     label: requiredString(resolved.displayName, `${preset} displayName`),
@@ -330,7 +355,13 @@ function providerCatalogEntry(
       ? { providerName: normalizeString(resolved.providerName) }
       : {}),
     baseUrl: requiredString(resolved.baseUrl, `${preset} baseUrl`),
-    apiKeyEnv: requiredString(resolved.env?.apiKeyEnv, `${preset} apiKeyEnv`),
+    apiKeyEnv,
+    apiKeyConfigured: Boolean(
+      firstEnvValue([
+        apiKeyEnv,
+        normalizeString(resolved.env?.alternativeApiKeyEnv)
+      ], env)
+    ),
     defaultModel: requiredString(resolved.defaultModel, `${preset} defaultModel`),
     models: normalizeCatalogModels(resolved.models, normalizeString(resolved.defaultModel))
   };
@@ -545,6 +576,10 @@ function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function formatProviderRuntimeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function loadCodexProviderCore(): Promise<CodexProviderCoreModule> {
   const candidates = codexProviderModuleCandidates();
   let lastError: unknown;
@@ -568,13 +603,37 @@ async function loadCodexProviderCore(): Promise<CodexProviderCoreModule> {
 function codexProviderModuleCandidates(): string[] {
   const candidates = [
     normalizeString(process.env.CODEXNEXT_CODEX_PROVIDER_MODULE),
-    fileUrlIfExists("/home/ubuntu/dev/CodexProvider/dist/index.js"),
-    fileUrlIfExists(path.resolve(process.cwd(), "../CodexProvider/dist/index.js")),
-    "@codex-provider/core"
+    "@codex-provider/core",
+    ...discoveredCodexProviderModules(process.cwd()),
+    ...discoveredCodexProviderModules(path.dirname(fileURLToPath(import.meta.url)))
   ];
   return [...new Set(candidates.filter(Boolean))];
 }
 
 function fileUrlIfExists(filePath: string): string {
   return existsSync(filePath) ? pathToFileURL(filePath).href : "";
+}
+
+function discoveredCodexProviderModules(startPath: string): string[] {
+  const candidates: string[] = [];
+  for (const ancestor of ancestorPaths(startPath)) {
+    for (const checkoutName of ["CodexProvider", "codex-provider"]) {
+      candidates.push(fileUrlIfExists(path.join(ancestor, "..", checkoutName, "dist", "index.js")));
+      candidates.push(fileUrlIfExists(path.join(ancestor, checkoutName, "dist", "index.js")));
+    }
+  }
+  return candidates.filter(Boolean);
+}
+
+function ancestorPaths(startPath: string): string[] {
+  const ancestors: string[] = [];
+  let current = path.resolve(startPath);
+  while (true) {
+    ancestors.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return ancestors;
+    }
+    current = parent;
+  }
 }

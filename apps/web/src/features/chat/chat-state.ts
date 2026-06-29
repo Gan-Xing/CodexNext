@@ -11,6 +11,7 @@ import type {
   LocalDirectoryListResponse,
   LocalEvent,
   LocalHealthResponse,
+  LocalProviderCatalogResponse,
   LocalSessionSummary,
   PendingApprovalView
 } from "../../lib/types";
@@ -130,6 +131,15 @@ export interface OutboxEntry {
   updatedAt: number;
 }
 
+export interface WorkspaceProviderSelection {
+  apiKey: string;
+  apiKeyEnv: string;
+  baseUrl: string;
+  label: string;
+  model: string;
+  profileId: string;
+}
+
 export interface DeviceWorkspace {
   chatItems: ChatItem[];
   codexHistory: LocalCodexHistoryEntryLike[];
@@ -148,8 +158,12 @@ export interface DeviceWorkspace {
   historyPages: Record<string, SessionHistoryPageState>;
   loadedThreadIds: string[];
   missingHistoryCwds: string[];
+  model: string;
   outbox: Record<string, OutboxEntry>;
   pendingApprovals: PendingApprovalView[];
+  providerCatalog: LocalProviderCatalogResponse | null;
+  providerCatalogLoading: boolean;
+  providerSelection: WorkspaceProviderSelection;
   resumeStates: Record<string, ResumeState>;
   selectedHistoryKey: string | null;
   sessionSyncState: WorkspaceSyncState;
@@ -207,8 +221,19 @@ export function createDeviceWorkspace(connection: AgentConnection): DeviceWorksp
     historyPages: {},
     loadedThreadIds: [],
     missingHistoryCwds: [],
+    model: "gpt-5.5",
     outbox: {},
     pendingApprovals: [],
+    providerCatalog: null,
+    providerCatalogLoading: false,
+    providerSelection: {
+      apiKey: "",
+      apiKeyEnv: "",
+      baseUrl: "",
+      label: "",
+      model: "",
+      profileId: ""
+    },
     resumeStates: {},
     selectedHistoryKey: null,
     sessionSyncState: "idle",

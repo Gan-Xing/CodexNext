@@ -29,6 +29,7 @@ import {
   LocalHealthResponseSchema,
   LocalInterruptResponseSchema,
   LocalLoadedThreadsResponseSchema,
+  LocalProviderCatalogResponseSchema,
   LocalResumeSessionResponseSchema,
   LocalResumeSessionSchema,
   LocalSendMessageSchema,
@@ -969,9 +970,44 @@ describe("relay protocol schemas", () => {
         codex: {
           available: true,
           version: "codex 0.1.0"
+        },
+        codexProvider: {
+          available: false,
+          error: "missing @codex-provider/core"
         }
       })
-    ).toMatchObject({ ok: true });
+    ).toMatchObject({
+      ok: true,
+      codexProvider: {
+        available: false,
+        error: "missing @codex-provider/core"
+      }
+    });
+
+    expect(
+      LocalProviderCatalogResponseSchema.parse({
+        available: true,
+        providers: [
+          {
+            preset: "openrouter",
+            label: "OpenRouter",
+            providerLabel: "openrouter",
+            baseUrl: "https://openrouter.ai/api/v1",
+            apiKeyEnv: "OPENROUTER_API_KEY",
+            apiKeyConfigured: true,
+            defaultModel: "deepseek/deepseek-v4-pro",
+            models: [
+              {
+                id: "deepseek/deepseek-v4-pro",
+                label: "DeepSeek V4 Pro",
+                isDefault: true,
+                supportedReasoningEfforts: ["high", "xhigh"]
+              }
+            ]
+          }
+        ]
+      }).providers[0]?.apiKeyConfigured
+    ).toBe(true);
 
     expect(
       LocalSendMessageResponseSchema.parse({

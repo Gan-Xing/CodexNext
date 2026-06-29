@@ -51,6 +51,7 @@ import {
   parseLocalEventReplayResponse,
   parseLocalHealthResponse,
   parseLocalInterruptResponse,
+  parseLocalProviderCatalogResponse,
   parseLocalQueueActionResponse,
   parseResumeSessionResponse,
   parseLocalSendMessageResponse,
@@ -192,7 +193,7 @@ export function health(connection: AgentConnection): Promise<LocalHealthResponse
 export function listProviderCatalog(
   connection: AgentConnection
 ): Promise<LocalProviderCatalogResponse> {
-  return agentFetch(connection, "/api/providers");
+  return agentFetchJson(connection, "/api/providers").then(parseLocalProviderCatalogResponse);
 }
 
 export function replayEvents(

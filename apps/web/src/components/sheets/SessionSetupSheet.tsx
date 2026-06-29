@@ -45,12 +45,15 @@ export function SessionSetupSheet(props: {
   permissionOptions: PermissionOption[];
   providerApiKey: string;
   providerApiKeyEnv: string;
+  providerAvailable: boolean;
   providerBaseUrl: string;
+  providerCatalogLoading: boolean;
   providerLabel: string;
   providerModel: string;
   providerModelOptions: ModelOption[];
   providerOptions: ProviderOption[];
   providerProfileId: string;
+  providerStatusMessage: string | null;
   reasoningEffort: LocalReasoningEffort;
   reasoningOptions: ReasoningOption[];
   streamStatus: string;
@@ -182,6 +185,7 @@ export function SessionSetupSheet(props: {
             Provider
             <select
               name="session_provider"
+              disabled={!props.providerAvailable}
               value={props.providerProfileId}
               onChange={(event) => props.onSelectProviderProfile(event.target.value)}
             >
@@ -192,6 +196,13 @@ export function SessionSetupSheet(props: {
               ))}
             </select>
           </label>
+          {props.providerStatusMessage ? (
+            <div className="cn-live-error inline" role="status">
+              {props.providerStatusMessage}
+            </div>
+          ) : props.providerCatalogLoading ? (
+            <div className="cn-muted-line">正在读取当前设备的 Provider 能力...</div>
+          ) : null}
           {providerEnabled ? (
             <>
               <label>

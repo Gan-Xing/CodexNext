@@ -44,7 +44,69 @@ const providerOptions = [
   { label: "Codex 默认", preset: null, value: "" }
 ];
 
+const providerOptionsWithCustom = [
+  { label: "Codex 默认", preset: null, value: "" },
+  { label: "OpenRouter", preset: "openrouter" as const, value: "openrouter" },
+  { label: "自定义", preset: "custom" as const, value: "custom" }
+];
+
 const noop = () => {};
+
+type SessionSetupSheetProps = Parameters<typeof SessionSetupSheet>[0];
+
+function renderSessionSetupSheet(
+  overrides: Partial<SessionSetupSheetProps> = {}
+): string {
+  const props: SessionSetupSheetProps = {
+    connected: true,
+    cwd: "/repo",
+    deviceName: "MacBook",
+    directoryError: null,
+    directoryList: null,
+    directoryLoading: false,
+    initialGoal: "",
+    initialTokenBudget: "",
+    model: "gpt-5",
+    modelOptions,
+    permissionMode: "request-approval",
+    permissionOptions: allPermissionOptions,
+    providerApiKey: "",
+    providerApiKeyEnv: "",
+    providerAvailable: false,
+    providerBaseUrl: "",
+    providerCatalogLoading: false,
+    providerLabel: "",
+    providerModel: "",
+    providerModelOptions: [],
+    providerOptions,
+    providerProfileId: "",
+    providerStatusMessage: null,
+    reasoningEffort: "medium",
+    reasoningOptions,
+    streamStatus: "idle",
+    onClose: noop,
+    onInitialGoalChange: noop,
+    onInitialTokenBudgetChange: noop,
+    onLoadDirectories: noop,
+    onOpenDevice: noop,
+    onSelectCwd: noop,
+    onSelectModel: noop,
+    onSelectPermission: noop,
+    onSelectProviderProfile: noop,
+    onProviderApiKeyChange: noop,
+    onProviderApiKeyEnvChange: noop,
+    onProviderBaseUrlChange: noop,
+    onProviderLabelChange: noop,
+    onProviderModelChange: noop,
+    onSelectReasoning: noop
+  };
+  return renderToStaticMarkup(
+    createElement(SessionSetupSheet, {
+      ...props,
+      ...overrides
+    })
+  );
+}
 
 describe("rendered permission filtering", () => {
   it("omits full access from the session setup sheet when options are filtered", () => {
@@ -55,52 +117,32 @@ describe("rendered permission filtering", () => {
         relayFullAccessEnabled: false
       }
     );
-    const markup = renderToStaticMarkup(
-      createElement(SessionSetupSheet, {
-        connected: true,
-        cwd: "/repo",
-        deviceName: "MacBook",
-        directoryError: null,
-        directoryList: null,
-        directoryLoading: false,
-        initialGoal: "",
-        initialTokenBudget: "",
-        model: "gpt-5",
-        modelOptions,
-        permissionMode: "request-approval",
-        permissionOptions,
-        providerApiKey: "",
-        providerApiKeyEnv: "",
-        providerBaseUrl: "",
-        providerLabel: "",
-        providerModel: "",
-        providerModelOptions: [],
-        providerOptions,
-        providerProfileId: "",
-        reasoningEffort: "medium",
-        reasoningOptions,
-        streamStatus: "idle",
-        onClose: noop,
-        onInitialGoalChange: noop,
-        onInitialTokenBudgetChange: noop,
-        onLoadDirectories: noop,
-        onOpenDevice: noop,
-        onSelectCwd: noop,
-        onSelectModel: noop,
-        onSelectPermission: noop,
-        onSelectProviderProfile: noop,
-        onProviderApiKeyChange: noop,
-        onProviderApiKeyEnvChange: noop,
-        onProviderBaseUrlChange: noop,
-        onProviderLabelChange: noop,
-        onProviderModelChange: noop,
-        onSelectReasoning: noop
-      })
-    );
+    const markup = renderSessionSetupSheet({ permissionOptions });
 
     expect(markup).toContain("请求批准");
     expect(markup).toContain("自定义 config.toml");
     expect(markup).not.toContain("完全访问权限");
+  });
+
+  it("disables provider selection when the current device has no Provider runtime", () => {
+    const markup = renderSessionSetupSheet({
+      providerAvailable: false,
+      providerStatusMessage: "当前设备未启用 CodexProvider：missing @codex-provider/core"
+    });
+
+    expect(markup).toContain("当前设备未启用 CodexProvider");
+    expect(markup).toContain('name="session_provider" disabled=""');
+  });
+
+  it("keeps custom provider selection visible when the current device supports Provider runtime", () => {
+    const markup = renderSessionSetupSheet({
+      providerAvailable: true,
+      providerOptions: providerOptionsWithCustom
+    });
+
+    expect(markup).toContain("OpenRouter");
+    expect(markup).toContain("自定义");
+    expect(markup).not.toContain('name="session_provider" disabled=""');
   });
 
   it("omits full access from the live composer permission menu when options are filtered", () => {

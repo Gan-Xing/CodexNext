@@ -31,6 +31,7 @@ import {
   parseLocalEventReplayResponse,
   parseLocalHealthResponse,
   parseLocalInterruptResponse,
+  parseLocalProviderCatalogResponse,
   parseResumeSessionResponse,
   parseLocalSendMessageResponse,
   parseLocalSessionsResponse,
@@ -276,6 +277,18 @@ describe("relay client contract helpers", () => {
         codex: { available: true, version: "codex 0.1" }
       }).codex
     ).toMatchObject({ available: true });
+
+    expect(
+      parseLocalProviderCatalogResponse({
+        available: false,
+        error: "missing @codex-provider/core",
+        providers: []
+      })
+    ).toEqual({
+      available: false,
+      error: "missing @codex-provider/core",
+      providers: []
+    });
 
     expect(parseLocalSessionsResponse({ sessions: [session] }).sessions[0]).toMatchObject({
       sessionId: "session_1"

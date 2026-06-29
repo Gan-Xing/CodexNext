@@ -40,7 +40,7 @@ import {
   SessionManager,
   type CodexClientFactory
 } from "./session-manager.js";
-import type { ProviderRuntimeManager } from "./provider-runtime-manager.js";
+import { ProviderRuntimeManager } from "./provider-runtime-manager.js";
 import { devTrace, durationMs, errorSummary, payloadSummary } from "../dev-trace.js";
 
 export interface LocalAgentRuntimeOptions {
@@ -87,12 +87,13 @@ export function createLocalAgentRuntime(
             ? { stateDbPath: options.historyStateDbPath }
             : {})
         });
+  const providerRuntimeManager = options.providerRuntimeManager ?? new ProviderRuntimeManager();
   const sessionManager = new SessionManager({
     eventStore,
     approvalBridge,
     codexBin: options.codexBin,
     clientFactory: options.clientFactory,
-    providerRuntimeManager: options.providerRuntimeManager
+    providerRuntimeManager
   });
 
   return {
@@ -104,13 +105,13 @@ export function createLocalAgentRuntime(
       historyStore?.close();
     },
     directories: (requestedPath?: string) => listDirectories(requestedPath),
-    health: async () => health(options),
+    health: async () => health(options, providerRuntimeManager),
     providers: async () => sessionManager.providerCatalog(),
     invoke: async (method, params) =>
       traceRuntimeInvoke(method, params, async () => {
         switch (method) {
           case RelayMethodValue.AgentHealth:
-            return health(options);
+            return health(options, providerRuntimeManager);
           case RelayMethodValue.ProviderCatalog:
             return sessionManager.providerCatalog();
           case RelayMethodValue.SessionsList:
@@ -807,9 +808,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 async function health(
-  options: LocalAgentRuntimeOptions
+  options: LocalAgentRuntimeOptions,
+  providerRuntimeManager: ProviderRuntimeManager
 ): Promise<LocalHealthResponse> {
-  const codex = await codexVersion(options.codexBin);
+  const [codex, codexProvider] = await Promise.all([
+    codexVersion(options.codexBin),
+    providerRuntimeManager.status()
+  ]);
   const hostname = os.hostname();
   return {
     ok: true,
@@ -823,7 +828,8 @@ async function health(
       hostname,
       platform: process.platform
     },
-    codex
+    codex,
+    codexProvider
   };
 }
 

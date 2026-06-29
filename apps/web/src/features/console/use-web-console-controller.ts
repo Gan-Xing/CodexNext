@@ -85,6 +85,7 @@ import {
   type OutboxEntry,
   type TurnGroup,
   type ResumeState,
+  type WorkspaceProviderSelection,
   upsertSessionInWorkspace
 } from "../chat/chat-state";
 import {
@@ -202,6 +203,15 @@ export const providerOptions: Array<{
   { label: "Kimi", preset: "moonshot-kimi", value: "moonshot-kimi" },
   { label: "自定义", preset: "custom", value: "custom" }
 ];
+
+const EMPTY_PROVIDER_SELECTION: WorkspaceProviderSelection = {
+  apiKey: "",
+  apiKeyEnv: "",
+  baseUrl: "",
+  label: "",
+  model: "",
+  profileId: ""
+};
 
 export const reasoningOptions: Array<{ label: string; value: LocalReasoningEffort }> = [
   { label: "低", value: "low" },
@@ -575,14 +585,6 @@ export function useWebConsoleController() {
   const [threadHoverPreview, setThreadHoverPreview] = useState<ThreadHoverPreview | null>(null);
   const [deviceWorkspaces, setDeviceWorkspaces] = useState<Record<string, DeviceWorkspace>>({});
   const [localStorageReady, setLocalStorageReady] = useState(false);
-  const [model, setModel] = useState("gpt-5.5");
-  const [providerProfileId, setProviderProfileId] = useState("");
-  const [providerModel, setProviderModel] = useState("");
-  const [providerBaseUrl, setProviderBaseUrl] = useState("");
-  const [providerLabel, setProviderLabel] = useState("");
-  const [providerApiKey, setProviderApiKey] = useState("");
-  const [providerApiKeyEnv, setProviderApiKeyEnv] = useState("");
-  const [providerCatalog, setProviderCatalog] = useState<LocalProviderCatalogResponse | null>(null);
   const [serviceTier, setServiceTier] = useState<string | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<LocalReasoningEffort>("xhigh");
   const [permissionMode, setPermissionMode] = useState<LocalPermissionMode>("request-approval");
@@ -653,6 +655,16 @@ export function useWebConsoleController() {
       deviceId: selectedSavedDevice?.deviceId ?? ""
     };
   const healthStatus = activeWorkspace?.healthStatus ?? null;
+  const providerCatalog = activeWorkspace?.providerCatalog ?? null;
+  const providerCatalogLoading = activeWorkspace?.providerCatalogLoading ?? false;
+  const providerSelection = activeWorkspace?.providerSelection ?? EMPTY_PROVIDER_SELECTION;
+  const providerApiKey = providerSelection.apiKey;
+  const providerApiKeyEnv = providerSelection.apiKeyEnv;
+  const providerBaseUrl = providerSelection.baseUrl;
+  const providerLabel = providerSelection.label;
+  const providerModel = providerSelection.model;
+  const providerProfileId = providerSelection.profileId;
+  const model = activeWorkspace?.model ?? modelOptions[0]!.value;
   const streamStatus = activeWorkspace?.streamStatus ?? "disconnected";
   const events = activeWorkspace?.events ?? [];
   const sessions = activeWorkspace?.sessions ?? [];
@@ -716,6 +728,13 @@ export function useWebConsoleController() {
       streamStatus !== "disconnected" &&
       streamStatus !== "error"
   );
+  const codexProviderStatus =
+    providerCatalog
+      ? {
+          available: providerCatalog.available,
+          error: providerCatalog.error ?? null
+        }
+      : healthStatus?.codexProvider ?? null;
   const sidebarPrefsScopeKey = relayThreadPrefsScope(
     connection.relayUrl,
     connection.deviceId || "unbound"
@@ -726,22 +745,32 @@ export function useWebConsoleController() {
   const selectedModel = modelOptions.find((option) => option.value === model) ?? modelOptions[0]!;
   const catalogProviderOptions = useMemo(
     () =>
-      providerCatalog
+      providerCatalog?.available
         ? [
             providerOptions[0]!,
             ...providerCatalog.providers.map((provider) => ({
               label: provider.label,
               preset: provider.preset,
               value: provider.preset
-            }))
+            })),
+            providerOptions[providerOptions.length - 1]!
           ]
-        : providerOptions,
+        : [providerOptions[0]!],
     [providerCatalog]
   );
   const selectedProviderOption =
     catalogProviderOptions.find((option) => option.value === providerProfileId) ?? catalogProviderOptions[0]!;
   const selectedProviderCatalog =
-    providerCatalog?.providers.find((provider) => provider.preset === providerProfileId) ?? null;
+    providerCatalog?.available
+      ? providerCatalog.providers.find((provider) => provider.preset === providerProfileId) ?? null
+      : null;
+  const providerAvailable = Boolean(providerCatalog?.available);
+  const providerStatusMessage =
+    connected && codexProviderStatus && !codexProviderStatus.available
+      ? `当前设备未启用 CodexProvider：${codexProviderStatus.error ?? "请安装 @codex-provider/core 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`
+      : connected && providerCatalog?.available === false
+        ? `当前设备未启用 CodexProvider：${providerCatalog.error ?? "请安装 @codex-provider/core 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`
+        : null;
   const providerModelOptions = selectedProviderCatalog?.models.map((entry) => ({
     label: entry.label,
     shortLabel: shortModelLabel(entry.label, entry.id),
@@ -797,43 +826,108 @@ export function useWebConsoleController() {
   );
 
   useEffect(() => {
-    if (!connected) {
+    if (!connected || !selectedDeviceId) {
       return;
     }
     let cancelled = false;
+    const deviceId = selectedDeviceId;
+    setDeviceWorkspaces((previous) => {
+      const workspace = previous[deviceId];
+      if (!workspace) {
+        return previous;
+      }
+      return {
+        ...previous,
+        [deviceId]: {
+          ...workspace,
+          providerCatalogLoading: true
+        }
+      };
+    });
     void listProviderCatalog(connection)
       .then((catalog) => {
-        if (!cancelled) {
-          setProviderCatalog(catalog);
+        if (cancelled) {
+          return;
         }
+        setDeviceWorkspaces((previous) => {
+          const workspace = previous[deviceId];
+          if (!workspace) {
+            return previous;
+          }
+          return {
+            ...previous,
+            [deviceId]: {
+              ...workspace,
+              providerCatalog: catalog,
+              providerCatalogLoading: false
+            }
+          };
+        });
       })
       .catch((err) => {
         webDevTrace("console.providers.catalog.error", webErrorSummary(err));
+        if (cancelled) {
+          return;
+        }
+        setDeviceWorkspaces((previous) => {
+          const workspace = previous[deviceId];
+          if (!workspace) {
+            return previous;
+          }
+          return {
+            ...previous,
+            [deviceId]: {
+              ...workspace,
+              providerCatalog: {
+                available: false,
+                error: formatError(err),
+                providers: []
+              },
+              providerCatalogLoading: false
+            }
+          };
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, [connected, connection.deviceId, connection.relayUrl, connection.sessionToken]);
+  }, [connected, connection.deviceId, connection.relayUrl, connection.sessionToken, selectedDeviceId]);
+
+  useEffect(() => {
+    if (!selectedDeviceId || !providerProfileId || !providerCatalog) {
+      return;
+    }
+    const providerStillAvailable =
+      providerCatalog.available &&
+      (providerProfileId === "custom" ||
+        providerCatalog.providers.some((provider) => provider.preset === providerProfileId));
+    if (providerStillAvailable) {
+      return;
+    }
+    setDeviceWorkspaces((previous) => {
+      const workspace = previous[selectedDeviceId];
+      if (!workspace) {
+        return previous;
+      }
+      return {
+        ...previous,
+        [selectedDeviceId]: {
+          ...workspace,
+          providerSelection: EMPTY_PROVIDER_SELECTION
+        }
+      };
+    });
+  }, [providerCatalog, providerProfileId, selectedDeviceId]);
 
   useEffect(() => {
     if (!selectedProviderCatalog || providerModel) {
       return;
     }
-    setProviderModel(selectedProviderCatalog.defaultModel);
-    setProviderApiKeyEnv((value) => value || selectedProviderCatalog.apiKeyEnv);
-  }, [providerModel, selectedProviderCatalog]);
-
-  const selectProviderProfile = useCallback(
-    (value: string) => {
-      const catalogEntry = providerCatalog?.providers.find((provider) => provider.preset === value) ?? null;
-      setProviderProfileId(value);
-      setProviderModel(catalogEntry?.defaultModel ?? "");
-      setProviderApiKeyEnv(catalogEntry?.apiKeyEnv ?? "");
-      setProviderBaseUrl("");
-      setProviderLabel("");
-    },
-    [providerCatalog]
-  );
+    updateProviderSelection({
+      apiKeyEnv: providerApiKeyEnv || selectedProviderCatalog.apiKeyEnv,
+      model: selectedProviderCatalog.defaultModel
+    });
+  }, [providerApiKeyEnv, providerModel, selectedProviderCatalog]);
   const selectedPermission =
     availablePermissionOptions.find((option) => option.mode === permissionMode) ??
     availablePermissionOptions[0]!;
@@ -964,6 +1058,82 @@ export function useWebConsoleController() {
     },
     [patchDeviceWorkspace]
   );
+
+  function updateProviderSelection(updates: Partial<WorkspaceProviderSelection>) {
+    const deviceId = selectedDeviceId ?? selectedDeviceIdRef.current;
+    if (!deviceId) {
+      return;
+    }
+    setDeviceWorkspaces((previous) => {
+      const workspace = previous[deviceId];
+      if (!workspace) {
+        return previous;
+      }
+      return {
+        ...previous,
+        [deviceId]: {
+          ...workspace,
+          providerSelection: {
+            ...workspace.providerSelection,
+            ...updates
+          }
+        }
+      };
+    });
+  }
+
+  function setModel(value: string) {
+    const deviceId = selectedDeviceId ?? selectedDeviceIdRef.current;
+    if (!deviceId) {
+      return;
+    }
+    setDeviceWorkspaces((previous) => {
+      const workspace = previous[deviceId];
+      if (!workspace) {
+        return previous;
+      }
+      return {
+        ...previous,
+        [deviceId]: {
+          ...workspace,
+          model: value
+        }
+      };
+    });
+  }
+
+  function selectProviderProfile(value: string) {
+    const catalogEntry = providerCatalog?.available
+      ? providerCatalog.providers.find((provider) => provider.preset === value) ?? null
+      : null;
+    updateProviderSelection({
+      apiKeyEnv: catalogEntry?.apiKeyEnv ?? "",
+      baseUrl: "",
+      label: "",
+      model: catalogEntry?.defaultModel ?? "",
+      profileId: value
+    });
+  }
+
+  function setProviderModel(value: string) {
+    updateProviderSelection({ model: value });
+  }
+
+  function setProviderBaseUrl(value: string) {
+    updateProviderSelection({ baseUrl: value });
+  }
+
+  function setProviderLabel(value: string) {
+    updateProviderSelection({ label: value });
+  }
+
+  function setProviderApiKey(value: string) {
+    updateProviderSelection({ apiKey: value });
+  }
+
+  function setProviderApiKeyEnv(value: string) {
+    updateProviderSelection({ apiKeyEnv: value });
+  }
 
   function historyAutoCompletionTaskId(deviceId: string, sessionId: string): string {
     return `${deviceId}:${sessionId}`;
@@ -4288,8 +4458,13 @@ export function useWebConsoleController() {
       await loadDirectories(undefined);
       return;
     }
-    if (!currentSession) {
-      const providerValidationError = validateProviderSessionRequest(providerSessionRequest);
+    if (!currentSession || isHistoryPreviewSessionId(currentSession.sessionId)) {
+      const providerValidationError = validateProviderSessionRequest({
+        catalog: providerCatalog,
+        loading: providerCatalogLoading,
+        request: providerSessionRequest,
+        status: codexProviderStatus
+      });
       if (providerValidationError) {
         webDevTrace("console.submit.failed", {
           submitTraceId,
@@ -5393,13 +5568,16 @@ export function useWebConsoleController() {
     model,
     providerApiKey,
     providerApiKeyEnv,
+    providerAvailable,
     providerBaseUrl,
     providerCatalog,
+    providerCatalogLoading,
     providerLabel,
     providerModel,
     providerModelOptions,
     providerOptions: catalogProviderOptions,
     providerProfileId,
+    providerStatusMessage,
     openDeviceSheet,
     openSummarySheet,
     openGoalSheet,
@@ -5723,17 +5901,54 @@ function buildProviderSessionRequest(input: {
   };
 }
 
-function validateProviderSessionRequest(
-  request: ReturnType<typeof buildProviderSessionRequest>
-): string | null {
-  if (!request || request.provider.preset !== "custom") {
+function validateProviderSessionRequest(input: {
+  catalog: LocalProviderCatalogResponse | null;
+  loading: boolean;
+  request: ReturnType<typeof buildProviderSessionRequest>;
+  status: LocalHealthResponse["codexProvider"] | null;
+}): string | null {
+  const request = input.request;
+  if (!request) {
     return null;
   }
-  if (!request.provider.baseUrl?.trim()) {
-    return "请填写自定义 Provider 的 Base URL";
+
+  if (input.loading && !input.catalog) {
+    return "正在读取当前设备的 Provider 能力，请稍后再试。";
   }
-  if (!request.provider.model?.trim()) {
-    return "请填写自定义 Provider 的模型";
+  if (input.status && !input.status.available) {
+    return `当前设备未启用 CodexProvider：${input.status.error ?? "请安装 @codex-provider/core 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`;
+  }
+  if (!input.catalog) {
+    return "还没有读取到当前设备的 Provider 能力，请稍后再试。";
+  }
+  if (!input.catalog.available) {
+    return `当前设备未启用 CodexProvider：${input.catalog.error ?? "请安装 @codex-provider/core 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`;
+  }
+
+  if (request.provider.preset === "custom") {
+    if (!request.provider.baseUrl?.trim()) {
+      return "请填写自定义 Provider 的 Base URL";
+    }
+    if (!request.provider.model?.trim()) {
+      return "请填写自定义 Provider 的模型";
+    }
+    if (!request.provider.apiKey?.trim() && !request.provider.apiKeyEnv?.trim()) {
+      return "请填写自定义 Provider 的 API Key 或 API Key Env";
+    }
+    return null;
+  }
+
+  const catalogEntry = input.catalog.providers.find(
+    (provider) => provider.preset === request.providerProfileId
+  );
+  if (!catalogEntry) {
+    return "当前设备不支持这个 Provider，请重新选择。";
+  }
+  if (!request.provider.model?.trim() && !catalogEntry.defaultModel.trim()) {
+    return "请选择 Provider 模型。";
+  }
+  if (!request.provider.apiKey?.trim() && !catalogEntry.apiKeyConfigured) {
+    return `当前设备没有配置 ${catalogEntry.apiKeyEnv}，请在设备环境变量中设置，或直接填写 API Key。`;
   }
   return null;
 }

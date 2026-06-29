@@ -10,6 +10,7 @@ import type {
   LocalHealthResponse,
   LocalInterruptResponse,
   LocalLoadedThreadsResponse,
+  LocalProviderCatalogResponse,
   LocalQueueActionResponse,
   LocalResumeSessionResponse,
   LocalSendMessageResponse,
@@ -28,6 +29,7 @@ import {
   LocalHealthResponseSchema,
   LocalInterruptResponseSchema,
   LocalLoadedThreadsResponseSchema,
+  LocalProviderCatalogResponseSchema,
   LocalQueueActionResponseSchema,
   LocalResumeSessionResponseSchema,
   LocalSendMessageResponseSchema,
@@ -256,6 +258,16 @@ export function parseSidebarPrefsResponse(payload: unknown): SidebarPrefsRespons
 
 export function parseLocalHealthResponse(payload: unknown): LocalHealthResponse {
   return parseRelayResponse(LocalHealthResponseSchema, payload, "health") as LocalHealthResponse;
+}
+
+export function parseLocalProviderCatalogResponse(
+  payload: unknown
+): LocalProviderCatalogResponse {
+  return parseRelayResponse(
+    LocalProviderCatalogResponseSchema,
+    payload,
+    "provider catalog"
+  ) as LocalProviderCatalogResponse;
 }
 
 export function parseLocalSessionsResponse(payload: unknown): LocalSessionsResponse {

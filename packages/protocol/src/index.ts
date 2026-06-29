@@ -378,6 +378,7 @@ export const LocalProviderCatalogEntrySchema = z
     providerName: z.string().min(1).nullable().optional(),
     baseUrl: z.string().min(1),
     apiKeyEnv: z.string().min(1),
+    apiKeyConfigured: z.boolean().default(false),
     defaultModel: z.string().min(1),
     models: z.array(LocalProviderCatalogModelSchema)
   })
@@ -387,11 +388,26 @@ export type LocalProviderCatalogEntry = z.infer<
   typeof LocalProviderCatalogEntrySchema
 >;
 
+export const LocalProviderRuntimeStatusSchema = z
+  .object({
+    available: z.boolean(),
+    error: z.string().min(1).nullable().optional()
+  })
+  .strict();
+
+export type LocalProviderRuntimeStatus = z.infer<
+  typeof LocalProviderRuntimeStatusSchema
+>;
+
 export const LocalProviderCatalogResponseSchema = z.object({
+  available: z.boolean().default(true),
+  error: z.string().min(1).nullable().optional(),
   providers: z.array(LocalProviderCatalogEntrySchema)
 });
 
 export interface LocalProviderCatalogResponse {
+  available: boolean;
+  error?: string | null;
   providers: LocalProviderCatalogEntry[];
 }
 
@@ -1817,6 +1833,7 @@ export interface LocalHealthResponse {
     available: boolean;
     version?: string;
   };
+  codexProvider?: LocalProviderRuntimeStatus;
 }
 
 export const LocalHealthResponseSchema = z.object({
@@ -1838,7 +1855,8 @@ export const LocalHealthResponseSchema = z.object({
       available: z.boolean(),
       version: z.string().optional()
     })
-    .optional()
+    .optional(),
+  codexProvider: LocalProviderRuntimeStatusSchema.optional()
 });
 
 export const ThreadSidebarPrefsPayloadSchema = z.object({
