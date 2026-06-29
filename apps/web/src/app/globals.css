@@ -4242,6 +4242,24 @@ summary {
     padding: 0.26rem 0.38rem;
   }
 
+  .cn-live-console .cn-composer-status-row {
+    flex-wrap: nowrap;
+    gap: 0.36rem;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding-bottom: 0.08rem;
+    scrollbar-width: none;
+  }
+
+  .cn-live-console .cn-composer-status-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .cn-live-console .cn-composer-status-row > * {
+    flex-shrink: 0;
+  }
+
   .cn-live-console .cn-composer-toolbar {
     flex-wrap: nowrap;
     gap: 0.36rem;
@@ -4271,11 +4289,16 @@ summary {
     white-space: nowrap;
   }
 
-  .cn-live-console .cn-composer-toolbar .cn-composer-mode-pill {
+  .cn-live-console .cn-composer-pill-model {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+
+  .cn-live-console .cn-composer-status-row .cn-composer-mode-pill {
     max-width: 6.25rem;
   }
 
-  .cn-live-console .cn-composer-toolbar .cn-composer-mode-main span {
+  .cn-live-console .cn-composer-status-row .cn-composer-mode-main span {
     max-width: 3.4rem;
   }
 
@@ -6381,6 +6404,14 @@ summary {
 .cn-composer-toolbar {
   align-items: center;
   display: flex;
+  gap: 0.42rem;
+  min-width: 0;
+}
+
+.cn-composer-status-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.42rem;
   min-width: 0;
 }
@@ -8742,6 +8773,10 @@ summary {
 
   .cn-live-console .cn-composer-pill {
     max-width: 27vw;
+  }
+
+  .cn-live-console .cn-composer-pill-model {
+    max-width: none;
   }
 
   .cn-live-console .cn-live-popover,

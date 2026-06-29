@@ -123,6 +123,8 @@ export function LiveComposer(props: {
   const showGuideSubmit = props.activeTurn && hasDraft && !composerDisabled && !props.goalMode;
   const showGoalPill = props.goalMode || props.hasGoal;
   const showFastPill = props.serviceTier === FAST_SERVICE_TIER;
+  const showComposerStatusRow =
+    props.planMode || showGoalPill || showFastPill || showGuideSubmit;
   const showQueuedMessages = props.queuedMessages.length > 0;
   const placeholder = props.disabledReason
     ? props.disabledReason
@@ -638,6 +640,43 @@ export function LiveComposer(props: {
           ))}
         </div>
       ) : null}
+      {showComposerStatusRow ? (
+        <div className="cn-composer-status-row">
+          {props.planMode ? (
+            <ComposerModePill
+              icon="tasks"
+              label="计划模式"
+              onClear={props.onTogglePlanMode}
+            />
+          ) : null}
+          {showGoalPill ? (
+            <ComposerModePill
+              icon="goal"
+              label="目标"
+              onClear={props.goalMode ? props.onDismissGoalMode : props.onClearGoal}
+              onClick={activateGoalMode}
+            />
+          ) : null}
+          {showFastPill ? (
+            <ComposerModePill
+              icon="terminal"
+              label="Fast"
+              onClear={props.onClearServiceTier}
+            />
+          ) : null}
+          {showGuideSubmit ? (
+            <button
+              className="cn-composer-pill cn-guide-submit-pill"
+              type="button"
+              title="把这条消息发送到当前正在回复的对话中"
+              onClick={props.onSubmitGuide}
+            >
+              <CodexIcon name="guide" />
+              引导对话
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <div className="cn-composer-toolbar">
         <input
           ref={props.fileInputRef}
@@ -668,39 +707,6 @@ export function LiveComposer(props: {
           {props.selectedPermission.label}
           <CodexIcon name="chevronDown" />
         </button>
-        {props.planMode ? (
-          <ComposerModePill
-            icon="tasks"
-            label="计划模式"
-            onClear={props.onTogglePlanMode}
-          />
-        ) : null}
-        {showGoalPill ? (
-          <ComposerModePill
-            icon="goal"
-            label="目标"
-            onClear={props.goalMode ? props.onDismissGoalMode : props.onClearGoal}
-            onClick={activateGoalMode}
-          />
-        ) : null}
-        {showFastPill ? (
-          <ComposerModePill
-            icon="terminal"
-            label="Fast"
-            onClear={props.onClearServiceTier}
-          />
-        ) : null}
-        {showGuideSubmit ? (
-          <button
-            className="cn-composer-pill cn-guide-submit-pill"
-            type="button"
-            title="把这条消息发送到当前正在回复的对话中"
-            onClick={props.onSubmitGuide}
-          >
-            <CodexIcon name="guide" />
-            引导对话
-          </button>
-        ) : null}
         <button
           ref={modelButtonRef}
           className="cn-composer-pill cn-composer-pill-model"
