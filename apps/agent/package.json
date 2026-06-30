@@ -19,6 +19,7 @@
   "dependencies": {
     "@codexnext/codex-client": "workspace:*",
     "@codexnext/protocol": "workspace:*",
+    "codex-provider": "0.1.0-alpha.0",
     "commander": "^14.0.2",
     "pino": "^10.1.0",
     "socket.io-client": "^4.8.3",

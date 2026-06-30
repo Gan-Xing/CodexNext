@@ -34,6 +34,9 @@ importers:
       '@codexnext/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      codex-provider:
+        specifier: 0.1.0-alpha.0
+        version: 0.1.0-alpha.0
       commander:
         specifier: ^14.0.2
         version: 14.0.3
@@ -862,6 +865,11 @@ packages:
 
   client-only@0.0.1:
     resolution: {integrity: sha512-IV3Ou0jSMzZrd3pZ48nLkT9DA7Ag1pnPzaiQhpW7c3RbcqqzvzzVu+L8gfqMp/8IM2MQtSiqaCxrrcfu8I8rMA==}
+
+  codex-provider@0.1.0-alpha.0:
+    resolution: {integrity: sha512-jxVnqmnwS+rqq18XONJoAKfofoQQyQalFseDgCRoHMx0DVdx/g6mOJRgHxWVvgrxJccQTOPYqfCYyQ2s1tPBDQ==}
+    engines: {node: '>=24'}
+    hasBin: true
 
   comma-separated-tokens@2.0.3:
     resolution: {integrity: sha512-Fu4hJdvzeylCfQPp9SGWidpzrMs7tTrlu6Vb8XGaRGck8QSNZJJp538Wrb60Lax4fPwR64ViY468OIUTbRlGZg==}
@@ -2151,6 +2159,8 @@ snapshots:
   character-reference-invalid@2.0.1: {}
 
   client-only@0.0.1: {}
+
+  codex-provider@0.1.0-alpha.0: {}
 
   comma-separated-tokens@2.0.3: {}
 

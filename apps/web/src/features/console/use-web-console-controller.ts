@@ -767,9 +767,9 @@ export function useWebConsoleController() {
   const providerAvailable = Boolean(providerCatalog?.available);
   const providerStatusMessage =
     connected && codexProviderStatus && !codexProviderStatus.available
-      ? `当前设备未启用 CodexProvider：${codexProviderStatus.error ?? "请安装 @codex-provider/core 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`
+      ? `当前设备未启用 CodexProvider：${codexProviderStatus.error ?? "请安装 codex-provider 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`
       : connected && providerCatalog?.available === false
-        ? `当前设备未启用 CodexProvider：${providerCatalog.error ?? "请安装 @codex-provider/core 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`
+        ? `当前设备未启用 CodexProvider：${providerCatalog.error ?? "请安装 codex-provider 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`
         : null;
   const providerModelOptions = selectedProviderCatalog?.models.map((entry) => ({
     label: entry.label,
@@ -5916,13 +5916,13 @@ function validateProviderSessionRequest(input: {
     return "正在读取当前设备的 Provider 能力，请稍后再试。";
   }
   if (input.status && !input.status.available) {
-    return `当前设备未启用 CodexProvider：${input.status.error ?? "请安装 @codex-provider/core 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`;
+    return `当前设备未启用 CodexProvider：${input.status.error ?? "请安装 codex-provider 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`;
   }
   if (!input.catalog) {
     return "还没有读取到当前设备的 Provider 能力，请稍后再试。";
   }
   if (!input.catalog.available) {
-    return `当前设备未启用 CodexProvider：${input.catalog.error ?? "请安装 @codex-provider/core 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`;
+    return `当前设备未启用 CodexProvider：${input.catalog.error ?? "请安装 codex-provider 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`;
   }
 
   if (request.provider.preset === "custom") {

@@ -127,7 +127,7 @@ describe("rendered permission filtering", () => {
   it("disables provider selection when the current device has no Provider runtime", () => {
     const markup = renderSessionSetupSheet({
       providerAvailable: false,
-      providerStatusMessage: "当前设备未启用 CodexProvider：missing @codex-provider/core"
+      providerStatusMessage: "当前设备未启用 CodexProvider：missing codex-provider"
     });
 
     expect(markup).toContain("当前设备未启用 CodexProvider");

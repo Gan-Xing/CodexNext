@@ -973,14 +973,14 @@ describe("relay protocol schemas", () => {
         },
         codexProvider: {
           available: false,
-          error: "missing @codex-provider/core"
+          error: "missing codex-provider"
         }
       })
     ).toMatchObject({
       ok: true,
       codexProvider: {
         available: false,
-        error: "missing @codex-provider/core"
+        error: "missing codex-provider"
       }
     });
 

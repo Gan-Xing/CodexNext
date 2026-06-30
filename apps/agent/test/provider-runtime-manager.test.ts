@@ -3,6 +3,7 @@ import { ProviderRuntimeManager } from "../src/local-server/provider-runtime-man
 
 describe("ProviderRuntimeManager", () => {
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
 
@@ -12,6 +13,14 @@ describe("ProviderRuntimeManager", () => {
     });
 
     await expect(manager.resolveForSession({ model: "gpt-5.5" })).resolves.toBeNull();
+  });
+
+  it("loads the published codex-provider package by default", async () => {
+    vi.stubEnv("CODEXNEXT_CODEX_PROVIDER_MODULE", "");
+
+    const manager = new ProviderRuntimeManager();
+
+    await expect(manager.status()).resolves.toEqual({ available: true });
   });
 
   it("starts and reuses a CodexProvider runtime for OpenRouter", async () => {
@@ -84,7 +93,7 @@ describe("ProviderRuntimeManager", () => {
   it("reports unavailable catalog when CodexProvider core cannot load", async () => {
     const manager = new ProviderRuntimeManager({
       loadCore: async () => {
-        throw new Error("missing @codex-provider/core");
+        throw new Error("missing codex-provider");
       }
     });
 
@@ -93,12 +102,12 @@ describe("ProviderRuntimeManager", () => {
 
     expect(catalog).toEqual({
       available: false,
-      error: "missing @codex-provider/core",
+      error: "missing codex-provider",
       providers: []
     });
     expect(status).toEqual({
       available: false,
-      error: "missing @codex-provider/core"
+      error: "missing codex-provider"
     });
   });
 

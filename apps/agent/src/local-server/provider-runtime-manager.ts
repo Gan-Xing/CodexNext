@@ -596,14 +596,14 @@ async function loadCodexProviderCore(): Promise<CodexProviderCoreModule> {
   }
   const suffix = lastError instanceof Error ? ` Last error: ${lastError.message}` : "";
   throw new Error(
-    `CodexProvider is not available. Install @codex-provider/core, build the local CodexProvider repo, or set CODEXNEXT_CODEX_PROVIDER_MODULE.${suffix}`
+    `CodexProvider is not available. Install codex-provider, build the local CodexProvider repo, or set CODEXNEXT_CODEX_PROVIDER_MODULE.${suffix}`
   );
 }
 
 function codexProviderModuleCandidates(): string[] {
   const candidates = [
     normalizeString(process.env.CODEXNEXT_CODEX_PROVIDER_MODULE),
-    "@codex-provider/core",
+    "codex-provider",
     ...discoveredCodexProviderModules(process.cwd()),
     ...discoveredCodexProviderModules(path.dirname(fileURLToPath(import.meta.url)))
   ];

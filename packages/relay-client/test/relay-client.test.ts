@@ -281,12 +281,12 @@ describe("relay client contract helpers", () => {
     expect(
       parseLocalProviderCatalogResponse({
         available: false,
-        error: "missing @codex-provider/core",
+        error: "missing codex-provider",
         providers: []
       })
     ).toEqual({
       available: false,
-      error: "missing @codex-provider/core",
+      error: "missing codex-provider",
       providers: []
     });
 

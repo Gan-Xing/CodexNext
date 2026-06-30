@@ -22,6 +22,7 @@ CodexNext deployment is described by service roles, not by a fixed OS topology.
 - runs next to a local Codex installation
 - keeps one outbound relay connection to control
 - delegates approvals, sandboxing, and command enforcement to Codex app-server
+- loads the published `codex-provider` package for Provider Runtime sessions
 
 Any host can run any subset of these roles.
 
@@ -94,6 +95,7 @@ These ports are examples. Reverse proxies may expose standard `443` public origi
 | agent | `CODEXNEXT_RELAY_URL` | `http://127.0.0.1:3922` | `https://<your-relay-host>` | Control URL used by pair/connect. |
 | agent | `CODEXNEXT_DEVICE_NAME` | optional | optional | Display name. |
 | agent | `CODEXNEXT_CODEX_BIN` | `codex` | explicit path if needed | Startup helper auto-discovers common paths if unset. |
+| agent | `CODEXNEXT_CODEX_PROVIDER_MODULE` | optional local module path | usually unset | Development override for testing a local CodexProvider build. Normal installs use the `codex-provider` npm dependency. |
 | agent | `CODEXNEXT_APPROVAL_TIMEOUT_MS` | `300000` | `300000` | Local approval timeout. |
 
 ## Installers And Runtime Scripts
@@ -147,6 +149,8 @@ pnpm typecheck
 pnpm test
 pnpm --filter @codexnext/agent dev -- doctor
 ```
+
+The agent workspace depends on `codex-provider`, so `pnpm install --frozen-lockfile` installs the Provider Runtime package. A separate sibling CodexProvider checkout is not required unless `CODEXNEXT_CODEX_PROVIDER_MODULE` is intentionally set for development.
 
 2. Generate a Web password hash:
 

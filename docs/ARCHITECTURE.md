@@ -40,6 +40,7 @@ The user path must not expose an Agent URL, Access Token, `?agent=`, `?token=`, 
 
 - `pair` creates or reuses `~/.codexnext/device.json`, requests a pairing code, and polls until approved.
 - `connect` opens one outbound Socket.IO machine connection and handles `rpc:request`.
+- Provider Runtime is powered by the published `codex-provider` package. When a session requests a non-default provider, the agent starts a local CodexProvider adapter and passes the resulting Codex CLI args into the local Codex app-server startup path.
 - The local Codex app-server remains the final authority for approvals, sandboxing, and command execution.
 - `doctor` checks local prerequisites and can probe relay health.
 
@@ -77,5 +78,7 @@ Recent Codex history pages are cached in memory per device for a short TTL to ma
 `packages/codex-client` owns JSON-RPC transport mechanics for Codex app-server.
 
 `packages/relay-client` owns the first shared Web/mobile relay client boundary. It is intentionally small and pure: URL normalization, bearer auth headers, device/session/event replay/sidebar/approval URL helpers, user Socket.IO auth payloads, replay filtering, live-event acceptance, and sequence advancement. Browser and future mobile clients should depend on this package before duplicating relay event state rules.
+
+`codex-provider` is an external npm dependency consumed by `@codexnext/agent`, not vendored into this monorepo. `CODEXNEXT_CODEX_PROVIDER_MODULE` remains a development override for testing a local provider build, but a normal install should resolve the published package without requiring an adjacent CodexProvider checkout.
 
 CodexNext intentionally does not replace Codex permissions. Permission mode, sandbox mode, approvals, and command execution enforcement remain inside the local Codex app-server.
