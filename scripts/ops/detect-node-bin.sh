@@ -5,6 +5,7 @@ TARGET_USER=""
 REQUIRE_NODE_SQLITE=0
 CHECK_CURRENT=0
 OUTPUT_MODE="node-bin"
+MIN_NODE_MAJOR=24
 
 usage() {
   cat <<'EOF'
@@ -100,8 +101,16 @@ resolve_user_home() {
 
 USER_HOME="$(resolve_user_home)"
 
+node_version_is_supported() {
+  local version="${1#v}"
+  local major="${version%%.*}"
+  [[ "$major" =~ ^[0-9]+$ ]] || return 1
+  (( major >= MIN_NODE_MAJOR ))
+}
+
 current_runtime_is_compatible() {
   local current_node_bin
+  local node_version
   current_node_bin="$(command -v node 2>/dev/null || true)"
   if [[ -z "$current_node_bin" ]]; then
     return 1
@@ -110,6 +119,8 @@ current_runtime_is_compatible() {
   command -v pnpm >/dev/null 2>&1 || return 1
   pnpm --version >/dev/null 2>&1 || return 1
   "$current_node_bin" -v >/dev/null 2>&1 || return 1
+  node_version="$("$current_node_bin" -p 'process.versions.node' 2>/dev/null || true)"
+  node_version_is_supported "$node_version" || return 1
 
   if [[ "$REQUIRE_NODE_SQLITE" == "1" ]]; then
     "$current_node_bin" --input-type=module -e 'await import("node:sqlite")' >/dev/null 2>&1 || return 1
@@ -157,12 +168,15 @@ build_runtime_path() {
 validate_node_candidate() {
   local node_bin="$1"
   local runtime_path
+  local node_version
   runtime_path="$(build_runtime_path "$(dirname "$node_bin")")"
   [[ -n "$runtime_path" ]] || return 1
 
   PATH="$runtime_path" command -v pnpm >/dev/null 2>&1 || return 1
   PATH="$runtime_path" pnpm --version >/dev/null 2>&1 || return 1
   "$node_bin" -v >/dev/null 2>&1 || return 1
+  node_version="$("$node_bin" -p 'process.versions.node' 2>/dev/null || true)"
+  node_version_is_supported "$node_version" || return 1
 
   if [[ "$REQUIRE_NODE_SQLITE" == "1" ]]; then
     "$node_bin" --input-type=module -e 'await import("node:sqlite")' >/dev/null 2>&1 || return 1
@@ -271,7 +285,7 @@ if [[ -z "$best_node_bin" ]]; then
 Unable to locate a compatible Node runtime for CodexNext.
 
 The selected runtime must provide:
-- node
+- node >= $MIN_NODE_MAJOR
 - pnpm
 ${capability_note:+- support for node:sqlite}
 

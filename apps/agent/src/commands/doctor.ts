@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { printLine } from "../output.js";
 
+const MIN_NODE_MAJOR = 24;
+
 interface CommandResult {
   ok: boolean;
   stdout: string;
@@ -87,7 +89,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<void> {
 function checkNodeVersion(): DoctorCheck {
   const nodeVersion = process.versions.node;
   const major = Number(nodeVersion.split(".")[0]);
-  const ok = Number.isFinite(major) && major >= 20;
+  const ok = Number.isFinite(major) && major >= MIN_NODE_MAJOR;
 
   return {
     name: "node",
@@ -95,7 +97,7 @@ function checkNodeVersion(): DoctorCheck {
     detail: `Node ${nodeVersion}`,
     fix: ok
       ? undefined
-      : "Install Node >= 20. Recommended: use fnm, nvm, Volta, or the official Node installer."
+      : `Install Node >= ${MIN_NODE_MAJOR}. Recommended: use fnm, nvm, Volta, or the official Node installer.`
   };
 }
 
