@@ -1,13 +1,26 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { createHmac, randomBytes } from "node:crypto";
-import { accessSync, constants, existsSync, readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chromium } from "playwright-core";
 
 const sessionCookieName = "codexnext_web_session";
 const relaySessionCookieName = "codexnext_relay_session";
 const defaultPublicPortHost = "144.217.243.161";
 const directPublicPortPattern = /(?:144\.217\.243\.161|:3002\b|:3922\b)/u;
+const repoRoot = process.cwd();
 
 const args = parseArgs(process.argv.slice(2));
 const envFile = args.env ?? process.env.CODEXNEXT_WEB_ENV_FILE ?? "/etc/codexnext/web.env";
@@ -43,6 +56,9 @@ try {
   await runDesktopSmoke();
   await runMobileSmoke();
   await runMultiTabStorageSmoke();
+  if (args["temp-agent"]) {
+    await runTemporaryAgentMultiDeviceSmoke();
+  }
   if (args["restart-web-service"]) {
     await runWebRestartSmoke(args["restart-web-service"]);
   }
@@ -148,6 +164,31 @@ async function runMultiTabStorageSmoke() {
   await rememberRelaySessionCookie(context);
   await context.close();
   logOk("multi-tab", "saved device storage event converged into the second tab UI");
+}
+
+async function runTemporaryAgentMultiDeviceSmoke() {
+  const agent = await startTemporaryPairedAgent();
+  try {
+    await waitForRelayDevice(agent.deviceId, { online: true });
+    const context = await createAuthedContext({
+      viewport: { width: 1360, height: 860 }
+    });
+    const page = await context.newPage();
+    const assertNetwork = collectNetworkUrls(page);
+    await page.goto(webOrigin, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+    await waitForConsoleShell(page);
+    await waitForConnectedDevice(page);
+    await waitForBrowserSavedDevice(page, agent.deviceId, agent.deviceName, true);
+    await selectSavedDeviceInBrowser(page, agent.deviceName);
+    await waitForSelectedDeviceName(page, agent.deviceName);
+    await verifyNoPublicPortLeak(page);
+    assertNetwork();
+    await rememberRelaySessionCookie(context);
+    await context.close();
+    logOk("multi-device", `temporary paired agent ${agent.deviceName} connected and was selectable`);
+  } finally {
+    await stopTemporaryAgent(agent);
+  }
 }
 
 async function runWebRestartSmoke(serviceName) {
@@ -326,6 +367,38 @@ async function selectFirstThread(page) {
   });
   await waitForMainThreadTitle(page, threadTitle);
   return threadTitle;
+}
+
+async function waitForBrowserSavedDevice(page, deviceId, deviceName, online) {
+  await page.waitForFunction(
+    ({ expectedDeviceId, expectedDeviceName, expectedOnline }) => {
+      const raw = window.localStorage.getItem("codexnext.savedDevices.v1");
+      const devices = raw ? JSON.parse(raw) : [];
+      return Array.isArray(devices) && devices.some((device) => (
+        device?.deviceId === expectedDeviceId &&
+        device?.name === expectedDeviceName &&
+        device?.online === expectedOnline
+      ));
+    },
+    { expectedDeviceId: deviceId, expectedDeviceName: deviceName, expectedOnline: online },
+    { timeout: timeoutMs }
+  );
+}
+
+async function selectSavedDeviceInBrowser(page, deviceName) {
+  await page.getByRole("button", { name: "选择设备" }).click();
+  const deviceCard = page.locator(".cn-saved-device-card", { hasText: deviceName });
+  await deviceCard.locator(".cn-saved-device-main").click();
+  await page.locator(".cn-device-editor .cn-primary-button").click();
+}
+
+async function waitForSelectedDeviceName(page, deviceName) {
+  await page.waitForFunction(
+    (expectedName) =>
+      document.querySelector(".cn-device-summary strong")?.textContent?.trim() === expectedName,
+    deviceName,
+    { timeout: timeoutMs }
+  );
 }
 
 async function waitForMainThreadTitle(page, expectedTitle) {
@@ -527,6 +600,30 @@ async function waitForControlOnlineDevice() {
   fail(`Timed out waiting for an online control device at ${url}: ${lastDetail}`);
 }
 
+async function waitForRelayDevice(deviceId, options) {
+  const bootstrap = await requestRelaySessionBootstrap();
+  const deadline = Date.now() + timeoutMs;
+  let lastDetail = "";
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(new URL("/api/devices", bootstrap.relayUrl), {
+        headers: authorizationHeaders(bootstrap.sessionToken)
+      });
+      const payload = await response.json().catch(() => null);
+      const devices = Array.isArray(payload?.devices) ? payload.devices : [];
+      const device = devices.find((item) => item?.deviceId === deviceId);
+      if (device && Boolean(device.online) === options.online) {
+        return device;
+      }
+      lastDetail = `HTTP ${response.status} ${JSON.stringify(payload)?.slice(0, 240)}`;
+    } catch (error) {
+      lastDetail = error instanceof Error ? error.message : String(error);
+    }
+    await sleep(750);
+  }
+  fail(`Timed out waiting for relay device ${deviceId} online=${options.online}: ${lastDetail}`);
+}
+
 async function waitForSystemdActive(serviceName) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -570,6 +667,247 @@ function formatDebugSnapshot(snapshot) {
     }
     return value;
   });
+}
+
+async function startTemporaryPairedAgent() {
+  const deviceName = args["temp-agent-name"] ?? `CodexNext E2E ${Date.now()}`;
+  const relayForAgent =
+    args["temp-agent-relay"] ??
+    process.env.CODEXNEXT_CONTROL_URL ??
+    process.env.CODEXNEXT_RELAY_URL ??
+    webOrigin;
+  const tempHome = mkdtempSync(join(tmpdir(), "codexnext-e2e-agent-"));
+  const identity = {
+    version: 1,
+    deviceId: randomUUID(),
+    deviceName,
+    deviceToken: randomBytes(24).toString("base64url"),
+    createdAt: Date.now(),
+    relayUrl: normalizeOrigin(relayForAgent)
+  };
+  const identityDirectory = join(tempHome, ".codexnext");
+  mkdirSync(identityDirectory, { mode: 0o700, recursive: true });
+  writeFileSync(join(identityDirectory, "device.json"), `${JSON.stringify(identity, null, 2)}\n`, {
+    mode: 0o600
+  });
+  chmodSync(join(identityDirectory, "device.json"), 0o600);
+
+  const bootstrap = await requestRelaySessionBootstrap();
+  const pairing = await createPairingRequest(bootstrap.relayUrl, identity);
+  await approvePairingRequest(bootstrap.relayUrl, bootstrap.sessionToken, pairing.codeDigits);
+
+  const child = spawnTemporaryAgentProcess({
+    deviceName,
+    relayUrl: relayForAgent,
+    tempHome
+  });
+  const handle = {
+    child,
+    deviceId: identity.deviceId,
+    deviceName,
+    tempHome
+  };
+  await waitForTemporaryAgentReady(handle);
+  return handle;
+}
+
+function spawnTemporaryAgentProcess(input) {
+  const agentEnvFile =
+    args["agent-env"] ?? process.env.CODEXNEXT_AGENT_ENV_FILE ?? "/etc/codexnext/agent.env";
+  const agentEnv = existsSync(agentEnvFile) ? readEnvironmentFile(agentEnvFile) : {};
+  const codexBin =
+    args["codex-bin"] ??
+    agentEnv.CODEXNEXT_CODEX_BIN ??
+    process.env.CODEXNEXT_CODEX_BIN ??
+    "codex";
+  const child = spawn(
+    "pnpm",
+    [
+      "--filter",
+      "@codexnext/agent",
+      "dev",
+      "--",
+      "connect",
+      "--relay",
+      input.relayUrl,
+      "--approval-timeout-ms",
+      "300000",
+      "--codex-bin",
+      codexBin,
+      "--device-name",
+      input.deviceName
+    ],
+    {
+      cwd: repoRoot,
+      detached: true,
+      env: {
+        ...process.env,
+        ...agentEnv,
+        HOME: input.tempHome
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    }
+  );
+  child.stdout?.on("data", (chunk) => {
+    const text = chunk.toString();
+    if (args["temp-agent-log"]) {
+      process.stdout.write(`[temp-agent] ${text}`);
+    }
+  });
+  child.stderr?.on("data", (chunk) => {
+    const text = chunk.toString();
+    if (args["temp-agent-log"]) {
+      process.stderr.write(`[temp-agent] ${text}`);
+    }
+  });
+  return child;
+}
+
+async function waitForTemporaryAgentReady(handle) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (handle.child.exitCode !== null) {
+      fail(`Temporary agent exited before connecting with code ${handle.child.exitCode}.`);
+    }
+    try {
+      await waitForRelayDevice(handle.deviceId, { online: true });
+      return;
+    } catch {
+      await sleep(750);
+    }
+  }
+  fail(`Timed out waiting for temporary agent ${handle.deviceName} to connect.`);
+}
+
+async function stopTemporaryAgent(handle) {
+  if (handle.child.exitCode === null) {
+    killChildProcessTree(handle.child, "SIGTERM");
+    const exited = await waitForChildExit(handle.child, 5_000);
+    if (!exited && handle.child.exitCode === null) {
+      killChildProcessTree(handle.child, "SIGKILL");
+      await waitForChildExit(handle.child, 2_000);
+    }
+  }
+  await revokeRelayDevice(handle.deviceId).catch((error) => {
+    console.warn(
+      `[warn] Failed to revoke temporary relay device ${handle.deviceId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  });
+  rmSync(handle.tempHome, { force: true, recursive: true });
+}
+
+function killChildProcessTree(child, signal) {
+  if (child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to killing the direct child below.
+    }
+  }
+  child.kill(signal);
+}
+
+function waitForChildExit(child, timeout) {
+  if (child.exitCode !== null) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      child.off("exit", onExit);
+      resolve(false);
+    }, timeout);
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    child.once("exit", onExit);
+  });
+}
+
+async function requestRelaySessionBootstrap() {
+  const cookieValue = issueWebSessionCookieValue();
+  const cookie = [
+    `${sessionCookieName}=${cookieValue}`,
+    cachedRelaySessionCookieValue
+      ? `${relaySessionCookieName}=${cachedRelaySessionCookieValue}`
+      : null
+  ]
+    .filter(Boolean)
+    .join("; ");
+  const response = await fetch(new URL("/api/relay/session", webOrigin), {
+    method: "POST",
+    headers: { Cookie: cookie }
+  });
+  if (!response.ok) {
+    fail(`Failed to bootstrap relay session for E2E API calls: HTTP ${response.status} ${await response.text()}`);
+  }
+  const payload = await response.json();
+  if (!payload?.relayUrl || !payload?.sessionToken) {
+    fail("Relay session bootstrap returned an invalid payload.");
+  }
+  cachedRelaySessionCookieValue = payload.sessionToken;
+  return {
+    relayUrl: normalizeOrigin(payload.relayUrl),
+    sessionToken: payload.sessionToken
+  };
+}
+
+async function createPairingRequest(relayUrl, identity) {
+  const response = await fetch(new URL("/api/pairings/device", relayUrl), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      deviceId: identity.deviceId,
+      deviceToken: identity.deviceToken,
+      deviceName: identity.deviceName,
+      hostname: "codexnext-e2e.local",
+      platform: process.platform,
+      arch: process.arch,
+      agentVersion: "0.1.0",
+      codexVersion: null,
+      relayUrl: identity.relayUrl
+    })
+  });
+  if (!response.ok) {
+    fail(`Failed to create temporary pairing request: HTTP ${response.status} ${await response.text()}`);
+  }
+  const payload = await response.json();
+  if (!payload?.codeDigits) {
+    fail("Temporary pairing request returned an invalid payload.");
+  }
+  return payload;
+}
+
+async function approvePairingRequest(relayUrl, sessionToken, codeDigits) {
+  const response = await fetch(
+    new URL(`/api/pairings/requests/${encodeURIComponent(codeDigits)}/approve`, relayUrl),
+    {
+      method: "POST",
+      headers: authorizationHeaders(sessionToken)
+    }
+  );
+  if (!response.ok) {
+    fail(`Failed to approve temporary pairing request: HTTP ${response.status} ${await response.text()}`);
+  }
+}
+
+async function revokeRelayDevice(deviceId) {
+  const bootstrap = await requestRelaySessionBootstrap();
+  const response = await fetch(
+    new URL(`/api/devices/${encodeURIComponent(deviceId)}`, bootstrap.relayUrl),
+    {
+      method: "DELETE",
+      headers: authorizationHeaders(bootstrap.sessionToken)
+    }
+  );
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`HTTP ${response.status} ${await response.text()}`);
+  }
 }
 
 function restartSystemdService(serviceName) {
@@ -638,6 +976,13 @@ function isExecutable(path) {
 }
 
 function loadEnvironmentFile(path) {
+  for (const [key, value] of Object.entries(readEnvironmentFile(path))) {
+    process.env[key] = value;
+  }
+}
+
+function readEnvironmentFile(path) {
+  const env = {};
   for (const originalLine of readFileSync(path, "utf8").split(/\r?\n/u)) {
     let line = originalLine.trim();
     if (!line || line.startsWith("#")) {
@@ -661,8 +1006,9 @@ function loadEnvironmentFile(path) {
     ) {
       value = value.slice(1, -1);
     }
-    process.env[key] = value;
+    env[key] = value;
   }
+  return env;
 }
 
 function normalizeOrigin(value) {
@@ -681,7 +1027,7 @@ function parseArgs(argv) {
       fail(`Unexpected argument: ${item}`);
     }
     const [key, inlineValue] = item.slice(2).split("=", 2);
-    if (["headed"].includes(key)) {
+    if (["headed", "temp-agent", "temp-agent-log"].includes(key)) {
       parsed[key] = inlineValue ?? "1";
       continue;
     }
@@ -701,6 +1047,12 @@ function assert(condition, message) {
   if (!condition) {
     fail(message);
   }
+}
+
+function authorizationHeaders(token) {
+  return {
+    Authorization: `Bearer ${token}`
+  };
 }
 
 function fail(message) {

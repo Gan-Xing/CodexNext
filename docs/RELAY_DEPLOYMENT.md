@@ -256,8 +256,23 @@ sudo pnpm smoke:web:e2e -- \
 ```
 
 This intentionally restarts the named services, then verifies that the browser
-session can reload Web, reconnect to the selected Agent, and read Provider/model
-capabilities again through the same public origin.
+session can reload Web, reconnect to the selected Agent, restore the open
+thread, and read Provider/model capabilities again through the same public
+origin.
+
+For a real multi-device smoke, add a temporary paired Agent. This creates a
+throwaway device identity under a temporary `HOME`, uses the normal pairing
+approval routes, starts a short-lived Agent, verifies it appears in the Web
+device picker and can be selected, then revokes the temporary device and kills
+the Agent process:
+
+```bash
+sudo pnpm smoke:web:e2e -- \
+  --web https://<your-web-origin> \
+  --env /etc/codexnext/web.env \
+  --temp-agent \
+  --agent-env /etc/codexnext/agent.env
+```
 
 For the current `codexnext.byganxing.com` Cloudflare Tunnel deployment, Web and relay should both be checked as `https://codexnext.byganxing.com`, while the public host ports for `3002` and `3922` should be expected closed. The browser/mobile product boundary remains the HTTPS Web origin; raw service ports are internal implementation details.
 
