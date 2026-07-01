@@ -10,7 +10,8 @@ import type {
   JsonRpcRequest,
   LocalApprovalDecision,
   LocalEvent,
-  LocalSendMessageInput
+  LocalSendMessageInput,
+  ThreadGoal
 } from "@codexnext/protocol";
 import {
   CodexNotificationMethod,
@@ -970,6 +971,122 @@ describe("local HTTP server guards", () => {
     await handle.close();
   });
 
+  it("replays goal and approval state changes from local HTTP control routes", async () => {
+    const fake = new FakeCodexClient();
+    const handle = createLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      webOrigin: "http://127.0.0.1:3000",
+      token: "secret",
+      approvalTimeoutMs: 1_000,
+      codexBin: "codex",
+      historySource: "disabled",
+      clientFactory: () => fake
+    });
+    const address = await listen(handle, "127.0.0.1", 0);
+    const base = `http://${address.address}:${address.port}`;
+
+    try {
+      const created = await fetch(`${base}/api/sessions?token=secret`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cwd: process.cwd(),
+          permissionMode: "request-approval"
+        })
+      });
+      const createdBody = await created.json() as {
+        session: { sessionId: string; goal: ThreadGoal | null };
+      };
+      expect(created.status).toBe(201);
+      expect(createdBody.session.goal).toBeNull();
+
+      const setGoal = await fetch(
+        `${base}/api/sessions/${createdBody.session.sessionId}/goal?token=secret`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            objective: "验证目标和审批恢复",
+            tokenBudget: 1200
+          })
+        }
+      );
+      const setGoalBody = await setGoal.json() as { goal: ThreadGoal };
+      expect(setGoal.status).toBe(200);
+      expect(setGoalBody.goal).toMatchObject({
+        threadId: "thread_1",
+        objective: "验证目标和审批恢复",
+        tokenBudget: 1200
+      });
+
+      const getGoal = await fetch(
+        `${base}/api/sessions/${createdBody.session.sessionId}/goal?token=secret`
+      );
+      const getGoalBody = await getGoal.json() as { goal: ThreadGoal | null };
+      expect(getGoal.status).toBe(200);
+      expect(getGoalBody.goal).toMatchObject({
+        objective: "验证目标和审批恢复"
+      });
+
+      const pending = handle.approvalBridge.requestApproval({
+        sessionId: createdBody.session.sessionId,
+        method: CodexServerRequestMethod.CommandExecutionRequestApproval,
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          command: "pnpm test"
+        }
+      });
+      const approval = handle.approvalBridge.listPending()[0];
+      expect(approval?.approvalId).toBeTruthy();
+      const approvalId = approval?.approvalId ?? "";
+
+      const decision = await fetch(
+        `${base}/api/approvals/${approvalId}/decision?token=secret`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ decision: "accept" })
+        }
+      );
+      expect(decision.status).toBe(200);
+      await expect(pending).resolves.toEqual({ decision: "accept" });
+
+      const clearGoal = await fetch(
+        `${base}/api/sessions/${createdBody.session.sessionId}/goal?token=secret`,
+        { method: "DELETE" }
+      );
+      expect(clearGoal.status).toBe(200);
+
+      const replay = await fetch(`${base}/api/events?token=secret&after=0`);
+      const replayBody = await replay.json() as { events: LocalEvent[] };
+      const eventTypes = replayBody.events.map((event) => event.type);
+
+      expect(replay.status).toBe(200);
+      expect(eventTypes).toEqual(expect.arrayContaining([
+        LocalEventType.GoalUpdated,
+        LocalEventType.ApprovalRequested,
+        LocalEventType.ApprovalResolved,
+        LocalEventType.GoalCleared
+      ]));
+      expect(
+        replayBody.events.find((event) => event.type === LocalEventType.GoalUpdated)
+          ?.payload
+      ).toMatchObject({
+        objective: "验证目标和审批恢复",
+        tokenBudget: 1200
+      });
+      expect(
+        replayBody.events
+          .filter((event) => event.type === LocalEventType.SessionUpdated)
+          .some((event) => eventPayload(event).goal === null)
+      ).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it("lists Codex threads through app-server thread/list", async () => {
     const fake = new FakeCodexClient();
     fake.threadListResponse = {
@@ -1426,10 +1543,14 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
   public threadTurnsListParams: unknown[] = [];
   public turnStartParams: unknown[] = [];
   public turnSteerParams: unknown[] = [];
+  public setGoalParams: unknown[] = [];
+  public getGoalParams: unknown[] = [];
+  public clearGoalParams: unknown[] = [];
   public failNextResumeAsArchived = false;
   public failNextArchiveAsMissingRollout = false;
   public failNextTurnStart: Error | null = null;
   public failNextTurnSteer: Error | null = null;
+  public goal: ThreadGoal | null = null;
   public threadListResponse: Awaited<ReturnType<ManagedCodexClient["threadList"]>> = {
     data: [],
     nextCursor: null,
@@ -1539,22 +1660,40 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
     return this.threadTurnsListResponse;
   };
 
-  public setGoal = async () => ({
-    goal: {
-      threadId: "thread_1",
-      objective: "goal",
-      status: "active" as const,
-      tokenBudget: null,
-      tokensUsed: 0,
-      timeUsedSeconds: 0,
-      createdAt: 1,
-      updatedAt: 1
-    }
-  });
+  public setGoal = async (
+    params: Parameters<ManagedCodexClient["setGoal"]>[0]
+  ) => {
+    this.setGoalParams.push(params);
+    this.goal = {
+      threadId: params.threadId,
+      objective: params.objective ?? this.goal?.objective ?? "goal",
+      status: params.status ?? this.goal?.status ?? "active",
+      tokenBudget:
+        params.tokenBudget === undefined
+          ? this.goal?.tokenBudget ?? null
+          : params.tokenBudget,
+      tokensUsed: this.goal?.tokensUsed ?? 0,
+      timeUsedSeconds: this.goal?.timeUsedSeconds ?? 0,
+      createdAt: this.goal?.createdAt ?? 1,
+      updatedAt: (this.goal?.updatedAt ?? 0) + 1
+    };
+    return { goal: this.goal };
+  };
 
-  public getGoal = async () => ({ goal: null });
+  public getGoal = async (
+    params: Parameters<ManagedCodexClient["getGoal"]>[0]
+  ) => {
+    this.getGoalParams.push(params);
+    return { goal: this.goal };
+  };
 
-  public clearGoal = async () => ({ goal: null });
+  public clearGoal = async (
+    params: Parameters<ManagedCodexClient["clearGoal"]>[0]
+  ) => {
+    this.clearGoalParams.push(params);
+    this.goal = null;
+    return { goal: null };
+  };
 
   public turnStart = async (
     params: Parameters<ManagedCodexClient["turnStart"]>[0]

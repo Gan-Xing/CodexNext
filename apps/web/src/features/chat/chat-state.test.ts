@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LocalEvent, LocalSessionSummary } from "../../lib/types";
-import type { CodexThreadTurn } from "@codexnext/protocol";
+import type { CodexThreadTurn, ThreadGoal } from "@codexnext/protocol";
 import { CodexNotificationMethod } from "@codexnext/protocol";
 import {
   addOptimisticUserMessage,
@@ -59,6 +59,19 @@ function makeSession(input: Partial<LocalSessionSummary> = {}): LocalSessionSumm
     sandbox: input.sandbox ?? "workspace-write",
     queuedMessages: input.queuedMessages ?? [],
     goal: input.goal ?? null,
+    createdAt: input.createdAt ?? 1,
+    updatedAt: input.updatedAt ?? 2
+  };
+}
+
+function makeGoal(input: Partial<ThreadGoal> = {}): ThreadGoal {
+  return {
+    threadId: input.threadId ?? "thread_1",
+    objective: input.objective ?? "完整实现可靠性闭环",
+    status: input.status ?? "active",
+    tokenBudget: input.tokenBudget ?? null,
+    tokensUsed: input.tokensUsed ?? 0,
+    timeUsedSeconds: input.timeUsedSeconds ?? 0,
     createdAt: input.createdAt ?? 1,
     updatedAt: input.updatedAt ?? 2
   };
@@ -450,6 +463,124 @@ describe("chat state", () => {
 
     expect(next.currentSessionId).toBe("session_selected");
     expect(next.selectedHistoryKey).toBeNull();
+  });
+
+  it("applies goal update and clear replay events to the matching session", () => {
+    const otherGoal = makeGoal({
+      threadId: "thread_other",
+      objective: "保留另一个设备会话目标"
+    });
+    const workspace = upsertSessionInWorkspace(
+      upsertSessionInWorkspace(
+        makeWorkspace(),
+        makeSession({
+          sessionId: "session_1",
+          threadId: "thread_1",
+          goal: null
+        })
+      ),
+      makeSession({
+        sessionId: "session_other",
+        threadId: "thread_other",
+        goal: otherGoal
+      })
+    );
+    const goal = makeGoal({ objective: "恢复目标状态" });
+
+    const updated = ingestEventsIntoWorkspace(
+      workspace,
+      [
+        makeEvent({
+          seq: 1,
+          type: "goal.updated",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          payload: goal
+        })
+      ],
+      { selectSessions: false }
+    );
+
+    expect(updated.sessions.find((session) => session.sessionId === "session_1")?.goal)
+      .toMatchObject({ objective: "恢复目标状态" });
+    expect(updated.sessions.find((session) => session.sessionId === "session_other")?.goal)
+      .toMatchObject({ objective: "保留另一个设备会话目标" });
+
+    const cleared = ingestEventsIntoWorkspace(
+      updated,
+      [
+        makeEvent({
+          seq: 2,
+          type: "goal.cleared",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          payload: { goal: null }
+        })
+      ],
+      { selectSessions: false }
+    );
+
+    expect(cleared.sessions.find((session) => session.sessionId === "session_1")?.goal)
+      .toBeNull();
+    expect(cleared.sessions.find((session) => session.sessionId === "session_other")?.goal)
+      .toMatchObject({ objective: "保留另一个设备会话目标" });
+  });
+
+  it("applies native goal notifications before the specialized replay event arrives", () => {
+    const workspace = upsertSessionInWorkspace(
+      makeWorkspace(),
+      makeSession({
+        sessionId: "session_1",
+        threadId: "thread_1",
+        goal: null
+      })
+    );
+    const goal = makeGoal({ objective: "Codex 原生目标更新" });
+
+    const updated = ingestEventsIntoWorkspace(
+      workspace,
+      [
+        makeEvent({
+          seq: 1,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          payload: {
+            method: CodexNotificationMethod.ThreadGoalUpdated,
+            params: {
+              threadId: "thread_1",
+              goal
+            }
+          }
+        })
+      ],
+      { selectSessions: false }
+    );
+
+    expect(updated.sessions.find((session) => session.sessionId === "session_1")?.goal)
+      .toMatchObject({ objective: "Codex 原生目标更新" });
+
+    const cleared = ingestEventsIntoWorkspace(
+      updated,
+      [
+        makeEvent({
+          seq: 2,
+          type: "codex.notification",
+          sessionId: "session_1",
+          threadId: "thread_1",
+          payload: {
+            method: CodexNotificationMethod.ThreadGoalCleared,
+            params: {
+              threadId: "thread_1"
+            }
+          }
+        })
+      ],
+      { selectSessions: false }
+    );
+
+    expect(cleared.sessions.find((session) => session.sessionId === "session_1")?.goal)
+      .toBeNull();
   });
 
   it("remaps optimistic conversation aliases after ack", () => {

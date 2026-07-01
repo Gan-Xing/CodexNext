@@ -1,5 +1,5 @@
 import type { AgentConnection } from "../../lib/api";
-import type { CodexThreadItem, CodexThreadTurn } from "@codexnext/protocol";
+import type { CodexThreadItem, CodexThreadTurn, ThreadGoal } from "@codexnext/protocol";
 import {
   CodexNotificationMethod,
   CodexThreadItemType,
@@ -2486,6 +2486,10 @@ function applyEventToWorkspace(
           (approval) => approval.approvalId !== resolvedApprovalId
         )
       };
+    case "goal.updated":
+      return applyGoalUpdatedEvent(workspace, event);
+    case "goal.cleared":
+      return applyGoalClearedEvent(workspace, event);
     case "thread.status.changed":
       return applyThreadStatusChanged(workspace, event);
     case "codex.notification":
@@ -2672,11 +2676,59 @@ function applyCodexNotificationToWorkspace(
     case CodexNotificationMethod.ReasoningSummaryTextDelta:
     case CodexNotificationMethod.ReasoningTextDelta:
       return applyAppServerReasoningDeltaParams(workspace, event, params);
+    case CodexNotificationMethod.ThreadGoalUpdated:
+      return applyGoalUpdatedEvent(workspace, {
+        ...event,
+        payload: params,
+        ...(readString(params, "threadId") ? { threadId: readString(params, "threadId")! } : {})
+      });
+    case CodexNotificationMethod.ThreadGoalCleared:
+      return applyGoalClearedEvent(workspace, {
+        ...event,
+        payload: params,
+        ...(readString(params, "threadId") ? { threadId: readString(params, "threadId")! } : {})
+      });
     case CodexNotificationMethod.TurnCompleted:
       return applyTurnCompletedEvent(workspace, event, params);
     default:
       return workspace;
   }
+}
+
+function applyGoalUpdatedEvent(
+  workspace: DeviceWorkspace,
+  event: LocalEvent
+): DeviceWorkspace {
+  const goal = readThreadGoal(event.payload);
+  return goal ? updateSessionGoal(workspace, event, goal) : workspace;
+}
+
+function applyGoalClearedEvent(
+  workspace: DeviceWorkspace,
+  event: LocalEvent
+): DeviceWorkspace {
+  return updateSessionGoal(workspace, event, null);
+}
+
+function updateSessionGoal(
+  workspace: DeviceWorkspace,
+  event: LocalEvent,
+  goal: ThreadGoal | null
+): DeviceWorkspace {
+  const targetSessionId = event.sessionId ?? null;
+  const targetThreadId = event.threadId ?? (goal ? goal.threadId : readThreadId(event.payload));
+  let changed = false;
+  const sessions = workspace.sessions.map((session) => {
+    const matches =
+      (targetSessionId && session.sessionId === targetSessionId) ||
+      (targetThreadId && session.threadId === targetThreadId);
+    if (!matches) {
+      return session;
+    }
+    changed = true;
+    return { ...session, goal };
+  });
+  return changed ? materializeWorkspace({ ...workspace, sessions }) : workspace;
 }
 
 function applyAppServerItemLifecycleEvent(
@@ -3063,6 +3115,33 @@ function readCodexTurn(value: unknown): CodexThreadTurn | null {
 
 function readTurnId(event: LocalEvent, params: Record<string, unknown>): string | null {
   return event.turnId ?? readString(params, "turnId");
+}
+
+function readThreadId(payload: unknown): string | null {
+  return isRecord(payload) && typeof payload.threadId === "string"
+    ? payload.threadId
+    : null;
+}
+
+function readThreadGoal(payload: unknown): ThreadGoal | null {
+  if (isRecord(payload) && isRecord(payload.goal)) {
+    return isThreadGoal(payload.goal) ? payload.goal : null;
+  }
+  return isThreadGoal(payload) ? payload : null;
+}
+
+function isThreadGoal(value: unknown): value is ThreadGoal {
+  return (
+    isRecord(value) &&
+    typeof value.threadId === "string" &&
+    typeof value.objective === "string" &&
+    typeof value.status === "string" &&
+    (typeof value.tokenBudget === "number" || value.tokenBudget === null) &&
+    typeof value.tokensUsed === "number" &&
+    typeof value.timeUsedSeconds === "number" &&
+    typeof value.createdAt === "number" &&
+    typeof value.updatedAt === "number"
+  );
 }
 
 function readString(record: Record<string, unknown>, field: string): string | null {
