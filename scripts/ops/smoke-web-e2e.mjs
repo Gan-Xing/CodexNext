@@ -64,6 +64,7 @@ async function runDesktopSmoke() {
   await page.goto(webOrigin, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   await waitForConsoleShell(page);
   await waitForConnectedDevice(page);
+  await verifySessionSelectionSurvivesReload(page);
   await verifySlashFast(page);
   await verifyProviderModelMenu(page);
   await verifySessionSetupProviderPicker(page);
@@ -299,6 +300,33 @@ async function verifySlashFast(page) {
   assert(slashText.includes("快速模式"), "slash menu did not label /fast as 快速模式");
 }
 
+async function verifySessionSelectionSurvivesReload(page) {
+  const threadButton = page.locator(".cn-thread-row .cn-thread-main").first();
+  await threadButton.waitFor({ state: "visible", timeout: timeoutMs });
+  const threadTitle = (await threadButton.locator(".cn-thread-title").innerText()).trim();
+  assert(threadTitle.length > 0, "first thread row did not expose a selectable title");
+
+  await threadButton.click();
+  await page.locator(".cn-main.thread .cn-main-header h1").waitFor({
+    state: "visible",
+    timeout: timeoutMs
+  });
+  await waitForMainThreadTitle(page, threadTitle);
+
+  await page.reload({ waitUntil: "domcontentloaded", timeout: timeoutMs });
+  await waitForConsoleShell(page);
+  await waitForConnectedDevice(page);
+  await waitForMainThreadTitle(page, threadTitle);
+}
+
+async function waitForMainThreadTitle(page, expectedTitle) {
+  await page.waitForFunction(
+    (title) => document.querySelector(".cn-main.thread .cn-main-header h1")?.textContent?.trim() === title,
+    expectedTitle,
+    { timeout: timeoutMs }
+  );
+}
+
 async function verifyProviderModelMenu(page) {
   await page.locator(".cn-composer-pill-model").click();
   await page.locator(".cn-popover.model").waitFor({ timeout: timeoutMs });
@@ -320,6 +348,10 @@ async function verifySessionSetupProviderPicker(page) {
   const setupButton = page
     .getByRole("button", { name: "选择文件夹" })
     .or(page.getByRole("button", { name: "调整设置" }));
+  const setupVisible = await setupButton.first().isVisible({ timeout: 2_000 }).catch(() => false);
+  if (!setupVisible) {
+    await clickFirstVisible(page, 'button[aria-label="新建对话"]');
+  }
   await setupButton.first().click();
   const providerSelect = page.locator('select[name="session_provider"]');
   await providerSelect.waitFor({ timeout: timeoutMs });
