@@ -7,8 +7,10 @@ import {
 } from "../devices/device-utils";
 import type {
   LocalCodexHistoryEntry,
+  LocalPermissionMode,
   LocalProviderSummary,
   LocalQueuedMessage,
+  LocalReasoningEffort,
   LocalSessionSummary
 } from "../../lib/types";
 import type { OutboxEntry, OutboxStatus } from "../chat/chat-state";
@@ -31,12 +33,25 @@ export interface SessionSelectionState {
   selectedHistoryKey: string | null;
 }
 
+export interface WorkspaceProviderSelectionSnapshot {
+  apiKeyEnv: string;
+  baseUrl: string;
+  label: string;
+  model: string;
+  profileId: string;
+}
+
 export interface WorkspaceSidebarSnapshot {
   codexHistory: LocalCodexHistoryEntry[];
   currentSessionId: string | null;
   cwd: string;
   loadedThreadIds: string[];
+  model: string;
+  permissionMode: LocalPermissionMode;
+  providerSelection: WorkspaceProviderSelectionSnapshot;
+  reasoningEffort: LocalReasoningEffort;
   selectedHistoryKey: string | null;
+  serviceTier: string | null;
   sessionHistoryOrigins: Record<string, string>;
   sessions: LocalSessionSummary[];
 }
@@ -349,7 +364,7 @@ function sanitizeSavedDeviceForStorage(device: SavedDevice): SavedDevice | null 
   };
 }
 
-function safeOptionalString(value: string | null | undefined): string | null | undefined {
+function safeOptionalString(value: unknown): string | null | undefined {
   if (value === null) {
     return null;
   }
@@ -405,6 +420,17 @@ function sanitizeWorkspaceSidebarSnapshot(
 
   const currentSessionId = safeSnapshotText(value.currentSessionId) ?? null;
   const selectedHistoryKey = safeSnapshotText(value.selectedHistoryKey) ?? null;
+  const serviceTier = safeSnapshotText(value.serviceTier) ?? null;
+  const model = safeOptionalString(value.model) ?? "gpt-5.5";
+  const providerSelection = sanitizeWorkspaceProviderSelection(
+    value.providerSelection
+  );
+  const permissionMode = isPermissionMode(value.permissionMode)
+    ? value.permissionMode
+    : "request-approval";
+  const reasoningEffort = isReasoningEffort(value.reasoningEffort)
+    ? value.reasoningEffort
+    : "xhigh";
   const loadedThreadIds = Array.isArray(value.loadedThreadIds)
     ? value.loadedThreadIds
         .map(safeSnapshotText)
@@ -433,6 +459,10 @@ function sanitizeWorkspaceSidebarSnapshot(
         : null,
     cwd,
     loadedThreadIds: [...new Set(loadedThreadIds)],
+    model,
+    permissionMode,
+    providerSelection,
+    reasoningEffort,
     selectedHistoryKey:
       selectedHistoryKey &&
       codexHistory.some(
@@ -440,8 +470,34 @@ function sanitizeWorkspaceSidebarSnapshot(
       )
         ? selectedHistoryKey
         : null,
+    serviceTier,
     sessionHistoryOrigins,
     sessions
+  };
+}
+
+function sanitizeWorkspaceProviderSelection(
+  value: unknown
+): WorkspaceProviderSelectionSnapshot {
+  if (!isRecord(value)) {
+    return emptyWorkspaceProviderSelectionSnapshot();
+  }
+  return {
+    apiKeyEnv: safeOptionalString(value.apiKeyEnv) ?? "",
+    baseUrl: safeOptionalString(value.baseUrl) ?? "",
+    label: safeOptionalString(value.label) ?? "",
+    model: safeOptionalString(value.model) ?? "",
+    profileId: safeOptionalString(value.profileId) ?? ""
+  };
+}
+
+function emptyWorkspaceProviderSelectionSnapshot(): WorkspaceProviderSelectionSnapshot {
+  return {
+    apiKeyEnv: "",
+    baseUrl: "",
+    label: "",
+    model: "",
+    profileId: ""
   };
 }
 

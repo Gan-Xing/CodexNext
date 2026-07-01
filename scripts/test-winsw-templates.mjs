@@ -36,6 +36,7 @@ const templates = [
     requiredEnv: [
       "CODEXNEXT_ROOT",
       "CODEXNEXT_RELAY_URL",
+      "CODEXNEXT_CONTROL_URL",
       "CODEXNEXT_OWNER_TOKEN",
       "CODEXNEXT_PUBLIC_ORIGIN",
       "CODEXNEXT_WEB_HOST",

@@ -7,6 +7,7 @@
   <workingdirectory>%CODEXNEXT_ROOT%</workingdirectory>
   <env name="CODEXNEXT_ROOT" value="C:\codexnext" />
   <env name="CODEXNEXT_RELAY_URL" value="https://relay.example.invalid" />
+  <env name="CODEXNEXT_CONTROL_URL" value="" />
   <env name="CODEXNEXT_OWNER_TOKEN" value="replace-with-long-random-token" />
   <env name="CODEXNEXT_PUBLIC_ORIGIN" value="https://web.example.invalid" />
   <env name="CODEXNEXT_WEB_HOST" value="0.0.0.0" />

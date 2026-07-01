@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const root = process.cwd();
 const guard = path.join(root, "scripts/codexnext-backlog-cycle-guard.mjs");
-const tempDir = mkdtempSync(path.join(root, "tmp", "guard-test-"));
+const tempRoot = path.join(root, "tmp");
+const testDeadlineUtc = "2999-01-01T00:00:00.000Z";
+mkdirSync(tempRoot, { recursive: true });
+const tempDir = mkdtempSync(path.join(tempRoot, "guard-test-"));
 
 try {
   const statePath = path.join(tempDir, "state.json");
@@ -170,6 +173,7 @@ function runGuard(args, extraEnv = {}) {
     encoding: "utf8",
     env: {
       ...process.env,
+      CODEXNEXT_BACKLOG_DEADLINE_UTC: testDeadlineUtc,
       ...extraEnv
     }
   });

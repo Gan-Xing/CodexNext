@@ -9,6 +9,7 @@ import {
   writeSavedDevicesStorage,
   writeSessionSelectionStorage,
   writeSidebarWidthStorage,
+  workspaceSidebarSnapshotStorageKey,
   writeThreadSidebarPrefsStorage,
   writeWorkspaceSidebarSnapshotsStorage
 } from "./console-storage";
@@ -150,7 +151,18 @@ describe("console localStorage helpers", () => {
         currentSessionId: "history-preview:thread_1::/repo",
         cwd: "/repo",
         loadedThreadIds: ["thread_1", "" as never],
+        model: "gpt-5.5",
+        permissionMode: "auto-approve",
+        providerSelection: {
+          apiKeyEnv: "OPENROUTER_API_KEY",
+          baseUrl: "https://openrouter.ai/api/v1",
+          label: "OpenRouter",
+          model: "deepseek/deepseek-chat-v3-0324",
+          profileId: "openrouter"
+        },
+        reasoningEffort: "low",
         selectedHistoryKey: "thread_1::/repo",
+        serviceTier: "priority",
         sessionHistoryOrigins: {
           "history-preview:thread_1::/repo": "thread_1",
           "": "ignored"
@@ -199,7 +211,18 @@ describe("console localStorage helpers", () => {
         currentSessionId: "history-preview:thread_1::/repo",
         cwd: "/repo",
         loadedThreadIds: ["thread_1"],
+        model: "gpt-5.5",
+        permissionMode: "auto-approve",
+        providerSelection: {
+          apiKeyEnv: "OPENROUTER_API_KEY",
+          baseUrl: "https://openrouter.ai/api/v1",
+          label: "OpenRouter",
+          model: "deepseek/deepseek-chat-v3-0324",
+          profileId: "openrouter"
+        },
+        reasoningEffort: "low",
         selectedHistoryKey: "thread_1::/repo",
+        serviceTier: "priority",
         sessionHistoryOrigins: {
           "history-preview:thread_1::/repo": "thread_1"
         },
@@ -226,6 +249,122 @@ describe("console localStorage helpers", () => {
           }
         ]
       }
+    });
+  });
+
+  it("keeps workspace service tiers scoped by saved device", () => {
+    writeWorkspaceSidebarSnapshotsStorage(storage, {
+      device_fast: {
+        codexHistory: [],
+        currentSessionId: null,
+        cwd: "/repo-fast",
+        loadedThreadIds: [],
+        model: "gpt-5.5",
+        permissionMode: "auto-approve",
+        providerSelection: {
+          apiKeyEnv: "OPENROUTER_API_KEY",
+          baseUrl: "https://openrouter.ai/api/v1",
+          label: "OpenRouter",
+          model: "deepseek/deepseek-chat-v3-0324",
+          profileId: "openrouter"
+        },
+        reasoningEffort: "low",
+        selectedHistoryKey: null,
+        serviceTier: "priority",
+        sessionHistoryOrigins: {},
+        sessions: []
+      },
+      device_default: {
+        codexHistory: [],
+        currentSessionId: null,
+        cwd: "/repo-default",
+        loadedThreadIds: [],
+        model: "gpt-5.5",
+        permissionMode: "request-approval",
+        providerSelection: {
+          apiKeyEnv: "",
+          baseUrl: "",
+          label: "",
+          model: "",
+          profileId: ""
+        },
+        reasoningEffort: "xhigh",
+        selectedHistoryKey: null,
+        serviceTier: null,
+        sessionHistoryOrigins: {},
+        sessions: []
+      }
+    });
+
+    expect(readWorkspaceSidebarSnapshotsStorage()).toMatchObject({
+      device_fast: {
+        cwd: "/repo-fast",
+        model: "gpt-5.5",
+        permissionMode: "auto-approve",
+        providerSelection: {
+          apiKeyEnv: "OPENROUTER_API_KEY",
+          baseUrl: "https://openrouter.ai/api/v1",
+          label: "OpenRouter",
+          model: "deepseek/deepseek-chat-v3-0324",
+          profileId: "openrouter"
+        },
+        reasoningEffort: "low",
+        serviceTier: "priority"
+      },
+      device_default: {
+        cwd: "/repo-default",
+        model: "gpt-5.5",
+        permissionMode: "request-approval",
+        providerSelection: {
+          apiKeyEnv: "",
+          baseUrl: "",
+          label: "",
+          model: "",
+          profileId: ""
+        },
+        reasoningEffort: "xhigh",
+        serviceTier: null
+      }
+    });
+  });
+
+  it("drops raw Provider API keys when restoring workspace snapshots", () => {
+    storage.setItem(
+      workspaceSidebarSnapshotStorageKey,
+      JSON.stringify({
+        device_1: {
+          codexHistory: [],
+          currentSessionId: null,
+          cwd: "/repo",
+          loadedThreadIds: [],
+          model: "gpt-5.5",
+          permissionMode: "request-approval",
+          providerSelection: {
+            apiKey: "sk-direct-token-must-not-restore",
+            apiKeyEnv: "OPENROUTER_API_KEY",
+            baseUrl: "https://openrouter.ai/api/v1",
+            label: "OpenRouter",
+            model: "deepseek/deepseek-chat-v3-0324",
+            profileId: "openrouter"
+          },
+          reasoningEffort: "xhigh",
+          selectedHistoryKey: null,
+          serviceTier: null,
+          sessionHistoryOrigins: {},
+          sessions: []
+        }
+      })
+    );
+
+    const restored = readWorkspaceSidebarSnapshotsStorage();
+
+    expect(JSON.stringify(restored)).not.toContain("sk-direct-token");
+    expect(restored.device_1?.providerSelection).toEqual({
+      apiKeyEnv: "OPENROUTER_API_KEY",
+      baseUrl: "https://openrouter.ai/api/v1",
+      label: "OpenRouter",
+      model: "deepseek/deepseek-chat-v3-0324",
+      profileId: "openrouter"
     });
   });
 });

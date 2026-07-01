@@ -1611,6 +1611,143 @@ describe("control server relay", () => {
     ).toEqual([]);
   });
 
+  it("keeps replay cursors isolated across multiple devices for reconnecting user clients", async () => {
+    const { baseUrl } = await startServer();
+    const firstMachine = createMachineSocket(baseUrl, "device_1", {
+      ownerToken
+    });
+    const secondMachine = createMachineSocket(baseUrl, "device_2", {
+      ownerToken
+    });
+    await waitForConnect(firstMachine, () =>
+      emitAck(firstMachine, "machine:hello", {
+        deviceId: "device_1",
+        deviceName: "MacBook Pro",
+        hostname: "macbook-pro.local",
+        platform: "darwin",
+        arch: "arm64",
+        agentVersion: "0.1.0",
+        agentRunId: "agent_run_1",
+        startedAt: Date.now()
+      })
+    );
+    await waitForConnect(secondMachine, () =>
+      emitAck(secondMachine, "machine:hello", {
+        deviceId: "device_2",
+        deviceName: "Ubuntu Workstation",
+        hostname: "ubuntu.local",
+        platform: "linux",
+        arch: "x64",
+        agentVersion: "0.1.0",
+        agentRunId: "agent_run_2",
+        startedAt: Date.now()
+      })
+    );
+
+    firstMachine.emit("machine:event", {
+      deviceId: "device_1",
+      agentRunId: "agent_run_1",
+      event: {
+        id: "device_1_evt_1",
+        seq: 1,
+        ts: Date.now(),
+        type: "chat.user",
+        payload: { text: "device 1 already seen" }
+      }
+    });
+    firstMachine.emit("machine:event", {
+      deviceId: "device_1",
+      agentRunId: "agent_run_1",
+      event: {
+        id: "device_1_evt_2",
+        seq: 2,
+        ts: Date.now(),
+        type: "chat.assistant.delta",
+        payload: { text: "device 1 missing" }
+      }
+    });
+    secondMachine.emit("machine:event", {
+      deviceId: "device_2",
+      agentRunId: "agent_run_2",
+      event: {
+        id: "device_2_evt_1",
+        seq: 1,
+        ts: Date.now(),
+        type: "chat.user",
+        payload: { text: "device 2 first" }
+      }
+    });
+    secondMachine.emit("machine:event", {
+      deviceId: "device_2",
+      agentRunId: "agent_run_2",
+      event: {
+        id: "device_2_evt_2",
+        seq: 2,
+        ts: Date.now(),
+        type: "chat.assistant.delta",
+        payload: { text: "device 2 second" }
+      }
+    });
+
+    const session = await fetch(`${baseUrl}/api/auth/session`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    const token = ((await session.json()) as { sessionToken: string }).sessionToken;
+    const browser = createUserSocket(
+      baseUrl,
+      {
+        device_1: 1,
+        device_2: 0
+      },
+      token,
+      false
+    );
+    const replayPromise = waitForDeviceReplay(browser);
+    browser.connect();
+    await waitForConnect(browser, async () => undefined);
+
+    const replayed = await replayPromise;
+    expect(replayed.map(deviceEventKey).sort()).toEqual([
+      "device_1:device_1_evt_2:2",
+      "device_2:device_2_evt_1:1",
+      "device_2:device_2_evt_2:2"
+    ]);
+
+    const liveEventsPromise = waitForDeviceEventIds(browser, [
+      "device_1_evt_3",
+      "device_2_evt_3"
+    ]);
+    firstMachine.emit("machine:event", {
+      deviceId: "device_1",
+      agentRunId: "agent_run_1",
+      event: {
+        id: "device_1_evt_3",
+        seq: 3,
+        ts: Date.now(),
+        type: "chat.assistant.delta",
+        payload: { text: "device 1 live" }
+      }
+    });
+    secondMachine.emit("machine:event", {
+      deviceId: "device_2",
+      agentRunId: "agent_run_2",
+      event: {
+        id: "device_2_evt_3",
+        seq: 3,
+        ts: Date.now(),
+        type: "chat.assistant.delta",
+        payload: { text: "device 2 live" }
+      }
+    });
+
+    const liveEvents = await liveEventsPromise;
+    expect(liveEvents.map(deviceEventKey).sort()).toEqual([
+      "device_1:device_1_evt_3:3",
+      "device_2:device_2_evt_3:3"
+    ]);
+  });
+
   it("broadcasts events from a restarted agent run even when local seq restarts", async () => {
     const { baseUrl } = await startServer();
     const machine = createMachineSocket(baseUrl, "device_1", {
@@ -2939,6 +3076,38 @@ async function waitForDeviceEvent(socket: Socket): Promise<DeviceEventPayload> {
   });
 }
 
+async function waitForDeviceEventIds(
+  socket: Socket,
+  eventIds: string[]
+): Promise<DeviceEventPayload[]> {
+  return new Promise<DeviceEventPayload[]>((resolve, reject) => {
+    const expected = new Set(eventIds);
+    const payloadsByEventId = new Map<string, DeviceEventPayload>();
+    const timeout = setTimeout(() => {
+      socket.off("device:event", handleEvent);
+      reject(
+        new Error(
+          `Timed out waiting for device events: ${eventIds
+            .filter((eventId) => !payloadsByEventId.has(eventId))
+            .join(", ")}`
+        )
+      );
+    }, 3_000);
+    const handleEvent = (payload: DeviceEventPayload) => {
+      if (!expected.has(payload.event.id)) {
+        return;
+      }
+      payloadsByEventId.set(payload.event.id, payload);
+      if (payloadsByEventId.size === expected.size) {
+        clearTimeout(timeout);
+        socket.off("device:event", handleEvent);
+        resolve(eventIds.map((eventId) => payloadsByEventId.get(eventId)!));
+      }
+    };
+    socket.on("device:event", handleEvent);
+  });
+}
+
 async function waitForDeviceReplay(socket: Socket): Promise<DeviceEventPayload[]> {
   return new Promise<DeviceEventPayload[]>((resolve) => {
     socket.once("device:replay", (payload: DeviceEventPayload[]) => resolve(payload));
@@ -2980,4 +3149,8 @@ async function authorizedFetch(url: string, token = ownerToken): Promise<Respons
       Authorization: `Bearer ${token}`
     }
   });
+}
+
+function deviceEventKey(payload: DeviceEventPayload): string {
+  return `${payload.deviceId}:${payload.event.id}:${payload.event.seq}`;
 }

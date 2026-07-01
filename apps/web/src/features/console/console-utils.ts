@@ -1,4 +1,11 @@
-import type { LocalPermissionMode } from "../../lib/types";
+import type {
+  LocalHealthResponse,
+  LocalPermissionMode,
+  LocalProviderCatalogResponse,
+  LocalProviderConfig,
+  LocalProviderPreset,
+  LocalSessionSummary
+} from "../../lib/types";
 import type { ResumeState } from "../chat/chat-state";
 import type { DevicePresenceState, SavedDevice } from "../devices/device-utils";
 import { formatConnectionError, formatError } from "../../lib/format/text";
@@ -149,6 +156,115 @@ export function mergeDevicePresenceResults(
   return next;
 }
 
+export interface ProviderSelectionOption {
+  preset: LocalProviderPreset | null;
+  value: string;
+}
+
+export interface ProviderSessionRequest {
+  providerProfileId: string;
+  provider: LocalProviderConfig;
+}
+
+export function buildProviderSessionRequest(input: {
+  apiKey: string;
+  apiKeyEnv: string;
+  baseUrl: string;
+  label: string;
+  model: string;
+  option: ProviderSelectionOption;
+}): ProviderSessionRequest | null {
+  if (!input.option.value || !input.option.preset) {
+    return null;
+  }
+  const provider = compactProviderConfig({
+    preset: input.option.preset,
+    providerLabel: input.label,
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    apiKeyEnv: input.apiKeyEnv,
+    model: input.model
+  });
+  return {
+    providerProfileId: input.option.value,
+    provider
+  };
+}
+
+export function validateProviderSessionRequest(input: {
+  catalog: LocalProviderCatalogResponse | null;
+  loading: boolean;
+  request: ProviderSessionRequest | null;
+  status: LocalHealthResponse["codexProvider"] | null;
+}): string | null {
+  const request = input.request;
+  if (!request) {
+    return null;
+  }
+
+  if (input.loading && !input.catalog) {
+    return "正在读取当前设备的 Provider 能力，请稍后再试。";
+  }
+  if (input.status && !input.status.available) {
+    return `当前设备未启用 CodexProvider：${input.status.error ?? "请安装 codex-provider 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`;
+  }
+  if (!input.catalog) {
+    return "还没有读取到当前设备的 Provider 能力，请稍后再试。";
+  }
+  if (!input.catalog.available) {
+    return `当前设备未启用 CodexProvider：${input.catalog.error ?? "请安装 codex-provider 或配置 CODEXNEXT_CODEX_PROVIDER_MODULE。"}`;
+  }
+
+  if (request.provider.preset === "custom") {
+    if (!request.provider.baseUrl?.trim()) {
+      return "请填写自定义 Provider 的 Base URL";
+    }
+    if (!request.provider.model?.trim()) {
+      return "请填写自定义 Provider 的模型";
+    }
+    if (!request.provider.apiKey?.trim() && !request.provider.apiKeyEnv?.trim()) {
+      return "请填写自定义 Provider 的 API Key 或 API Key Env";
+    }
+    return null;
+  }
+
+  const catalogEntry = input.catalog.providers.find(
+    (provider) => provider.preset === request.providerProfileId
+  );
+  if (!catalogEntry) {
+    return "当前设备不支持这个 Provider，请重新选择。";
+  }
+  if (!request.provider.model?.trim() && !catalogEntry.defaultModel.trim()) {
+    return "请选择 Provider 模型。";
+  }
+  if (!request.provider.apiKey?.trim() && !catalogEntry.apiKeyConfigured) {
+    return `当前设备没有配置 ${catalogEntry.apiKeyEnv}，请在设备环境变量中设置，或直接填写 API Key。`;
+  }
+  return null;
+}
+
+export function shortModelLabel(label: string, fallback: string): string {
+  const trimmed = label.trim() || fallback.trim();
+  return trimmed.replace(/^DeepSeek /u, "DS ");
+}
+
+export function sessionActiveModelLabel(
+  session: LocalSessionSummary,
+  catalog: LocalProviderCatalogResponse | null
+): string {
+  const model = session.provider?.model ?? session.model ?? "model";
+  const provider = session.provider?.providerLabel ?? session.providerProfileId ?? "";
+  if (!provider) {
+    return model;
+  }
+  const catalogProvider = catalog?.providers.find(
+    (entry) => entry.preset === session.providerProfileId || entry.providerLabel === provider
+  );
+  const modelLabel =
+    catalogProvider?.models.find((entry) => entry.id === model)?.label ?? model;
+  return `${catalogProvider?.label ?? provider} · ${modelLabel}`;
+}
+
 function readErrorStatus(error: unknown): number | null {
   if (!isRecord(error)) {
     return null;
@@ -168,4 +284,17 @@ function formatUnknownError(error: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function compactProviderConfig(
+  input: Record<string, string | LocalProviderPreset | null>
+): LocalProviderConfig {
+  return Object.fromEntries(
+    Object.entries(input)
+      .map(([key, value]) => [
+        key,
+        typeof value === "string" ? value.trim() : value
+      ])
+      .filter(([, value]) => value !== null && value !== "")
+  ) as LocalProviderConfig;
 }

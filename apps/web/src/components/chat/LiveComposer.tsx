@@ -672,7 +672,7 @@ export function LiveComposer(props: {
               onClick={props.onSubmitGuide}
             >
               <CodexIcon name="guide" />
-              引导对话
+              <span className="cn-composer-pill-label">引导对话</span>
             </button>
           ) : null}
         </div>
@@ -704,17 +704,20 @@ export function LiveComposer(props: {
           disabled={composerDisabled}
           onClick={() => props.onOpenMenu("permission")}
         >
-          {props.selectedPermission.label}
+          <span className="cn-composer-pill-label">{props.selectedPermission.label}</span>
           <CodexIcon name="chevronDown" />
         </button>
         <button
           ref={modelButtonRef}
           className="cn-composer-pill cn-composer-pill-model"
           type="button"
+          title={`${props.activeModelLabel} · ${props.selectedReasoning.label}`}
           disabled={composerDisabled}
           onClick={() => props.onOpenMenu("model")}
         >
-          {props.activeModelLabel} · {props.selectedReasoning.label}
+          <span className="cn-composer-pill-label">
+            {props.activeModelLabel} · {props.selectedReasoning.label}
+          </span>
           <CodexIcon name="chevronDown" />
         </button>
         <button

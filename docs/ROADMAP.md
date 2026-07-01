@@ -59,7 +59,7 @@ Exit criteria:
 - stale presence marks devices offline without clearing workspace state
 - session expiry has predictable HTTP and Socket.IO behavior
 - `/api/control/health` and audit logs are safe for operators
-- `codexnext doctor` covers local prerequisites and relay diagnostics
+- `codexnext doctor` covers local prerequisites, relay diagnostics, Web/Socket route checks, Agent/Provider runtime checks, same-origin deployment checks, and expected-closed public service ports
 - `pnpm typecheck`, `pnpm test`, and `pnpm --filter @codexnext/agent dev -- doctor` pass or any local external limitation is documented
 
 ## Phase 4: Mobile Client

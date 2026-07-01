@@ -11,7 +11,9 @@ import type {
   LocalDirectoryListResponse,
   LocalEvent,
   LocalHealthResponse,
+  LocalPermissionMode,
   LocalProviderCatalogResponse,
+  LocalReasoningEffort,
   LocalSessionSummary,
   PendingApprovalView
 } from "../../lib/types";
@@ -161,11 +163,14 @@ export interface DeviceWorkspace {
   model: string;
   outbox: Record<string, OutboxEntry>;
   pendingApprovals: PendingApprovalView[];
+  permissionMode: LocalPermissionMode;
   providerCatalog: LocalProviderCatalogResponse | null;
   providerCatalogLoading: boolean;
   providerSelection: WorkspaceProviderSelection;
+  reasoningEffort: LocalReasoningEffort;
   resumeStates: Record<string, ResumeState>;
   selectedHistoryKey: string | null;
+  serviceTier: string | null;
   sessionSyncState: WorkspaceSyncState;
   sessionHistoryOrigins: Record<string, string>;
   sessionConversationKeys: Record<string, ConversationKey>;
@@ -224,6 +229,7 @@ export function createDeviceWorkspace(connection: AgentConnection): DeviceWorksp
     model: "gpt-5.5",
     outbox: {},
     pendingApprovals: [],
+    permissionMode: "request-approval",
     providerCatalog: null,
     providerCatalogLoading: false,
     providerSelection: {
@@ -234,8 +240,10 @@ export function createDeviceWorkspace(connection: AgentConnection): DeviceWorksp
       model: "",
       profileId: ""
     },
+    reasoningEffort: "xhigh",
     resumeStates: {},
     selectedHistoryKey: null,
+    serviceTier: null,
     sessionSyncState: "idle",
     sessionHistoryOrigins: {},
     sessionConversationKeys: {},

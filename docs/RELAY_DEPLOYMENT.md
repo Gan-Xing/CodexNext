@@ -61,7 +61,7 @@ http://127.0.0.1:3002
 http://127.0.0.1:3922
 ```
 
-For public production, put Web and control behind HTTPS. If control is exposed through a reverse proxy path or subdomain, use that HTTPS URL consistently for `CODEXNEXT_RELAY_URL` and agent `--relay`.
+For public production, put Web and control behind HTTPS. Agents should use the public control URL for `CODEXNEXT_RELAY_URL` and `--relay`. Web should return a browser/mobile reachable `CODEXNEXT_RELAY_URL`; when that is the same public origin as Web, set `CODEXNEXT_CONTROL_URL` to the private control URL for server-side Web-to-control calls.
 
 ## Ports
 
@@ -87,7 +87,8 @@ These ports are examples. Reverse proxies may expose standard `443` public origi
 | control | `CODEXNEXT_HEARTBEAT_INTERVAL_MS` | `15000` | `15000` | Agent heartbeat interval. |
 | control | `CODEXNEXT_STALE_DEVICE_TIMEOUT_MS` | unset | unset or explicit ms | Defaults to four heartbeat intervals. |
 | control | `CODEXNEXT_RPC_TIMEOUT_MS` | `30000` | `30000` | Default relay RPC timeout. |
-| web | `CODEXNEXT_RELAY_URL` | `http://127.0.0.1:3922` | `https://<your-relay-host>` | Server-side Web to control URL. |
+| web | `CODEXNEXT_RELAY_URL` | `http://127.0.0.1:3922` | `https://<your-relay-host>` | Relay URL returned to browser/mobile clients. In same-origin production this is usually the public Web origin. |
+| web | `CODEXNEXT_CONTROL_URL` | optional | `http://<private-control-host>:3922` | Optional server-only override for Web-to-control fetches. Use this when `CODEXNEXT_RELAY_URL` is the public same-origin URL returned to browsers. |
 | web | `CODEXNEXT_OWNER_TOKEN` | same as control | same as control | Used only server-side to mint relay sessions. |
 | web | `CODEXNEXT_PUBLIC_ORIGIN` | `http://127.0.0.1:3002` | `https://<your-web-origin>` | Controls secure cookie behavior and public links. |
 | web | `CODEXNEXT_WEB_AUTH_PASSWORD_HASH` | scrypt hash | scrypt hash | Generate with the README command. |
@@ -136,6 +137,7 @@ Templates and scripts:
 - [scripts/ops/run-web.sh](../scripts/ops/run-web.sh)
 - [scripts/ops/run-relay-agent.sh](../scripts/ops/run-relay-agent.sh)
 - [scripts/ops/build-web.sh](../scripts/ops/build-web.sh)
+- [scripts/ops/deploy-web.sh](../scripts/ops/deploy-web.sh)
 - [scripts/ops/detect-node-bin.sh](../scripts/ops/detect-node-bin.sh)
 - [scripts/test-winsw-templates.mjs](../scripts/test-winsw-templates.mjs)
 
@@ -160,10 +162,23 @@ node -e 'const {randomBytes,scryptSync}=require("node:crypto");const password=pr
 
 3. Configure `control` and `web` env files from the examples.
 
-4. Build Web with production env:
+4. Build Web with production env.
+
+On a `systemd` host, prefer the deploy helper. It reads
+`/etc/codexnext/web.env`, builds as the `codexnext-web.service` user, verifies
+that the service user can read the `.next` build output, and restarts the Web
+service:
+
+```bash
+sudo ./scripts/ops/deploy-web.sh
+```
+
+For non-systemd hosts, export the Web environment and build directly as the
+same OS user that will run Web:
 
 ```bash
 export CODEXNEXT_RELAY_URL=https://<your-relay-host>
+export CODEXNEXT_CONTROL_URL=http://<private-control-host>:3922
 export CODEXNEXT_OWNER_TOKEN=<long-random-owner-token>
 export CODEXNEXT_PUBLIC_ORIGIN=https://<your-web-origin>
 export CODEXNEXT_WEB_AUTH_PASSWORD_HASH=<scrypt-hash>
@@ -197,7 +212,54 @@ Relay health and deployment diagnostics:
 pnpm --filter @codexnext/agent dev -- doctor --relay https://<your-relay-host>
 ```
 
-The doctor checks Node, pnpm, Codex CLI, device identity file permissions, relay health, Web/control env presence, production origin risks, and whether hidden direct mode is enabled. It reports secret presence and risk without printing raw token values.
+Same-origin HTTPS deployment diagnostics:
+
+```bash
+pnpm --filter @codexnext/agent dev -- doctor \
+  --web https://<your-web-origin> \
+  --relay https://<your-relay-host> \
+  --require-same-origin \
+  --require-agent \
+  --require-provider \
+  --expect-closed <public-host>:3002 \
+  --expect-closed <public-host>:3922
+```
+
+Set `CODEXNEXT_OWNER_TOKEN` only in a trusted ops shell when using `--require-agent` or `--require-provider`; doctor exchanges it for a short relay session and never prints the raw token.
+
+The doctor checks Node, pnpm, Codex CLI, device identity file permissions, relay health, Web/control env presence, production origin risks, Web auth status, relay session bootstrap routing, Socket.IO routing, Agent health, Provider runtime/catalog, expected-closed public ports, and whether hidden direct mode is enabled. It reports secret presence and risk without printing raw token values.
+
+Browser/mobile smoke after deployment:
+
+```bash
+sudo pnpm smoke:web:e2e -- \
+  --web https://<your-web-origin> \
+  --env /etc/codexnext/web.env
+```
+
+This uses the Web session secret to create an HttpOnly-equivalent browser cookie
+without knowing the plaintext login password, launches the system Chrome or
+Chromium via `playwright-core`, and checks the desktop console, `/fast` slash
+menu, Provider/model picker, mobile composer viewport, multi-tab localStorage
+device convergence, same-origin browser requests, and absence of raw public
+`3002`/`3922` port references in browser state.
+
+For a controlled systemd resilience check, run the same browser smoke with
+explicit service restart flags:
+
+```bash
+sudo pnpm smoke:web:e2e -- \
+  --web https://<your-web-origin> \
+  --env /etc/codexnext/web.env \
+  --restart-web-service codexnext-web.service \
+  --restart-agent-service codexnext-agent.service
+```
+
+This intentionally restarts the named services, then verifies that the browser
+session can reload Web, reconnect to the selected Agent, and read Provider/model
+capabilities again through the same public origin.
+
+For the current `codexnext.byganxing.com` Cloudflare Tunnel deployment, Web and relay should both be checked as `https://codexnext.byganxing.com`, while the public host ports for `3002` and `3922` should be expected closed. The browser/mobile product boundary remains the HTTPS Web origin; raw service ports are internal implementation details.
 
 The control health endpoint is intentionally safe:
 
@@ -216,8 +278,8 @@ git pull
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
-./scripts/ops/build-web.sh
-sudo systemctl restart codexnext-control codexnext-web codexnext-agent
+sudo ./scripts/ops/deploy-web.sh
+sudo systemctl restart codexnext-control codexnext-agent
 ```
 
 On a macOS host using the bundled launchd helper:

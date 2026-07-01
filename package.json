@@ -12,10 +12,12 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "vitest run",
     "test:guard": "node scripts/test-codexnext-backlog-cycle-guard.mjs",
-    "test:winsw": "node scripts/test-winsw-templates.mjs"
+    "test:winsw": "node scripts/test-winsw-templates.mjs",
+    "smoke:web:e2e": "node scripts/ops/smoke-web-e2e.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
+    "playwright-core": "^1.61.1",
     "tsx": "^4.22.4",
     "typescript": "^5.9.3",
     "vitest": "^4.0.15"

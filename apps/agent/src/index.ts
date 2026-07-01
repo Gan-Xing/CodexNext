@@ -17,7 +17,35 @@ program
   .command("doctor")
   .description("Check Node, pnpm, Codex CLI, relay health, and deployment diagnostics.")
   .option("--relay <url>", "Optional control relay URL to probe with /api/control/health.")
-  .action(async (options: { relay?: string }) => {
+  .option("--web <url>", "Optional public Web origin to probe with /api/auth/status and same-origin routes.")
+  .option("--device-id <id>", "Optional relay device id for Agent and Provider runtime checks.")
+  .option(
+    "--require-agent",
+    "Fail unless doctor can authenticate to relay and verify an online Agent."
+  )
+  .option(
+    "--require-provider",
+    "Fail unless doctor can authenticate to relay and verify CodexProvider runtime and catalog."
+  )
+  .option(
+    "--require-same-origin",
+    "Fail when the checked Web and relay URLs do not share the same public origin."
+  )
+  .option(
+    "--expect-closed <host:port>",
+    "Assert a public TCP endpoint is not directly reachable. Can be repeated.",
+    collectValues,
+    []
+  )
+  .action(async (options: {
+    deviceId?: string;
+    expectClosed: string[];
+    relay?: string;
+    requireAgent?: boolean;
+    requireProvider?: boolean;
+    requireSameOrigin?: boolean;
+    web?: string;
+  }) => {
     await runDoctor(options);
   });
 
@@ -144,4 +172,8 @@ function parsePositiveInteger(value: string): number {
     throw new InvalidArgumentError("Expected a positive integer.");
   }
   return parsed;
+}
+
+function collectValues(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }

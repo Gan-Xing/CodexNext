@@ -13,6 +13,7 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith("/api/auth/login") ||
     pathname.startsWith("/api/auth/logout") ||
     pathname.startsWith("/api/auth/status") ||
+    pathname.startsWith("/api/control/health") ||
     isDevTracePath(pathname) ||
     pathname.startsWith("/api/relay/session") ||
     pathname.startsWith("/_next") ||
@@ -37,7 +38,7 @@ function isDevTracePath(pathname: string): boolean {
 
 export const config = {
   matcher: [
-    "/((?!api/auth/login|api/auth/logout|api/auth/status|api/relay/session|_next|favicon.ico).*)"
+    "/((?!api/auth/login|api/auth/logout|api/auth/status|api/control/health|api/relay/session|_next|favicon.ico).*)"
   ]
 };
 

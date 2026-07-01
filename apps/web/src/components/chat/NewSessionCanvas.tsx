@@ -65,17 +65,26 @@ export function NewSessionCanvas(props: NewSessionCanvasProps) {
       <div className="cn-empty-grid">
         <div className="cn-flow-card cn-new-session-guide">
           <strong>
-            {hasCwd ? "已经准备好开始" : "还差一步设置目录"}
+            {props.connected
+              ? hasCwd
+                ? "已经准备好开始"
+                : "还差一步设置目录"
+              : "等待设备接入"}
           </strong>
           <span>
-            {hasCwd
+            {!props.connected
+              ? "先连上设备，再选择目录和开始会话。"
+              : hasCwd
               ? `当前设备是 ${props.deviceName}，会话会在 ${props.cwd} 中启动。`
               : `当前设备是 ${props.deviceName}，但还没有选中工作目录。`}
           </span>
           <div className="cn-new-session-guide-meta">
-            <div className="cn-new-session-guide-pill" title={props.deviceName}>
+            <div
+              className="cn-new-session-guide-pill"
+              title={props.connected ? props.deviceName : "未连接"}
+            >
               <b>设备</b>
-              <span>{props.deviceName}</span>
+              <span>{props.connected ? props.deviceName : "未连接"}</span>
             </div>
             <div className="cn-new-session-guide-pill" title={props.cwd || "未选择"}>
               <b>目录</b>

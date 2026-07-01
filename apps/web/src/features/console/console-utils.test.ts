@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   availableRelayPermissionOptions,
+  buildProviderSessionRequest,
   classifyRelaySessionError,
   coerceRelayPermissionMode,
   formatMissingHistoryFolderMessage,
@@ -10,8 +11,15 @@ import {
   formatRelaySessionError,
   mergeDevicePresenceResults,
   resolveComposerResumeBlock,
-  seedSavedDevicePresence
+  seedSavedDevicePresence,
+  sessionActiveModelLabel,
+  shortModelLabel,
+  validateProviderSessionRequest
 } from "./console-utils";
+import type {
+  LocalProviderCatalogResponse,
+  LocalSessionSummary
+} from "../../lib/types";
 
 const options = [
   { label: "request", mode: "request-approval" as const },
@@ -214,3 +222,265 @@ describe("device presence helpers", () => {
     });
   });
 });
+
+describe("provider session helpers", () => {
+  it("does not build a Provider request for the Codex default option", () => {
+    expect(
+      buildProviderSessionRequest({
+        apiKey: "ignored",
+        apiKeyEnv: "IGNORED",
+        baseUrl: "https://example.invalid",
+        label: "Ignored",
+        model: "ignored-model",
+        option: {
+          preset: null,
+          value: ""
+        }
+      })
+    ).toBeNull();
+  });
+
+  it("trims Provider request fields and omits blank values", () => {
+    expect(
+      buildProviderSessionRequest({
+        apiKey: "  sk-test  ",
+        apiKeyEnv: "  ",
+        baseUrl: "  https://openrouter.ai/api/v1  ",
+        label: "  OpenRouter  ",
+        model: "  deepseek/deepseek-chat-v3-0324  ",
+        option: {
+          preset: "openrouter",
+          value: "openrouter"
+        }
+      })
+    ).toEqual({
+      providerProfileId: "openrouter",
+      provider: {
+        apiKey: "sk-test",
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "deepseek/deepseek-chat-v3-0324",
+        preset: "openrouter",
+        providerLabel: "OpenRouter"
+      }
+    });
+  });
+
+  it("blocks Provider sessions until the selected device catalog is ready", () => {
+    const request = buildProviderSessionRequest({
+      apiKey: "",
+      apiKeyEnv: "OPENROUTER_API_KEY",
+      baseUrl: "",
+      label: "",
+      model: "deepseek/deepseek-chat-v3-0324",
+      option: {
+        preset: "openrouter",
+        value: "openrouter"
+      }
+    });
+
+    expect(
+      validateProviderSessionRequest({
+        catalog: null,
+        loading: true,
+        request,
+        status: null
+      })
+    ).toBe("正在读取当前设备的 Provider 能力，请稍后再试。");
+    expect(
+      validateProviderSessionRequest({
+        catalog: null,
+        loading: false,
+        request,
+        status: {
+          available: false,
+          error: "Cannot find package"
+        }
+      })
+    ).toBe("当前设备未启用 CodexProvider：Cannot find package");
+    expect(
+      validateProviderSessionRequest({
+        catalog: {
+          available: false,
+          error: "provider runtime missing",
+          providers: []
+        },
+        loading: false,
+        request,
+        status: null
+      })
+    ).toBe("当前设备未启用 CodexProvider：provider runtime missing");
+  });
+
+  it("rejects a Provider selected from another device catalog", () => {
+    const request = buildProviderSessionRequest({
+      apiKey: "",
+      apiKeyEnv: "DEEPSEEK_API_KEY",
+      baseUrl: "",
+      label: "",
+      model: "deepseek-chat",
+      option: {
+        preset: "deepseek",
+        value: "deepseek"
+      }
+    });
+
+    expect(
+      validateProviderSessionRequest({
+        catalog: providerCatalog({
+          preset: "openrouter",
+          apiKeyConfigured: true
+        }),
+        loading: false,
+        request,
+        status: {
+          available: true,
+          error: null
+        }
+      })
+    ).toBe("当前设备不支持这个 Provider，请重新选择。");
+  });
+
+  it("requires configured keys or an inline key for catalog Providers", () => {
+    const request = buildProviderSessionRequest({
+      apiKey: "",
+      apiKeyEnv: "OPENROUTER_API_KEY",
+      baseUrl: "",
+      label: "",
+      model: "deepseek/deepseek-chat-v3-0324",
+      option: {
+        preset: "openrouter",
+        value: "openrouter"
+      }
+    });
+
+    expect(
+      validateProviderSessionRequest({
+        catalog: providerCatalog({
+          preset: "openrouter",
+          apiKeyConfigured: false
+        }),
+        loading: false,
+        request,
+        status: null
+      })
+    ).toBe("当前设备没有配置 OPENROUTER_API_KEY，请在设备环境变量中设置，或直接填写 API Key。");
+
+    expect(
+      validateProviderSessionRequest({
+        catalog: providerCatalog({
+          preset: "openrouter",
+          apiKeyConfigured: true
+        }),
+        loading: false,
+        request,
+        status: null
+      })
+    ).toBeNull();
+  });
+
+  it("validates custom Provider fields", () => {
+    const request = buildProviderSessionRequest({
+      apiKey: "",
+      apiKeyEnv: "",
+      baseUrl: "https://provider.example/v1",
+      label: "Custom",
+      model: "",
+      option: {
+        preset: "custom",
+        value: "custom"
+      }
+    });
+
+    expect(
+      validateProviderSessionRequest({
+        catalog: providerCatalog({
+          preset: "openrouter",
+          apiKeyConfigured: true
+        }),
+        loading: false,
+        request,
+        status: null
+      })
+    ).toBe("请填写自定义 Provider 的模型");
+  });
+
+  it("formats Provider model labels from the selected device catalog", () => {
+    expect(shortModelLabel("DeepSeek V3.1", "fallback")).toBe("DS V3.1");
+    expect(shortModelLabel(" ", "deepseek-chat")).toBe("deepseek-chat");
+
+    expect(
+      sessionActiveModelLabel(
+        sessionSummary({
+          providerProfileId: "openrouter",
+          provider: {
+            providerLabel: "OpenRouter",
+            model: "deepseek/deepseek-chat-v3-0324"
+          },
+          model: "deepseek/deepseek-chat-v3-0324"
+        }),
+        providerCatalog({
+          preset: "openrouter",
+          apiKeyConfigured: true
+        })
+      )
+    ).toBe("OpenRouter · DeepSeek Chat V3");
+  });
+});
+
+function providerCatalog(input: {
+  apiKeyConfigured: boolean;
+  preset: "openrouter" | "deepseek";
+}): LocalProviderCatalogResponse {
+  const isOpenRouter = input.preset === "openrouter";
+  return {
+    available: true,
+    error: null,
+    providers: [
+      {
+        apiKeyConfigured: input.apiKeyConfigured,
+        apiKeyEnv: isOpenRouter ? "OPENROUTER_API_KEY" : "DEEPSEEK_API_KEY",
+        baseUrl: isOpenRouter
+          ? "https://openrouter.ai/api/v1"
+          : "https://api.deepseek.com",
+        defaultModel: isOpenRouter
+          ? "deepseek/deepseek-chat-v3-0324"
+          : "deepseek-chat",
+        label: isOpenRouter ? "OpenRouter" : "DeepSeek",
+        models: [
+          {
+            id: isOpenRouter ? "deepseek/deepseek-chat-v3-0324" : "deepseek-chat",
+            label: isOpenRouter ? "DeepSeek Chat V3" : "DeepSeek Chat",
+            supportedReasoningEfforts: []
+          }
+        ],
+        preset: input.preset,
+        providerLabel: isOpenRouter ? "OpenRouter" : "DeepSeek",
+        providerName: isOpenRouter ? "openrouter" : "deepseek"
+      }
+    ]
+  };
+}
+
+function sessionSummary(
+  overrides: Partial<LocalSessionSummary>
+): LocalSessionSummary {
+  return {
+    approvalPolicy: "on-request",
+    approvalsReviewer: "user",
+    createdAt: 1,
+    cwd: "/repo",
+    goal: null,
+    model: "gpt-5.5",
+    permissionMode: "request-approval",
+    provider: null,
+    providerProfileId: null,
+    queuedMessages: [],
+    reasoningEffort: "high",
+    sandbox: "workspace-write",
+    serviceTier: null,
+    sessionId: "session_1",
+    status: "idle",
+    updatedAt: 2,
+    ...overrides
+  };
+}

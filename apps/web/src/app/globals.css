@@ -2580,6 +2580,11 @@ summary {
   display: grid;
   gap: 0.22rem;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-height: min(24dvh, 168px);
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding-right: 0.1rem;
+  scrollbar-gutter: stable;
 }
 
 .cn-provider-option-list .cn-menu-row.compact {
@@ -3735,6 +3740,96 @@ summary {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.cn-provider-model-field {
+  color: var(--cn-muted);
+  display: grid;
+  font-size: 0.86rem;
+  font-weight: 650;
+  gap: 0.45rem;
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.cn-provider-model-head {
+  align-items: center;
+  display: flex;
+  gap: 0.7rem;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.cn-provider-model-head small {
+  color: var(--cn-muted);
+  font-size: 0.76rem;
+  font-weight: 760;
+}
+
+.cn-provider-model-search {
+  background: #fff;
+  border: 1px solid var(--cn-line);
+  border-radius: 14px;
+  color: var(--cn-ink);
+  min-height: 42px;
+}
+
+.cn-provider-model-list {
+  background: var(--cn-soft);
+  border: 1px solid var(--cn-line);
+  border-radius: 16px;
+  display: grid;
+  gap: 0.18rem;
+  max-height: min(34dvh, 280px);
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding: 0.38rem;
+  scrollbar-gutter: stable;
+}
+
+.cn-provider-model-row {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  color: var(--cn-ink);
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 42px;
+  padding: 0.48rem 0.55rem;
+  text-align: left;
+}
+
+.cn-provider-model-row:hover,
+.cn-provider-model-row.selected {
+  background: #fff;
+}
+
+.cn-provider-model-row > span {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.cn-provider-model-row strong,
+.cn-provider-model-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cn-provider-model-row small,
+.cn-provider-model-empty {
+  color: var(--cn-muted);
+}
+
+.cn-provider-model-empty {
+  font-size: 0.84rem;
+  font-weight: 650;
+  padding: 0.68rem 0.55rem;
+}
+
 .cn-permission-list-real {
   background: var(--cn-soft);
   border: 1px solid var(--cn-line);
@@ -4362,6 +4457,7 @@ summary {
 
   .cn-live-console .cn-provider-option-list {
     grid-template-columns: 1fr;
+    max-height: 22dvh;
   }
 
   .cn-live-console .cn-model-option-list {
@@ -4432,6 +4528,10 @@ summary {
 
   .cn-live-console .cn-session-settings-grid {
     grid-template-columns: 1fr;
+  }
+
+  .cn-live-console .cn-provider-model-list {
+    max-height: 28dvh;
   }
 
   .cn-live-console .cn-relay-pair-card {
@@ -6451,6 +6551,8 @@ summary {
   font-size: 0.78rem;
   gap: 0.36rem;
   min-height: 32px;
+  min-width: 0;
+  overflow: hidden;
   padding: 0.34rem 0.68rem;
 }
 
@@ -6458,7 +6560,19 @@ summary {
   margin-left: auto;
 }
 
+.cn-composer-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cn-composer-pill-model .cn-composer-pill-label {
+  flex: 1 1 auto;
+}
+
 .cn-composer-pill .cn-codex-icon {
+  flex: 0 0 auto;
   height: 15px;
   width: 15px;
 }
@@ -9184,5 +9298,78 @@ summary {
 
   .cn-live-console .cn-live-composer {
     margin: 0 0.5rem max(0.5rem, env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 520px) {
+  .cn-live-console .cn-device-sheet-header {
+    gap: 0.58rem;
+  }
+
+  .cn-live-console .cn-device-sheet-copy p {
+    max-width: 14rem;
+  }
+
+  .cn-live-console .cn-device-form-fields,
+  .cn-live-console .cn-device-status-grid,
+  .cn-live-console .cn-relay-pair-request-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cn-live-console .cn-device-preview-title {
+    gap: 0.56rem;
+  }
+
+  .cn-live-console .cn-device-preview-title > .cn-codex-icon {
+    flex: 0 0 32px;
+    height: 32px;
+    width: 32px;
+  }
+
+  .cn-live-console .cn-saved-device-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cn-live-console .cn-device-delete-button {
+    justify-self: start;
+  }
+
+  .cn-live-console .cn-relay-pair-request-title {
+    align-items: start;
+    display: grid;
+    gap: 0.36rem;
+  }
+
+  .cn-live-console .cn-project-name {
+    padding-right: 3.9rem;
+  }
+
+  .cn-live-console .cn-project-menu {
+    max-width: calc(100vw - 1.5rem);
+    min-width: min(196px, calc(100vw - 1.5rem));
+    right: 0;
+  }
+
+  .cn-live-console .cn-thread-row {
+    padding-left: 1.15rem;
+  }
+
+  .cn-live-console .cn-thread-main {
+    gap: 0.52rem;
+    grid-template-columns: minmax(0, 1fr) 54px;
+  }
+
+  .cn-live-console .cn-thread-actions {
+    right: 0.18rem;
+    width: 54px;
+  }
+
+  .cn-live-console .cn-thread-action {
+    height: 27px;
+    width: 27px;
+  }
+
+  .cn-live-console .cn-thread-list-toggle {
+    margin-left: 1.18rem;
   }
 }

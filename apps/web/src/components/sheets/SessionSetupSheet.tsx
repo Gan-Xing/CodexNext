@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import type {
   LocalDirectoryListResponse,
   LocalPermissionMode,
@@ -75,6 +76,21 @@ export function SessionSetupSheet(props: {
 }) {
   const providerEnabled = props.providerProfileId.length > 0;
   const customProvider = props.providerProfileId === "custom";
+  const [providerModelQuery, setProviderModelQuery] = useState("");
+  const visibleProviderModelOptions = useMemo(
+    () =>
+      filterProviderModelOptions(
+        props.providerModelOptions,
+        providerModelQuery,
+        props.providerModel
+      ),
+    [props.providerModel, props.providerModelOptions, providerModelQuery]
+  );
+
+  useEffect(() => {
+    setProviderModelQuery("");
+  }, [props.providerProfileId]);
+
   return (
     <div className="cn-overlay-panel project cn-live-overlay">
       <div className="cn-project-card cn-live-session-sheet">
@@ -205,29 +221,63 @@ export function SessionSetupSheet(props: {
           ) : null}
           {providerEnabled ? (
             <>
-              <label>
-                Provider 模型
-                {customProvider || props.providerModelOptions.length === 0 ? (
+              {customProvider || props.providerModelOptions.length === 0 ? (
+                <label>
+                  Provider 模型
                   <input
                     name="session_provider_model"
                     value={props.providerModel}
                     onChange={(event) => props.onProviderModelChange(event.target.value)}
                     placeholder="deepseek/deepseek-chat"
                   />
-                ) : (
-                  <select
-                    name="session_provider_model"
-                    value={props.providerModel}
-                    onChange={(event) => props.onProviderModelChange(event.target.value)}
-                  >
-                    {props.providerModelOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </label>
+                </label>
+              ) : (
+                <div className="cn-provider-model-field">
+                  <div className="cn-provider-model-head">
+                    <span>Provider 模型</span>
+                    <small>
+                      {visibleProviderModelOptions.length}/{props.providerModelOptions.length}
+                    </small>
+                  </div>
+                  <input
+                    aria-label="搜索 Provider 模型"
+                    className="cn-provider-model-search"
+                    type="search"
+                    value={providerModelQuery}
+                    onChange={(event) => setProviderModelQuery(event.target.value)}
+                    placeholder="搜索模型"
+                  />
+                  <div className="cn-provider-model-list" role="listbox" aria-label="Provider 模型">
+                    {visibleProviderModelOptions.length > 0 ? (
+                      visibleProviderModelOptions.map((option) => (
+                        <button
+                          key={option.value}
+                          className={
+                            props.providerModel === option.value
+                              ? "cn-provider-model-row selected"
+                              : "cn-provider-model-row"
+                          }
+                          type="button"
+                          role="option"
+                          aria-selected={props.providerModel === option.value}
+                          title={option.value}
+                          onClick={() => props.onProviderModelChange(option.value)}
+                        >
+                          <span>
+                            <strong>{option.label}</strong>
+                            {option.value !== option.label ? <small>{option.value}</small> : null}
+                          </span>
+                          {props.providerModel === option.value ? (
+                            <CodexIcon name="check" />
+                          ) : null}
+                        </button>
+                      ))
+                    ) : (
+                      <div className="cn-provider-model-empty">没有匹配模型</div>
+                    )}
+                  </div>
+                </div>
+              )}
               <details className="cn-goal-advanced">
                 <summary>Provider 高级设置</summary>
                 <label>
@@ -322,4 +372,29 @@ export function SessionSetupSheet(props: {
       </div>
     </div>
   );
+}
+
+function filterProviderModelOptions(
+  options: ModelOption[],
+  query: string,
+  selectedValue: string
+): ModelOption[] {
+  const terms = query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/u)
+    .filter(Boolean);
+  const filtered = terms.length === 0
+    ? options
+    : options.filter((option) => {
+        const haystack = `${option.label} ${option.value}`.toLowerCase();
+        return terms.every((term) => haystack.includes(term));
+      });
+  if (!selectedValue || terms.length > 0) {
+    return filtered;
+  }
+  const selected = filtered.find((option) => option.value === selectedValue);
+  return selected
+    ? [selected, ...filtered.filter((option) => option.value !== selectedValue)]
+    : filtered;
 }

@@ -26,8 +26,7 @@ export async function requestRelaySession(): Promise<RelaySessionBootstrap | nul
     return null;
   }
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Relay session bootstrap failed: ${response.status}`);
+    throw new Error(await responseErrorMessage(response, `Relay session bootstrap failed: ${response.status}`));
   }
   return (await response.json()) as RelaySessionBootstrap;
 }
@@ -42,6 +41,25 @@ export function formatRelayPairCode(code: string): string {
     return normalized;
   }
   return `${normalized.slice(0, 3)}-${normalized.slice(3)}`;
+}
+
+async function responseErrorMessage(
+  response: Response,
+  fallback: string
+): Promise<string> {
+  const text = await response.text();
+  if (!text) {
+    return fallback;
+  }
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown };
+    if (typeof parsed.error === "string" && parsed.error.trim()) {
+      return parsed.error;
+    }
+  } catch {
+    // Use the raw response text below.
+  }
+  return text;
 }
 
 export async function getRelayPairingRequest(

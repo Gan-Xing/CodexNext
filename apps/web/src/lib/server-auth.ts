@@ -7,7 +7,9 @@ import {
 import { redirect } from "next/navigation";
 
 const SESSION_COOKIE_NAME = "codexnext_web_session";
+const RELAY_SESSION_COOKIE_NAME = "codexnext_relay_session";
 const SESSION_TTL_SECONDS = 8 * 60 * 60;
+const RELAY_SESSION_TTL_SECONDS = 60 * 60;
 const LOGIN_WINDOW_MS = 10 * 60_000;
 const LOGIN_MAX_FAILURES = 5;
 const DUMMY_SALT = Buffer.alloc(16, 7);
@@ -36,6 +38,10 @@ export function configuredRelayUrl(): string | null {
   return process.env.CODEXNEXT_RELAY_URL || process.env.NEXT_PUBLIC_CODEXNEXT_RELAY_URL || null;
 }
 
+export function configuredControlUrl(): string | null {
+  return process.env.CODEXNEXT_CONTROL_URL || configuredRelayUrl();
+}
+
 export function configuredOwnerToken(): string | null {
   return process.env.CODEXNEXT_OWNER_TOKEN || null;
 }
@@ -54,6 +60,10 @@ export function sessionSecret(): string | null {
 
 export function webSessionCookieName(): string {
   return SESSION_COOKIE_NAME;
+}
+
+export function relaySessionCookieName(): string {
+  return RELAY_SESSION_COOKIE_NAME;
 }
 
 export function issueWebSessionCookieValue(now = Date.now()): string {
@@ -143,6 +153,20 @@ export function loginCookieOptions() {
 export function clearLoginCookieOptions() {
   return {
     ...loginCookieOptions(),
+    maxAge: 0
+  };
+}
+
+export function relaySessionCookieOptions() {
+  return {
+    ...loginCookieOptions(),
+    maxAge: RELAY_SESSION_TTL_SECONDS
+  };
+}
+
+export function clearRelaySessionCookieOptions() {
+  return {
+    ...relaySessionCookieOptions(),
     maxAge: 0
   };
 }

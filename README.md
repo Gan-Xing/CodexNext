@@ -226,6 +226,14 @@ pnpm typecheck
 pnpm test
 pnpm --filter @codexnext/agent dev -- doctor
 pnpm --filter @codexnext/agent dev -- doctor --relay https://<your-relay-host>
+pnpm --filter @codexnext/agent dev -- doctor \
+  --web https://<your-web-origin> \
+  --relay https://<your-relay-host> \
+  --require-same-origin \
+  --require-agent \
+  --require-provider \
+  --expect-closed <public-host>:3002 \
+  --expect-closed <public-host>:3922
 ```
 
 ## Relay-Only Product Topology
@@ -325,9 +333,17 @@ Use doctor before and after deployment:
 ```bash
 pnpm --filter @codexnext/agent dev -- doctor
 pnpm --filter @codexnext/agent dev -- doctor --relay https://<your-relay-host>
+pnpm --filter @codexnext/agent dev -- doctor \
+  --web https://<your-web-origin> \
+  --relay https://<your-relay-host> \
+  --require-same-origin \
+  --require-agent \
+  --require-provider \
+  --expect-closed <public-host>:3002 \
+  --expect-closed <public-host>:3922
 ```
 
-Doctor checks Node, pnpm, Codex CLI, device identity file permissions, relay health, Web/control env presence, production origin risks, and hidden direct-mode env state. It reports secret presence and risk without printing raw token values.
+Set `CODEXNEXT_OWNER_TOKEN` only in a trusted shell when using `--require-agent` or `--require-provider`; doctor exchanges it for a short relay session and never prints the raw token. Doctor checks Node, pnpm, Codex CLI, device identity file permissions, relay health, Web/control env presence, production origin risks, Web auth status, relay session bootstrap routing, Socket.IO routing, Agent health, Provider runtime/catalog, expected-closed public ports, and hidden direct-mode env state. It reports secret presence and risk without printing raw token values.
 
 ## Security Notes
 

@@ -42,7 +42,7 @@ The user path must not expose an Agent URL, Access Token, `?agent=`, `?token=`, 
 - `connect` opens one outbound Socket.IO machine connection and handles `rpc:request`.
 - Provider Runtime is powered by the published `codex-provider` package. When a session requests a non-default provider, the agent starts a local CodexProvider adapter and passes the resulting Codex CLI args into the local Codex app-server startup path.
 - The local Codex app-server remains the final authority for approvals, sandboxing, and command execution.
-- `doctor` checks local prerequisites and can probe relay health.
+- `doctor` checks local prerequisites and can probe relay health, Web auth status, relay bootstrap routing, Socket.IO routing, Agent health, Provider runtime/catalog, same-origin deployment, and expected-closed public service ports.
 
 ## Relay Event Contract
 

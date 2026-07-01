@@ -134,6 +134,14 @@ function makeHistoryTurnItem(
 }
 
 describe("chat state", () => {
+  it("starts each device workspace with isolated session request settings", () => {
+    const workspace = makeWorkspace();
+
+    expect(workspace.serviceTier).toBeNull();
+    expect(workspace.permissionMode).toBe("request-approval");
+    expect(workspace.reasoningEffort).toBe("xhigh");
+  });
+
   it("merges local events by seq and keeps them sorted", () => {
     const merged = mergeLocalEvents(
       [
