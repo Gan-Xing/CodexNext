@@ -158,12 +158,14 @@ async function runWebRestartSmoke(serviceName) {
   const assertNetwork = collectNetworkUrls(page);
   await page.goto(webOrigin, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   await waitForConsoleShell(page);
+  const selectedThreadTitle = await selectFirstThread(page);
   restartSystemdService(serviceName);
   await waitForHttpOk(webOrigin);
   await waitForControlOnlineDevice();
   await page.goto(webOrigin, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   await waitForConsoleShell(page);
   await waitForConnectedDevice(page);
+  await waitForMainThreadTitle(page, selectedThreadTitle);
   await verifyNoPublicPortLeak(page);
   assertNetwork();
   await rememberRelaySessionCookie(context);
@@ -180,12 +182,14 @@ async function runAgentRestartSmoke(serviceName) {
   await page.goto(webOrigin, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   await waitForConsoleShell(page);
   await waitForConnectedDevice(page);
+  const selectedThreadTitle = await selectFirstThread(page);
   restartSystemdService(serviceName);
   await waitForSystemdActive(serviceName);
   await waitForControlOnlineDevice();
   await page.goto(webOrigin, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   await waitForConsoleShell(page);
   await waitForConnectedDevice(page);
+  await waitForMainThreadTitle(page, selectedThreadTitle);
   await verifyProviderModelMenu(page);
   await verifyNoPublicPortLeak(page);
   assertNetwork();
@@ -301,6 +305,15 @@ async function verifySlashFast(page) {
 }
 
 async function verifySessionSelectionSurvivesReload(page) {
+  const threadTitle = await selectFirstThread(page);
+
+  await page.reload({ waitUntil: "domcontentloaded", timeout: timeoutMs });
+  await waitForConsoleShell(page);
+  await waitForConnectedDevice(page);
+  await waitForMainThreadTitle(page, threadTitle);
+}
+
+async function selectFirstThread(page) {
   const threadButton = page.locator(".cn-thread-row .cn-thread-main").first();
   await threadButton.waitFor({ state: "visible", timeout: timeoutMs });
   const threadTitle = (await threadButton.locator(".cn-thread-title").innerText()).trim();
@@ -312,11 +325,7 @@ async function verifySessionSelectionSurvivesReload(page) {
     timeout: timeoutMs
   });
   await waitForMainThreadTitle(page, threadTitle);
-
-  await page.reload({ waitUntil: "domcontentloaded", timeout: timeoutMs });
-  await waitForConsoleShell(page);
-  await waitForConnectedDevice(page);
-  await waitForMainThreadTitle(page, threadTitle);
+  return threadTitle;
 }
 
 async function waitForMainThreadTitle(page, expectedTitle) {
