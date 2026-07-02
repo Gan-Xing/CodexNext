@@ -14,7 +14,8 @@ import {
   replayEvents,
   resumeCodexHistory,
   resolveAgentUrl,
-  sendSessionMessage
+  sendSessionMessage,
+  updateSessionRuntime
 } from "./api";
 import { buildDeviceSidebarPrefsUrl } from "@codexnext/relay-client";
 
@@ -128,6 +129,14 @@ describe("relay api url mapping", () => {
     expect(
       resolveAgentUrl(
         encodedConnection,
+        "/api/sessions/session%2F1/runtime"
+      ).toString()
+    ).toBe(
+      "http://127.0.0.1:3002/api/relay/devices/device%2F1/sessions/session%2F1/runtime"
+    );
+    expect(
+      resolveAgentUrl(
+        encodedConnection,
         "/api/sessions/session%2F1/turns/turn%2F1/interrupt"
       ).toString()
     ).toBe(
@@ -203,6 +212,7 @@ describe("relay api response parsing", () => {
       .mockResolvedValueOnce(jsonResponse({ sessions: [session] }))
       .mockResolvedValueOnce(jsonResponse({ session }))
       .mockResolvedValueOnce(jsonResponse({ mode: "steer", turnId: "turn_1" }))
+      .mockResolvedValueOnce(jsonResponse({ session: { ...session, model: "gpt-5.4" } }))
       .mockResolvedValueOnce(jsonResponse({ turnId: "turn_1" }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -233,6 +243,9 @@ describe("relay api response parsing", () => {
     await expect(
       sendSessionMessage(relayConnection, "session_1", { text: "continue" })
     ).resolves.toEqual({ mode: "steer", turnId: "turn_1" });
+    await expect(
+      updateSessionRuntime(relayConnection, "session_1", { model: "gpt-5.4" })
+    ).resolves.toMatchObject({ session: { model: "gpt-5.4" } });
     await expect(
       interruptSessionTurn(relayConnection, "session_1", "turn_1")
     ).resolves.toEqual({ turnId: "turn_1" });

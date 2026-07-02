@@ -2,7 +2,12 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
-import type { LocalMessageSubmitMode, LocalReasoningEffort, ThreadGoal } from "@codexnext/protocol";
+import type {
+  LocalMessageSubmitMode,
+  LocalReasoningEffort,
+  LocalUpdateSessionRuntimeInput,
+  ThreadGoal
+} from "@codexnext/protocol";
 import {
   agentFetch,
   archiveCodexHistory,
@@ -22,6 +27,7 @@ import {
   resumeCodexHistory,
   sendSessionMessage,
   updateSessionQueue,
+  updateSessionRuntime,
   updateRelaySidebarPrefs,
   type AgentConnection
 } from "../../lib/api";
@@ -825,7 +831,38 @@ export function useWebConsoleController() {
     (selectedProviderOption.preset
       ? `${selectedProviderOption.label} · ${selectedProviderModel?.label ?? providerModel ?? selectedProviderCatalog?.defaultModel ?? "模型"}`
       : selectedModel.label);
-  const activeReasoningEffort = currentSession?.reasoningEffort ?? reasoningEffort;
+  const composerRuntimeSession =
+    currentSession &&
+    !isPendingSessionId(currentSession.sessionId) &&
+    !isHistoryPreviewSessionId(currentSession.sessionId)
+      ? currentSession
+      : null;
+  const composerProviderProfileId = composerRuntimeSession
+    ? composerRuntimeSession.providerProfileId ?? ""
+    : providerProfileId;
+  const composerProviderCatalog =
+    providerCatalog?.available && composerProviderProfileId
+      ? providerCatalog.providers.find((provider) => provider.preset === composerProviderProfileId) ?? null
+      : null;
+  const composerProviderModelOptions = composerProviderCatalog?.models.map((entry) => ({
+    label: entry.label,
+    shortLabel: shortModelLabel(entry.label, entry.id),
+    value: entry.id
+  })) ?? providerModelOptions;
+  const composerProviderModelValue = composerRuntimeSession
+    ? composerRuntimeSession.provider?.model ?? composerRuntimeSession.model ?? ""
+    : providerModel;
+  const composerSelectedProviderModel =
+    composerProviderModelOptions.find((option) => option.value === composerProviderModelValue) ??
+    composerProviderModelOptions.find((option) => option.value === composerProviderCatalog?.defaultModel) ??
+    null;
+  const composerModelValue =
+    composerRuntimeSession && !composerRuntimeSession.providerProfileId
+      ? composerRuntimeSession.model ?? model
+      : model;
+  const composerSelectedModel =
+    modelOptions.find((option) => option.value === composerModelValue) ?? modelOptions[0]!;
+  const activeReasoningEffort = composerRuntimeSession?.reasoningEffort ?? reasoningEffort;
   const providerSessionRequest = useMemo(
     () =>
       buildProviderSessionRequest({
@@ -1162,7 +1199,7 @@ export function useWebConsoleController() {
     });
   }
 
-  function setModel(value: string) {
+  function updateWorkspaceModel(value: string) {
     const deviceId = selectedDeviceId ?? selectedDeviceIdRef.current;
     if (!deviceId) {
       return;
@@ -1180,6 +1217,71 @@ export function useWebConsoleController() {
         }
       };
     });
+  }
+
+  function updateWorkspaceReasoningEffort(value: LocalReasoningEffort) {
+    const deviceId = selectedDeviceId ?? selectedDeviceIdRef.current;
+    if (!deviceId) {
+      return;
+    }
+    setDeviceWorkspaces((previous) => {
+      const workspace = previous[deviceId];
+      if (!workspace) {
+        return previous;
+      }
+      return {
+        ...previous,
+        [deviceId]: {
+          ...workspace,
+          reasoningEffort: value
+        }
+      };
+    });
+  }
+
+  function canUpdateRuntimeSession(session: LocalSessionSummary | null): session is LocalSessionSummary {
+    return Boolean(
+      session &&
+        !isPendingSessionId(session.sessionId) &&
+        !isHistoryPreviewSessionId(session.sessionId)
+    );
+  }
+
+  async function updateCurrentSessionRuntime(
+    input: LocalUpdateSessionRuntimeInput
+  ): Promise<boolean> {
+    const session = currentSession;
+    const targetDeviceId = selectedDeviceIdRef.current;
+    if (!canUpdateRuntimeSession(session)) {
+      return false;
+    }
+    if (session.activeTurnId) {
+      setErrorForDevice(targetDeviceId, "当前回复仍在运行，结束后再切换模型或 Provider。");
+      return false;
+    }
+    try {
+      const result = await updateSessionRuntime(connection, session.sessionId, input);
+      patchWorkspaceForDevice(targetDeviceId, (workspace) =>
+        upsertSessionInWorkspace(workspace, result.session)
+      );
+      setErrorForDevice(targetDeviceId, null);
+      return true;
+    } catch (err) {
+      setErrorForDevice(targetDeviceId, formatConsoleError(err));
+      return false;
+    }
+  }
+
+  async function setModel(value: string) {
+    if (canUpdateRuntimeSession(currentSession)) {
+      const updated = await updateCurrentSessionRuntime({
+        model: value
+      });
+      if (!updated) {
+        return;
+      }
+    }
+    updateWorkspaceModel(value);
   }
 
   function setWorkspaceServiceTier(value: string | null) {
@@ -1202,24 +1304,18 @@ export function useWebConsoleController() {
     });
   }
 
-  function setWorkspaceReasoningEffort(value: LocalReasoningEffort) {
-    const deviceId = selectedDeviceId ?? selectedDeviceIdRef.current;
-    if (!deviceId) {
-      return;
-    }
-    setDeviceWorkspaces((previous) => {
-      const workspace = previous[deviceId];
-      if (!workspace) {
-        return previous;
+  async function setWorkspaceReasoningEffort(value: LocalReasoningEffort) {
+    if (canUpdateRuntimeSession(currentSession)) {
+      const updated = await updateCurrentSessionRuntime({
+        model: currentSession.provider?.model ?? currentSession.model ?? model,
+        providerProfileId: currentSession.providerProfileId ?? null,
+        reasoningEffort: value
+      });
+      if (!updated) {
+        return;
       }
-      return {
-        ...previous,
-        [deviceId]: {
-          ...workspace,
-          reasoningEffort: value
-        }
-      };
-    });
+    }
+    updateWorkspaceReasoningEffort(value);
   }
 
   function setWorkspacePermissionMode(value: LocalPermissionMode) {
@@ -1242,20 +1338,112 @@ export function useWebConsoleController() {
     });
   }
 
-  function selectProviderProfile(value: string) {
+  async function selectProviderProfile(value: string) {
     const catalogEntry = providerCatalog?.available
       ? providerCatalog.providers.find((provider) => provider.preset === value) ?? null
       : null;
-    updateProviderSelection({
+    const nextSelection = {
       apiKeyEnv: catalogEntry?.apiKeyEnv ?? "",
       baseUrl: "",
       label: "",
       model: catalogEntry?.defaultModel ?? "",
       profileId: value
+    };
+    if (!canUpdateRuntimeSession(currentSession)) {
+      updateProviderSelection(nextSelection);
+      return;
+    }
+
+    if (!value) {
+      const updated = await updateCurrentSessionRuntime({
+        model,
+        provider: null,
+        providerProfileId: null
+      });
+      if (updated) {
+        updateProviderSelection(nextSelection);
+      }
+      return;
+    }
+
+    if (value === "custom") {
+      setErrorForDevice(
+        selectedDeviceIdRef.current,
+        "自定义 Provider 需要完整 Base URL、模型和 API Key 配置，请从新会话设置中使用。"
+      );
+      return;
+    }
+
+    if (!catalogEntry) {
+      setErrorForDevice(
+        selectedDeviceIdRef.current,
+        "当前设备没有提供这个 Provider，请刷新设备能力后再试。"
+      );
+      return;
+    }
+
+    const option = {
+      label: catalogEntry.label,
+      preset: catalogEntry.preset,
+      value: catalogEntry.preset
+    };
+    const request = buildProviderSessionRequest({
+      apiKey: providerApiKey,
+      apiKeyEnv: providerApiKeyEnv || catalogEntry.apiKeyEnv,
+      baseUrl: "",
+      label: "",
+      model: catalogEntry.defaultModel,
+      option
     });
+    const providerValidationError = validateProviderSessionRequest({
+      catalog: providerCatalog,
+      loading: providerCatalogLoading,
+      request,
+      status: codexProviderStatus
+    });
+    if (providerValidationError) {
+      setErrorForDevice(selectedDeviceIdRef.current, providerValidationError);
+      return;
+    }
+    const updated = await updateCurrentSessionRuntime({
+      model: catalogEntry.defaultModel,
+      ...(request ?? {})
+    });
+    if (updated) {
+      updateProviderSelection(nextSelection);
+    }
   }
 
-  function setProviderModel(value: string) {
+  async function setProviderModel(value: string) {
+    let currentProfileId: string | null = null;
+    if (canUpdateRuntimeSession(currentSession)) {
+      const profileId = currentSession.providerProfileId;
+      if (!profileId) {
+        await setModel(value);
+        return;
+      }
+      currentProfileId = profileId;
+      const updated = await updateCurrentSessionRuntime({
+        model: value,
+        providerProfileId: profileId
+      });
+      if (!updated) {
+        return;
+      }
+    }
+    if (currentProfileId) {
+      const catalogEntry = providerCatalog?.available
+        ? providerCatalog.providers.find((provider) => provider.preset === currentProfileId) ?? null
+        : null;
+      updateProviderSelection({
+        apiKeyEnv: providerApiKeyEnv || (catalogEntry?.apiKeyEnv ?? ""),
+        baseUrl: "",
+        label: "",
+        model: value,
+        profileId: currentProfileId
+      });
+      return;
+    }
     updateProviderSelection({ model: value });
   }
 
@@ -5845,8 +6033,10 @@ export function useWebConsoleController() {
     providerLabel,
     providerModel,
     providerModelOptions,
+    composerProviderModelOptions,
     providerOptions: catalogProviderOptions,
     providerProfileId,
+    composerProviderProfileId,
     providerStatusMessage,
     openDeviceSheet,
     openSummarySheet,
@@ -5879,9 +6069,9 @@ export function useWebConsoleController() {
     selectedDeviceId,
     selectedHistoryEntry,
     activeModelLabel,
-    selectedModel,
+    selectedModel: composerSelectedModel,
     selectedPermission,
-    selectedProviderModel,
+    selectedProviderModel: composerSelectedProviderModel,
     selectedReasoning,
     sessionSidebarRef,
     setActiveMenu,

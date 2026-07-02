@@ -15,6 +15,7 @@ import {
   LocalSendMessageSchema,
   LocalSetGoalSchema,
   LocalStartSessionSchema,
+  LocalUpdateSessionRuntimeSchema,
   RelayMethod
 } from "@codexnext/protocol";
 import { allowedOrigins, isAllowedOrigin, isAuthorized } from "./auth.js";
@@ -201,6 +202,15 @@ async function handleRequest(
         sendJson(response, 200, result);
         return;
       }
+      case "sessions.runtime.update": {
+        const body = LocalUpdateSessionRuntimeSchema.parse(await readJson(request));
+        const result = await runtime.invoke(RelayMethod.SessionsRuntimeUpdate, {
+          sessionId: route.params.sessionId,
+          body
+        });
+        sendJson(response, 200, result);
+        return;
+      }
       case "sessions.turn.create": {
         const body = LocalSendMessageSchema.parse(await readJson(request));
         const turnId = await runtime.sessionManager.startTurn(
@@ -290,6 +300,7 @@ type Route =
   | { name: "sessions.create"; public: false; params: Record<string, never> }
   | { name: "sessions.message"; public: false; params: { sessionId: string } }
   | { name: "sessions.queue.action"; public: false; params: { sessionId: string } }
+  | { name: "sessions.runtime.update"; public: false; params: { sessionId: string } }
   | { name: "sessions.turn.create"; public: false; params: { sessionId: string } }
   | {
       name: "sessions.turn.steer";
@@ -382,6 +393,9 @@ function matchRoute(method: string, pathname: string): Route | null {
     }
     if (method === "POST" && parts.length === 4 && parts[3] === "queue") {
       return { name: "sessions.queue.action", public: false, params: { sessionId } };
+    }
+    if (method === "PATCH" && parts.length === 4 && parts[3] === "runtime") {
+      return { name: "sessions.runtime.update", public: false, params: { sessionId } };
     }
     if (parts.length === 4 && parts[3] === "goal") {
       if (method === "GET") {

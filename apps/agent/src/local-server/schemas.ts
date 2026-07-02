@@ -2,13 +2,14 @@ import {
   LocalApprovalDecisionSchema,
   LocalSendMessageSchema,
   LocalSetGoalSchema,
-  LocalStartSessionSchema
+  LocalStartSessionSchema,
+  LocalUpdateSessionRuntimeSchema
 } from "@codexnext/protocol";
 
 export {
   LocalApprovalDecisionSchema,
   LocalSendMessageSchema,
   LocalSetGoalSchema,
-  LocalStartSessionSchema
+  LocalStartSessionSchema,
+  LocalUpdateSessionRuntimeSchema
 };
-

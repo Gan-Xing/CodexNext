@@ -53,6 +53,9 @@ describe("routeRpcTimeout", () => {
     expect(routeRpcTimeout(RelayMethod.SessionsCreate, 30_000)).toBe(
       SLOW_RELAY_RPC_TIMEOUT_MS
     );
+    expect(routeRpcTimeout(RelayMethod.SessionsRuntimeUpdate, 30_000)).toBe(
+      SLOW_RELAY_RPC_TIMEOUT_MS
+    );
     expect(routeRpcTimeout(RelayMethod.CodexHistoryDetail, 30_000)).toBe(
       SLOW_RELAY_RPC_TIMEOUT_MS
     );

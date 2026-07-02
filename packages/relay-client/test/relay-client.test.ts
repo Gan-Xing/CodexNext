@@ -17,6 +17,7 @@ import {
   buildRelayAuthorizationHeaders,
   buildRelayDevicesUrl,
   buildSessionMessageUrl,
+  buildSessionRuntimeUrl,
   buildTurnInterruptUrl,
   buildUserRelayAuth,
   filterReplayEvents,
@@ -175,6 +176,9 @@ describe("relay client contract helpers", () => {
     );
     expect(buildSessionMessageUrl(connection, "session/1").toString()).toBe(
       "https://relay.example/api/relay/devices/device%2Fone/sessions/session%2F1/messages"
+    );
+    expect(buildSessionRuntimeUrl(connection, "session/1").toString()).toBe(
+      "https://relay.example/api/relay/devices/device%2Fone/sessions/session%2F1/runtime"
     );
     expect(buildTurnInterruptUrl(connection, "session/1", "turn/1").toString()).toBe(
       "https://relay.example/api/relay/devices/device%2Fone/sessions/session%2F1/turns/turn%2F1/interrupt"

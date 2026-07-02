@@ -666,6 +666,129 @@ describe("SessionManager messages", () => {
     expect(fake.turnStartParams[0]).toMatchObject({ model: "gpt-5.5" });
   });
 
+  it("updates an idle session model in place for the next turn", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    const session = await manager.startSession({
+      cwd: process.cwd(),
+      permissionMode: "request-approval",
+      model: "gpt-5.5"
+    });
+    const updated = await manager.updateRuntime(session.sessionId, {
+      model: "gpt-5.4"
+    });
+    await manager.startTurn(session.sessionId, { text: "hello" });
+
+    expect(updated.session.model).toBe("gpt-5.4");
+    expect(fake.threadResumeParams).toEqual([]);
+    expect(fake.turnStartParams[0]).toMatchObject({ model: "gpt-5.4" });
+  });
+
+  it("swaps app-server clients transactionally when switching providers", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const oldClient = new FakeCodexClient();
+    const nextClient = new FakeCodexClient();
+    const providerState: ProviderRuntimeSessionState = {
+      codexCliArgs: ["-c", "model_provider=\"openrouter\""],
+      model: "deepseek/deepseek-chat",
+      modelProvider: "openrouter",
+      providerProfileId: "openrouter",
+      provider: {
+        preset: "openrouter",
+        providerLabel: "openrouter",
+        providerName: "OpenRouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "deepseek/deepseek-chat",
+        profileMode: "mixed",
+        toolStrategy: "codex-local-first"
+      }
+    };
+    const providerRuntimeManager = {
+      resolveForSession: vi.fn(async (input: { providerProfileId?: string | null }) =>
+        input.providerProfileId ? providerState : null
+      ),
+      closeAll: vi.fn(async () => undefined)
+    } as unknown as ProviderRuntimeManager;
+    const clientFactoryInputs: Parameters<CodexClientFactory>[0][] = [];
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      providerRuntimeManager,
+      clientFactory: (input) => {
+        clientFactoryInputs.push(input);
+        return clientFactoryInputs.length === 1 ? oldClient : nextClient;
+      }
+    });
+
+    const session = await manager.startSession({
+      cwd: process.cwd(),
+      permissionMode: "request-approval",
+      model: "gpt-5.5"
+    });
+    const updated = await manager.updateRuntime(session.sessionId, {
+      model: "deepseek/deepseek-chat",
+      providerProfileId: "openrouter",
+      provider: {
+        preset: "openrouter",
+        model: "deepseek/deepseek-chat",
+        apiKeyEnv: "OPENROUTER_API_KEY"
+      }
+    });
+
+    expect(clientFactoryInputs).toHaveLength(2);
+    expect(clientFactoryInputs[1]?.providerCliArgs).toEqual(providerState.codexCliArgs);
+    expect(nextClient.threadResumeParams[0]).toMatchObject({
+      threadId: "thread_1",
+      model: "deepseek/deepseek-chat",
+      modelProvider: "openrouter",
+      excludeTurns: true
+    });
+    expect(updated.session).toMatchObject({
+      model: "deepseek/deepseek-chat",
+      providerProfileId: "openrouter",
+      provider: {
+        providerLabel: "openrouter",
+        model: "deepseek/deepseek-chat"
+      }
+    });
+    expect(oldClient.closeCalls).toBe(1);
+    expect(nextClient.closeCalls).toBe(0);
+  });
+
+  it("rejects runtime switches while a turn is active", async () => {
+    const store = new EventStore();
+    const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
+    const fake = new FakeCodexClient();
+    const manager = new SessionManager({
+      eventStore: store,
+      approvalBridge: bridge,
+      codexBin: "codex",
+      clientFactory: () => fake
+    });
+
+    const session = await manager.startSession({
+      cwd: process.cwd(),
+      permissionMode: "request-approval",
+      model: "gpt-5.5"
+    });
+    await manager.startTurn(session.sessionId, { text: "hello" });
+
+    await expect(
+      manager.updateRuntime(session.sessionId, { model: "gpt-5.4" })
+    ).rejects.toThrow("Cannot switch provider or model while a turn is running");
+    expect(fake.threadResumeParams).toEqual([]);
+  });
+
   it("keeps fast service tier separate from model and reasoning", async () => {
     const store = new EventStore();
     const bridge = new ApprovalBridge({ eventStore: store, timeoutMs: 1_000 });
@@ -1532,6 +1655,7 @@ describe("goal-smoke hardening", () => {
 class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
   public turnStartCalls = 0;
   public turnSteerCalls = 0;
+  public closeCalls = 0;
   public lastTurnStartInput: LocalSendMessageInput | null = null;
   public threadStartParams: unknown[] = [];
   public threadResumeParams: unknown[] = [];
@@ -1730,7 +1854,9 @@ class FakeCodexClient extends EventEmitter implements ManagedCodexClient {
     return () => this.off("notification", listener);
   };
 
-  public close = async () => undefined;
+  public close = async () => {
+    this.closeCalls += 1;
+  };
 }
 
 function mockRequest(headers: Record<string, string> = {}) {

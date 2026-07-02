@@ -27,6 +27,7 @@ import {
   LocalResumeSessionResponseSchema,
   LocalSendMessageResponseSchema,
   LocalSessionsResponseSchema,
+  LocalUpdateSessionRuntimeResponseSchema,
   RelayMethod as RelayMethodValue
 } from "@codexnext/protocol";
 import type { AuditLogger } from "./audit-log.js";
@@ -148,6 +149,20 @@ export function registerRelayRoutes(input: RelayRouteDependencies): void {
         params: { sessionId: params.sessionId, body: request.body },
         resultSchema: LocalQueueActionResponseSchema,
         timeoutMs: input.rpcTimeoutMs
+      });
+    }
+  );
+
+  input.app.patch(
+    "/api/relay/devices/:deviceId/sessions/:sessionId/runtime",
+    async (request, reply) => {
+      const params = request.params as { sessionId: string };
+      return handleRpcRequest(request, reply, {
+        ...input,
+        method: RelayMethodValue.SessionsRuntimeUpdate,
+        params: { sessionId: params.sessionId, body: request.body },
+        resultSchema: LocalUpdateSessionRuntimeResponseSchema,
+        timeoutMs: routeRpcTimeout(RelayMethodValue.SessionsRuntimeUpdate, input.rpcTimeoutMs)
       });
     }
   );

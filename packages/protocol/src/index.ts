@@ -1608,6 +1608,17 @@ export const LocalSendMessageSchema = z.object({
 
 export type LocalSendMessageInput = z.infer<typeof LocalSendMessageSchema>;
 
+export const LocalUpdateSessionRuntimeSchema = z.object({
+  model: z.string().min(1).nullable().optional(),
+  providerProfileId: z.string().min(1).nullable().optional(),
+  provider: LocalProviderConfigSchema.nullable().optional(),
+  reasoningEffort: LocalReasoningEffortSchema.nullable().optional()
+});
+
+export type LocalUpdateSessionRuntimeInput = z.infer<
+  typeof LocalUpdateSessionRuntimeSchema
+>;
+
 export const LocalSendMessageResponseSchema = z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("turn-start"),
@@ -1655,6 +1666,14 @@ export const LocalQueueActionResponseSchema = z.object({
 });
 
 export interface LocalQueueActionResponse {
+  session: LocalSessionSummary;
+}
+
+export const LocalUpdateSessionRuntimeResponseSchema = z.object({
+  session: LocalSessionSummarySchema
+});
+
+export interface LocalUpdateSessionRuntimeResponse {
   session: LocalSessionSummary;
 }
 
@@ -2045,6 +2064,7 @@ export const RelayMethod = {
   SessionsCreate: "sessions.create",
   SessionsMessage: "sessions.message",
   SessionsQueueAction: "sessions.queue.action",
+  SessionsRuntimeUpdate: "sessions.runtime.update",
   SessionsGoalGet: "sessions.goal.get",
   SessionsGoalSet: "sessions.goal.set",
   SessionsGoalClear: "sessions.goal.clear",

@@ -39,6 +39,8 @@ import type {
   LocalSendMessageResponse,
   LocalSendMessageInput,
   LocalStartSessionInput,
+  LocalUpdateSessionRuntimeInput,
+  LocalUpdateSessionRuntimeResponse,
   LocalSessionsResponse,
   LocalSessionSummary
 } from "@codexnext/protocol";
@@ -91,6 +93,8 @@ export type {
   LocalSendMessageResponse,
   LocalSendMessageInput,
   LocalStartSessionInput,
+  LocalUpdateSessionRuntimeInput,
+  LocalUpdateSessionRuntimeResponse,
   LocalSessionsResponse,
   LocalSessionSummary
 };

@@ -25,6 +25,7 @@ import type {
   LocalSessionStatus,
   LocalSetGoalInput,
   LocalStartSessionInput,
+  LocalUpdateSessionRuntimeInput,
   SandboxMode,
   ThreadGoal,
   ThreadGoalSetResponse,
@@ -106,6 +107,7 @@ interface LocalSession {
   model?: string | null;
   providerProfileId?: string | null;
   provider?: LocalProviderSummary | null;
+  providerRuntimeState?: ProviderRuntimeSessionState | null;
   serviceTier?: string | null;
   reasoningEffort?: LocalReasoningEffort | null;
   permissionMode: LocalPermissionMode;
@@ -529,6 +531,7 @@ export class SessionManager {
         model: thread.model ?? effectiveModel,
         providerProfileId: providerState?.providerProfileId ?? null,
         provider: providerState?.provider ?? null,
+        providerRuntimeState: providerState,
         serviceTier: thread.serviceTier ?? input.serviceTier ?? null,
         reasoningEffort: input.reasoningEffort ?? null,
         permissionMode: permissions.permissionMode,
@@ -803,6 +806,7 @@ export class SessionManager {
         model: thread.model ?? effectiveModel,
         providerProfileId: providerState?.providerProfileId ?? null,
         provider: providerState?.provider ?? null,
+        providerRuntimeState: providerState,
         serviceTier: thread.serviceTier ?? input.serviceTier ?? null,
         reasoningEffort: input.reasoningEffort ?? null,
         permissionMode: permissions.permissionMode,
@@ -921,6 +925,148 @@ export class SessionManager {
       devTrace("session.message.error", {
         sessionId,
         clientMessageId: input.clientMessageId,
+        durationMs: durationMs(startedAt),
+        ...errorSummary(error)
+      });
+      throw error;
+    }
+  }
+
+  public async updateRuntime(
+    sessionId: string,
+    input: LocalUpdateSessionRuntimeInput
+  ): Promise<{ session: LocalSessionSummary }> {
+    const startedAt = Date.now();
+    const session = this.requireSession(sessionId);
+    const requestedModel = readRuntimeModel(input, session);
+    const requestedReasoningEffort =
+      "reasoningEffort" in input ? input.reasoningEffort ?? null : session.reasoningEffort ?? null;
+
+    devTrace("session.runtime.update.begin", {
+      sessionId,
+      threadId: session.threadId,
+      activeTurnId: session.activeTurnId,
+      currentModel: session.model ?? null,
+      requestedModel,
+      currentProviderProfileId: session.providerProfileId ?? null,
+      requestedProviderProfileId:
+        "providerProfileId" in input ? input.providerProfileId ?? null : session.providerProfileId ?? null,
+      requestedProviderPreset: input.provider?.preset ?? null,
+      requestedReasoningEffort,
+      queuedCount: session.queuedMessages.length
+    });
+
+    if (session.activeTurnId) {
+      throw new Error("Cannot switch provider or model while a turn is running");
+    }
+    if (!requestedModel) {
+      throw new Error("Runtime update requires a model");
+    }
+
+    if (canApplyRuntimeUpdateInPlace(session, input, requestedReasoningEffort)) {
+      session.model = requestedModel;
+      if (session.provider) {
+        session.provider = {
+          ...session.provider,
+          model: requestedModel
+        };
+      }
+      session.providerRuntimeState = updateProviderRuntimeModel(
+        session.providerRuntimeState ?? null,
+        requestedModel
+      );
+      touch(session);
+      this.emitSessionUpdated(session);
+      devTrace("session.runtime.update.end", {
+        sessionId,
+        threadId: session.threadId,
+        mode: "in-place",
+        model: session.model ?? null,
+        providerProfileId: session.providerProfileId ?? null,
+        durationMs: durationMs(startedAt)
+      });
+      return { session: toSummary(session) };
+    }
+
+    const runtimeState = await this.resolveRuntimeForUpdate(session, input);
+    const effectiveModel = runtimeState?.model ?? requestedModel;
+    const effectiveModelProvider = runtimeState?.modelProvider ?? null;
+    const previousClient = session.client;
+    const previousRemoveNotificationListener = session.removeNotificationListener;
+    let nextClient: ManagedCodexClient | null = null;
+    let nextRemoveNotificationListener: (() => void) | null = null;
+
+    try {
+      nextClient = await this.clientFactory({
+        cwd: session.cwd,
+        codexBin: this.options.codexBin,
+        providerCliArgs: runtimeState?.codexCliArgs ?? null,
+        reasoningEffort: requestedReasoningEffort,
+        onApprovalRequest: (request) =>
+          this.options.approvalBridge.requestApproval({
+            sessionId,
+            method: request.method,
+            params: request.params
+          })
+      });
+      nextRemoveNotificationListener = nextClient.onNotification((notification) => {
+        this.handleNotification(session, notification);
+      });
+      await nextClient.initialize();
+      await nextClient.initialized();
+      const resumed = await nextClient.threadResume({
+        threadId: session.threadId,
+        cwd: session.cwd,
+        excludeTurns: true,
+        model: effectiveModel,
+        modelProvider: effectiveModelProvider,
+        serviceTier: session.serviceTier ?? null,
+        ...(session.approvalPolicy ? { approvalPolicy: session.approvalPolicy } : {}),
+        ...(session.approvalsReviewer
+          ? { approvalsReviewer: session.approvalsReviewer }
+          : {}),
+        ...(session.sandbox ? { sandbox: session.sandbox } : {})
+      });
+
+      previousRemoveNotificationListener();
+      session.client = nextClient;
+      session.removeNotificationListener = nextRemoveNotificationListener;
+      session.model = resumed.model ?? effectiveModel;
+      session.providerProfileId = runtimeState?.providerProfileId ?? null;
+      session.provider = runtimeState?.provider ?? null;
+      session.providerRuntimeState = runtimeState;
+      session.reasoningEffort = requestedReasoningEffort;
+      session.serviceTier = resumed.serviceTier ?? session.serviceTier ?? null;
+      session.cwd = extractThreadCwd(resumed) ?? session.cwd;
+      touch(session);
+      this.emitSessionUpdated(session);
+      nextClient = null;
+      nextRemoveNotificationListener = null;
+      await closeClientForRuntimeSwap(previousClient, {
+        sessionId,
+        phase: "old"
+      });
+      devTrace("session.runtime.update.end", {
+        sessionId,
+        threadId: session.threadId,
+        mode: "swap",
+        model: session.model ?? null,
+        providerProfileId: session.providerProfileId ?? null,
+        providerLabel: session.provider?.providerLabel ?? null,
+        durationMs: durationMs(startedAt)
+      });
+      return { session: toSummary(session) };
+    } catch (error) {
+      nextRemoveNotificationListener?.();
+      if (nextClient) {
+        await closeClientForRuntimeSwap(nextClient, {
+          sessionId,
+          phase: "failed-new"
+        });
+      }
+      devTrace("session.runtime.update.error", {
+        sessionId,
+        threadId: session.threadId,
         durationMs: durationMs(startedAt),
         ...errorSummary(error)
       });
@@ -1608,6 +1754,35 @@ export class SessionManager {
       devTrace("session.metadata.client.reuse");
     }
     return this.metadataClientPromise;
+  }
+
+  private async resolveRuntimeForUpdate(
+    session: LocalSession,
+    input: LocalUpdateSessionRuntimeInput
+  ): Promise<ProviderRuntimeSessionState | null> {
+    const providerWasSpecified =
+      "providerProfileId" in input || "provider" in input;
+    if (!providerWasSpecified) {
+      return session.providerRuntimeState ?? null;
+    }
+    if (!input.providerProfileId && !input.provider) {
+      return null;
+    }
+    if (
+      input.providerProfileId === session.providerProfileId &&
+      input.provider === undefined &&
+      session.providerRuntimeState
+    ) {
+      return updateProviderRuntimeModel(
+        session.providerRuntimeState,
+        readRuntimeModel(input, session) ?? session.providerRuntimeState.model
+      );
+    }
+    return this.resolveProviderRuntime({
+      model: input.model ?? session.model ?? null,
+      provider: input.provider ?? null,
+      providerProfileId: input.providerProfileId ?? null
+    });
   }
 
   private async resolveProviderRuntime(input: {
@@ -2510,6 +2685,71 @@ function touch(session: LocalSession, status?: LocalSessionStatus): void {
     activeTurnId: session.activeTurnId,
     currentTurnId: session.currentTurnId
   });
+}
+
+function readRuntimeModel(
+  input: LocalUpdateSessionRuntimeInput,
+  session: LocalSession
+): string | null {
+  const providerModel = normalizeRuntimeString(input.provider?.model ?? null);
+  return providerModel ?? normalizeRuntimeString(input.model ?? null) ?? session.model ?? null;
+}
+
+function normalizeRuntimeString(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function updateProviderRuntimeModel(
+  state: ProviderRuntimeSessionState | null,
+  model: string
+): ProviderRuntimeSessionState | null {
+  if (!state) {
+    return null;
+  }
+  return {
+    ...state,
+    model,
+    provider: {
+      ...state.provider,
+      model
+    }
+  };
+}
+
+function canApplyRuntimeUpdateInPlace(
+  session: LocalSession,
+  input: LocalUpdateSessionRuntimeInput,
+  requestedReasoningEffort: LocalReasoningEffort | null
+): boolean {
+  if (requestedReasoningEffort !== (session.reasoningEffort ?? null)) {
+    return false;
+  }
+  if (input.provider !== undefined) {
+    return false;
+  }
+  if (
+    input.providerProfileId !== undefined &&
+    input.providerProfileId !== (session.providerProfileId ?? null)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+async function closeClientForRuntimeSwap(
+  client: ManagedCodexClient,
+  input: { phase: string; sessionId: string }
+): Promise<void> {
+  try {
+    await client.close();
+    devTrace("session.runtime.client.close", input);
+  } catch (error) {
+    devTrace("session.runtime.client.close.error", {
+      ...input,
+      ...errorSummary(error)
+    });
+  }
 }
 
 function normalizeTitle(value: string | null | undefined): string | null {

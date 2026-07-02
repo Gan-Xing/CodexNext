@@ -15,6 +15,7 @@ import type {
   LocalResumeSessionResponse,
   LocalSendMessageResponse,
   LocalSessionsResponse,
+  LocalUpdateSessionRuntimeResponse,
   RelayDeviceRecord,
   SidebarPrefsResponse,
   RelayUserAuth
@@ -34,6 +35,7 @@ import {
   LocalResumeSessionResponseSchema,
   LocalSendMessageResponseSchema,
   LocalSessionsResponseSchema,
+  LocalUpdateSessionRuntimeResponseSchema,
   RelayDevicesResponseSchema,
   SidebarPrefsResponseSchema
 } from "@codexnext/protocol";
@@ -117,6 +119,16 @@ export function buildSessionQueueUrl(
   return buildRelayDeviceApiUrl(
     connection,
     `/sessions/${encodeURIComponent(sessionId)}/queue`
+  );
+}
+
+export function buildSessionRuntimeUrl(
+  connection: Pick<RelayClientConnection, "deviceId" | "relayUrl">,
+  sessionId: string
+): URL {
+  return buildRelayDeviceApiUrl(
+    connection,
+    `/sessions/${encodeURIComponent(sessionId)}/runtime`
   );
 }
 
@@ -312,6 +324,16 @@ export function parseLocalQueueActionResponse(
     payload,
     "session queue action"
   ) as LocalQueueActionResponse;
+}
+
+export function parseLocalUpdateSessionRuntimeResponse(
+  payload: unknown
+): LocalUpdateSessionRuntimeResponse {
+  return parseRelayResponse(
+    LocalUpdateSessionRuntimeResponseSchema,
+    payload,
+    "session runtime update"
+  ) as LocalUpdateSessionRuntimeResponse;
 }
 
 export function parseCodexHistoryResponse(

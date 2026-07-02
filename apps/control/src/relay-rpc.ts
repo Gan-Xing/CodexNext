@@ -37,6 +37,7 @@ export function routeRpcTimeout(
 ): number {
   switch (method) {
     case RelayMethodValue.SessionsCreate:
+    case RelayMethodValue.SessionsRuntimeUpdate:
     case RelayMethodValue.CodexHistoryDetail:
     case RelayMethodValue.CodexHistoryTurns:
     case RelayMethodValue.CodexHistoryResume:

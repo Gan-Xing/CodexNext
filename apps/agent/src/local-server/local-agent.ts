@@ -31,6 +31,7 @@ import {
   LocalSendMessageSchema,
   LocalSetGoalSchema,
   LocalStartSessionSchema,
+  LocalUpdateSessionRuntimeSchema,
   RelayMethod as RelayMethodValue
 } from "@codexnext/protocol";
 import { ApprovalBridge } from "./approval-bridge.js";
@@ -130,6 +131,11 @@ export function createLocalAgentRuntime(
             const payload = parseSessionScopedParams(params);
             const body = LocalQueueActionSchema.parse(payload.body);
             return sessionManager.updateQueuedMessages(payload.sessionId, body);
+          }
+          case RelayMethodValue.SessionsRuntimeUpdate: {
+            const payload = parseSessionScopedParams(params);
+            const body = LocalUpdateSessionRuntimeSchema.parse(payload.body);
+            return sessionManager.updateRuntime(payload.sessionId, body);
           }
           case RelayMethodValue.SessionsGoalGet: {
             const payload = parseSessionScopedParams(params);

@@ -37,6 +37,8 @@ import {
   LocalSessionSummarySchema,
   LocalSessionsResponseSchema,
   LocalStartSessionSchema,
+  LocalUpdateSessionRuntimeResponseSchema,
+  LocalUpdateSessionRuntimeSchema,
   MachineHeartbeatPayloadSchema,
   MachineHelloAckSchema,
   MachineHelloPayloadSchema,
@@ -319,6 +321,18 @@ describe("relay protocol schemas", () => {
     ).toMatchObject({ method: "sessions.message" });
 
     expect(
+      RelayRpcRequestSchema.parse({
+        requestId: "rpc_2",
+        method: RelayMethod.SessionsRuntimeUpdate,
+        params: {
+          sessionId: "session_1",
+          body: { model: "gpt-5.4" }
+        },
+        deadlineMs: 30_000
+      })
+    ).toMatchObject({ method: "sessions.runtime.update" });
+
+    expect(
       RelayRpcResponseSchema.parse({
         ok: true,
         result: {
@@ -383,6 +397,17 @@ describe("relay protocol schemas", () => {
         serviceTier: "priority"
       })
     ).toMatchObject({ text: "continue" });
+
+    expect(
+      LocalUpdateSessionRuntimeSchema.parse({
+        model: "deepseek/deepseek-chat",
+        providerProfileId: "openrouter",
+        reasoningEffort: "high"
+      })
+    ).toMatchObject({
+      model: "deepseek/deepseek-chat",
+      providerProfileId: "openrouter"
+    });
 
     expect(
       LocalApprovalDecisionSchema.parse({
@@ -953,6 +978,11 @@ describe("relay protocol schemas", () => {
         session
       }).session.sessionId
     ).toBe("session_1");
+    expect(
+      LocalUpdateSessionRuntimeResponseSchema.parse({
+        session: { ...session, model: "gpt-5.4" }
+      })
+    ).toMatchObject({ session: { model: "gpt-5.4" } });
 
     expect(
       LocalHealthResponseSchema.parse({

@@ -20,6 +20,8 @@ import type {
   LocalSendMessageResponse,
   LocalSendMessageInput,
   LocalStartSessionInput,
+  LocalUpdateSessionRuntimeInput,
+  LocalUpdateSessionRuntimeResponse,
   LocalSessionsResponse,
   SidebarPrefsResponse,
   RelayDeviceRecord
@@ -40,6 +42,7 @@ import {
   buildRelayDevicesUrl,
   buildSessionMessageUrl,
   buildSessionQueueUrl,
+  buildSessionRuntimeUrl,
   buildTurnInterruptUrl,
   buildLoadedCodexHistoryUrl,
   parseCodexHistoryArchiveResponse,
@@ -53,6 +56,7 @@ import {
   parseLocalInterruptResponse,
   parseLocalProviderCatalogResponse,
   parseLocalQueueActionResponse,
+  parseLocalUpdateSessionRuntimeResponse,
   parseResumeSessionResponse,
   parseLocalSendMessageResponse,
   parseLocalSessionsResponse,
@@ -325,6 +329,17 @@ export function updateSessionQueue(
   }).then(parseLocalQueueActionResponse);
 }
 
+export function updateSessionRuntime(
+  connection: AgentConnection,
+  sessionId: string,
+  input: LocalUpdateSessionRuntimeInput
+): Promise<LocalUpdateSessionRuntimeResponse> {
+  return agentFetchJson(connection, pathAndSearch(buildSessionRuntimeUrl(connection, sessionId)), {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  }).then(parseLocalUpdateSessionRuntimeResponse);
+}
+
 export function interruptSessionTurn(
   connection: AgentConnection,
   sessionId: string,
@@ -416,6 +431,13 @@ export function resolveAgentUrl(connection: AgentConnection, path: string): URL 
       return buildSessionMessageUrl(
         connection,
         decodeURIComponent(messageMatch[1] ?? "")
+      );
+    }
+    const runtimeMatch = base.pathname.match(/^\/api\/sessions\/(.+)\/runtime$/);
+    if (runtimeMatch) {
+      return buildSessionRuntimeUrl(
+        connection,
+        decodeURIComponent(runtimeMatch[1] ?? "")
       );
     }
     const interruptMatch = base.pathname.match(

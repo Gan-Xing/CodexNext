@@ -179,8 +179,10 @@ export function WebConsole() {
     providerCatalogLoading,
     providerLabel,
     providerModel,
+    composerProviderModelOptions,
     providerModelOptions,
     providerOptions,
+    composerProviderProfileId,
     providerProfileId,
     providerStatusMessage,
     openDeviceSheet,
@@ -703,9 +705,9 @@ export function WebConsole() {
             permissionMode={permissionMode}
             permissionOptions={permissionOptions}
             planMode={planModeEnabled}
-            providerModelOptions={providerModelOptions}
+            providerModelOptions={composerProviderModelOptions}
             providerOptions={providerOptions}
-            providerProfileId={providerProfileId}
+            providerProfileId={composerProviderProfileId}
             queuedMessages={currentSession?.queuedMessages ?? []}
             reasoningEffort={currentSession?.reasoningEffort ?? reasoningEffort}
             reasoningOptions={reasoningOptions}
